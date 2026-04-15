@@ -18,7 +18,9 @@ import numpy as np
 from .document_loader import SUPPORTED_EXTENSIONS, Document, DocumentLoader, TextChunker
 from .embeddings import TfidfEmbedder
 from .llm_handler import LLMHandler
-from .vector_store import InMemoryVectorStore, SearchResult, get_vector_store
+# NOTE: Task 6 will fully rewrite RAGBackend to use ChromaVectorStore.
+# For now we import only what still exists after the Task 3 vector store replacement.
+from .vector_store import ChromaVectorStore, SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +41,7 @@ class RAGBackend:
         top_k: int = 5,
         llm_model: str = "glm-5.1",
         max_tokens: int = 4096,
-        vector_backend: str = "memory",
-        **vector_kwargs: Any,
+        chroma_collection: Any = None,
     ) -> None:
         self.loader = DocumentLoader()
         self.chunker = TextChunker(
@@ -49,7 +50,22 @@ class RAGBackend:
             strategy="recursive",
         )
         self.embedder = TfidfEmbedder()
-        self.vector_store = get_vector_store(vector_backend, **vector_kwargs)
+
+        # WHY: Task 6 will replace TF-IDF + ChromaVectorStore with a proper
+        # ChromaDB-native backend. For now, use a temporary EphemeralClient if
+        # no collection is provided, so the class remains instantiable.
+        if chroma_collection is not None:
+            self.vector_store = ChromaVectorStore(collection=chroma_collection)
+        else:
+            import chromadb as _chromadb
+            _client = _chromadb.EphemeralClient()
+            _col = _client.get_or_create_collection(
+                name="rag_backend_tmp",
+                metadata={"hnsw:space": "cosine"},
+                embedding_function=None,
+            )
+            self.vector_store = ChromaVectorStore(collection=_col)
+
         self.llm = LLMHandler(model=llm_model, max_tokens=max_tokens)
         self.top_k = top_k
 
@@ -133,6 +149,10 @@ class RAGBackend:
 
         TF-IDF is a corpus-level method — vocabulary and IDF weights change
         when documents are added or removed, so we must re-embed everything.
+
+        NOTE: Task 5 will remove TF-IDF; Task 6 will replace this entire backend
+        with one that uses ChromaDB's built-in embedding function so rebuild is
+        no longer needed. This implementation bridges Tasks 3 and 6.
         """
         if not self._all_chunks:
             self._index_built = False
@@ -141,18 +161,27 @@ class RAGBackend:
         texts = [c.content for c in self._all_chunks]
         embeddings = self.embedder.fit_transform(texts)
 
-        # Rebuild vector store from scratch
-        self.vector_store = InMemoryVectorStore()
-        docs_for_store = [
-            {
-                "content": c.content,
-                "metadata": c.metadata,
-                "doc_id": c.doc_id,
-                "chunk_id": c.chunk_id,
-            }
-            for c in self._all_chunks
-        ]
-        self.vector_store.add_documents(docs_for_store, embeddings.tolist())
+        # BEFORE (Task 3): InMemoryVectorStore().add_documents(docs, embeddings)
+        # AFTER  (Task 3): ChromaVectorStore.upsert(ids, documents, metadatas, embeddings)
+        # WHY: ChromaVectorStore uses ChromaDB's upsert API which requires explicit
+        #      IDs, documents, metadatas, and embeddings as separate lists.
+
+        # Recreate the ChromaDB collection on each rebuild (TF-IDF vocab changes)
+        import chromadb as _chromadb
+        _client = _chromadb.EphemeralClient()
+        _col = _client.get_or_create_collection(
+            name="rag_backend_tmp",
+            metadata={"hnsw:space": "cosine"},
+            embedding_function=None,
+        )
+        self.vector_store = ChromaVectorStore(collection=_col)
+
+        self.vector_store.upsert(
+            ids=[c.chunk_id for c in self._all_chunks],
+            documents=[c.content for c in self._all_chunks],
+            metadatas=[{**c.metadata, "doc_id": c.doc_id} for c in self._all_chunks],
+            embeddings=embeddings.tolist(),
+        )
         self._index_built = True
 
         logger.info("Rebuilt index: %d chunks, %d dimensions", len(texts), embeddings.shape[1])
@@ -181,7 +210,7 @@ class RAGBackend:
 
         k = top_k or self.top_k
         query_emb = self.embedder.transform([question])[0].tolist()
-        results = self.vector_store.search(query_emb, top_k=k)
+        results = self.vector_store.query(query_embedding=query_emb, top_k=k)
 
         # Build context string
         context = "\n\n".join(
@@ -239,7 +268,7 @@ class RAGBackend:
 
         k = top_k or self.top_k
         query_emb = self.embedder.transform([question])[0].tolist()
-        results = self.vector_store.search(query_emb, top_k=k)
+        results = self.vector_store.query(query_embedding=query_emb, top_k=k)
 
         context = "\n\n".join(
             f"[{r.metadata.get('filename', 'unknown')}] {r.content}"

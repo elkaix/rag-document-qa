@@ -21,7 +21,6 @@ import pytest
 import numpy as np
 
 from src.document_loader import Chunk, Document
-from src.vector_store import InMemoryVectorStore
 
 
 # --------------------------------------------------------------------------- #
@@ -125,30 +124,6 @@ def mock_embeddings(sample_chunks: List[Chunk]) -> List[List[float]]:
 def mock_query_embedding() -> List[float]:
     """Embedding for a typical RAG query."""
     return _make_deterministic_embedding("What is Retrieval-Augmented Generation?")
-
-
-# --------------------------------------------------------------------------- #
-# Vector store fixture                                                         #
-# --------------------------------------------------------------------------- #
-
-@pytest.fixture
-def populated_vector_store(
-    sample_chunks: List[Chunk],
-    mock_embeddings: List[List[float]],
-) -> InMemoryVectorStore:
-    """InMemoryVectorStore pre-loaded with sample_chunks."""
-    store = InMemoryVectorStore()
-    docs = [
-        {
-            "content": c.content,
-            "metadata": c.metadata,
-            "doc_id": c.doc_id,
-            "chunk_id": c.chunk_id,
-        }
-        for c in sample_chunks
-    ]
-    store.add_documents(docs, mock_embeddings)
-    return store
 
 
 # --------------------------------------------------------------------------- #
