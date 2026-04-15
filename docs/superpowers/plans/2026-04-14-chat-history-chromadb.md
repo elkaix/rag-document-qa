@@ -27,7 +27,7 @@
   - `SQLITE_PATH = DATA_DIR / "rag.db"`, `SQLITE_URL = f"sqlite:///{SQLITE_PATH}"`
   - `CHROMA_PATH = str(DATA_DIR / "chroma")`, `CHROMA_COLLECTION = "documents"`
   - `DEFAULT_MODEL = "glm-5.1"`, `SLIDING_WINDOW_SIZE = 5`, `MAX_TITLE_LENGTH = 60`
-- [ ] Run: `pip install chromadb>=1.0.0 sqlmodel>=0.0.24`
+- [ ] Run: `pip install -r requirements.txt` (includes the newly added chromadb and sqlmodel)
 - [ ] Verify: `python3 -c "import chromadb; import sqlmodel; print('OK')"` -> `OK`
 - [ ] Commit: `chore: add chromadb + sqlmodel deps, expand config`
 
@@ -44,7 +44,7 @@
 - Test: `tests/test_database.py`
 
 - [ ] Write `tests/test_database.py` with tests for:
-  - `TestDatabaseSetup.test_tables_created` — verify all 4 tables exist after `create_db_and_tables()`
+  - `TestDatabaseSetup.test_tables_created` — verify tables `conversations`, `messages`, `message_sources`, `documents` exist after `create_db_and_tables()`
   - `TestDatabaseSetup.test_foreign_keys_enabled` — `PRAGMA foreign_keys` returns 1
   - `TestConversationModel.test_create_conversation` — create, commit, verify defaults (pinned=False, created_at set)
   - `TestConversationModel.test_cascade_delete_messages` — delete conversation, verify messages and sources also deleted
@@ -58,6 +58,7 @@
 
 ```python
 class Conversation(SQLModel, table=True):
+    __tablename__ = "conversations"
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     title: str = Field(default="New Chat", max_length=200)
     pinned: bool = Field(default=False)
@@ -71,8 +72,9 @@ class Conversation(SQLModel, table=True):
 
 ```python
 class Message(SQLModel, table=True):
+    __tablename__ = "messages"
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    conversation_id: str = Field(foreign_key="conversation.id", ondelete="CASCADE", index=True)
+    conversation_id: str = Field(foreign_key="conversations.id", ondelete="CASCADE", index=True)
     role: str  # "user" | "assistant"
     content: str = Field(default="")
     model: Optional[str] = Field(default=None)
@@ -82,8 +84,9 @@ class Message(SQLModel, table=True):
     sources: list["MessageSource"] = Relationship(back_populates="message", cascade_delete=True)
 
 class MessageSource(SQLModel, table=True):
+    __tablename__ = "message_sources"
     id: Optional[int] = Field(default=None, primary_key=True)
-    message_id: str = Field(foreign_key="message.id", ondelete="CASCADE", index=True)
+    message_id: str = Field(foreign_key="messages.id", ondelete="CASCADE", index=True)
     doc_id: str
     chunk_id: str
     filename: Optional[str] = None
@@ -96,6 +99,7 @@ class MessageSource(SQLModel, table=True):
 
 ```python
 class DocumentRecord(SQLModel, table=True):
+    __tablename__ = "documents"
     id: str = Field(primary_key=True)  # content-hash doc_id
     filename: str
     file_type: str = Field(default="")
@@ -121,19 +125,33 @@ class DocumentRecord(SQLModel, table=True):
 - Test: `tests/test_vector_store_chroma.py`
 
 - [ ] Write `tests/test_vector_store_chroma.py` with tests for:
-  - `test_upsert_and_query` — upsert 3 chunks, query for RAG, top result is relevant
+  - `test_upsert_and_query` — upsert 3 chunks with explicit embeddings, query with explicit embedding, top result matches expected ID
   - `test_delete_by_doc_id` — upsert chunks from 2 docs, delete one, verify only one remains
   - `test_upsert_is_idempotent` — upsert same ID 3 times, count is still 1
   - `test_get_stats` — verify `total_chunks` and `backend` fields
   - `test_query_empty_store` — returns empty list
-  - Use `chromadb.EphemeralClient()` for test fixtures
+  - Use `chromadb.EphemeralClient()` with a **deterministic embedding function** for test fixtures. Create the collection with `embedding_function=None` and pass explicit embeddings in `upsert()` and `query()` calls. This avoids test dependency on the sentence-transformer model and makes assertions deterministic.
+
+  **Test fixture pattern:**
+  ```python
+  client = chromadb.EphemeralClient()
+  collection = client.get_or_create_collection(
+      name="test_docs",
+      metadata={"hnsw:space": "cosine"},
+      embedding_function=None,  # explicit embeddings only
+  )
+  ```
+  Then `store.upsert(ids, documents, metadatas, embeddings=[[0.1, 0.2, ...], ...])` and `store.query(query_embedding=[0.1, 0.2, ...], top_k=2)`. The `ChromaVectorStore` must support an optional `embeddings` param on upsert and `query_embedding` on query for test use.
 
 - [ ] Run: `python3 -m pytest tests/test_vector_store_chroma.py -v` -> FAIL
 
 - [ ] Rewrite `src/vector_store.py` with:
   - `SearchResult` dataclass (content, metadata, score, doc_id, chunk_id)
   - `ChromaVectorStore` class wrapping a ChromaDB Collection
-  - Methods: `upsert(ids, documents, metadatas)`, `query(query_text, top_k, where)`, `delete_by_doc_id(doc_id)`, `get_stats()`
+  - Methods:
+    - `upsert(ids, documents, metadatas, embeddings=None)` — pass embeddings explicitly for tests, omit for production (ChromaDB auto-embeds)
+    - `query(query_text=None, query_embedding=None, top_k, where)` — use `query_text` for production (auto-embed), `query_embedding` for deterministic tests. Exactly one must be provided.
+    - `delete_by_doc_id(doc_id)`, `get_stats()`
   - Convert ChromaDB cosine distance (0-2) to similarity score (0-1) via `score = 1 - distance`
 
 - [ ] Run: `python3 -m pytest tests/test_vector_store_chroma.py -v` -> All PASS
@@ -176,7 +194,7 @@ class DocumentRecord(SQLModel, table=True):
 - [ ] `git rm src/pipeline.py src/retriever.py src/embeddings.py src/chunker.py`
 - [ ] Update `tests/conftest.py`:
   - Remove `InMemoryVectorStore` import, `_make_deterministic_embedding`, `EMBEDDING_DIM`, `mock_embeddings`, `mock_query_embedding` fixtures
-  - Replace `populated_vector_store` fixture with ChromaDB-based version using `EphemeralClient()`
+  - Replace `populated_vector_store` fixture with ChromaDB-based version using `EphemeralClient()` with `embedding_function=None` and explicit deterministic embeddings (reuse the existing `_make_deterministic_embedding` helper for this — keep it, just remove the TF-IDF-specific fixtures)
 - [ ] Run: `python3 -m pytest tests/test_document_loader.py -v` -> PASS (existing tests unbroken)
 - [ ] Commit: `chore: remove legacy TF-IDF modules (pipeline, retriever, embeddings, chunker)`
 
@@ -222,7 +240,12 @@ class DocumentRecord(SQLModel, table=True):
   - Constructor takes `engine` and `collection` (no more in-memory state)
   - `ingest_file()`: chunks -> `store.upsert()` -> save `DocumentRecord` to SQLite
   - `query()`: `store.query()` -> build context -> LLM generate
-  - `stream_query(conversation_id=)`: save user msg -> load window (completed pairs BEFORE current turn, excludes just-saved user msg) -> build prompt [system, ...window, user_with_context] -> stream -> save assistant msg
+  - `stream_query(conversation_id=)`:
+    1. Save user msg to SQLite
+    2. `_get_sliding_window()` loads only COMPLETED exchange pairs (both user + assistant exist) — the just-saved user message has no assistant reply yet, so it is automatically excluded
+    3. Build prompt: `[system, ...window_pairs, user_prompt_with_context]` — current question appears ONLY as `user_prompt_with_context`, never duplicated in window
+    4. Stream tokens -> save assistant msg after completion
+  - `_get_sliding_window()` implementation: query messages ordered by created_at DESC, take only messages that form complete pairs (user followed by assistant), limit to `max_pairs * 2`, reverse to chronological order
   - `delete_document()`: ChromaDB first, then SQLite
   - Conversation CRUD: `create_conversation`, `list_conversations`, `get_conversation`, `update_conversation`, `delete_conversation`, `search_conversations`, `export_conversation`, `create_share_token`, `get_shared_conversation`
   - `_save_message()`, `_get_sliding_window()`, `_auto_title()`
