@@ -1,16 +1,122 @@
-"""Configuration module for RAG Document Q&A system."""
+"""
+Centralised configuration for the RAG Document Q&A system.
+
+RAG Pipeline Position:
+  This module sits at the foundation — every other module imports from here.
+  Having a single source of truth for paths, sizes, and connection strings
+  means you only change a value in one place and every consumer picks it up.
+
+What concept it teaches:
+  "Config-as-code" — keep all tunable constants (chunk size, model names,
+  DB paths) in one typed file rather than scattered magic numbers.
+
+Why this approach over alternatives:
+  A plain Python file is zero-dependency and easy to read.  A future step
+  (see Best Practices in CLAUDE.md) can swap this for pydantic-settings
+  BaseSettings to load overrides from env vars without changing callers.
+
+Where it fits in the RAG pipeline:
+  Document → [CONFIG] → Chunks → Embeddings → Vector Store → Retrieval → Answer
+  CONFIG is imported by every layer, so it defines the shape of the whole
+  system.
+"""
 import logging
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+# ---------------------------------------------------------------------------
+# Logging — configured once here so every module that does
+#   logger = logging.getLogger(__name__)
+# inherits this format without repeating basicConfig calls.
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
-RANDOM_SEED = 42
-CHUNK_SIZE = 500
-CHUNK_OVERLAP = 50
-TOP_K_RESULTS = 5
-API_HOST = "0.0.0.0"
-API_PORT = 8001
-for d in [DATA_DIR]: d.mkdir(parents=True, exist_ok=True)
+# ---------------------------------------------------------------------------
+# Directory layout
+# ---------------------------------------------------------------------------
+
+# WHY: __file__ gives us an absolute path to this file no matter how the
+#      process is launched (CLI, pytest, uvicorn).  Two .parent calls walk
+#      up from src/ to the project root.
+BASE_DIR: Path = Path(__file__).resolve().parent.parent
+
+# WHY: DATA_DIR is intentionally outside src/ so runtime artefacts (DB,
+#      vector store) never end up tracked by git next to source files.
+DATA_DIR: Path = BASE_DIR / "data"
+
+# ---------------------------------------------------------------------------
+# Chunking & retrieval defaults
+# ---------------------------------------------------------------------------
+
+# PATTERN: Seed the PRNG for reproducible TF-IDF splits and test fixtures.
+RANDOM_SEED: int = 42
+
+# TRADE-OFF: 500-char chunks balance context (enough text for meaning) vs.
+#            precision (small enough for specific retrieval).  Overlap of 50
+#            prevents answers that straddle chunk boundaries from being lost.
+CHUNK_SIZE: int = 500
+CHUNK_OVERLAP: int = 50
+
+TOP_K_RESULTS: int = 5
+
+# ---------------------------------------------------------------------------
+# API server
+# ---------------------------------------------------------------------------
+
+API_HOST: str = "0.0.0.0"
+API_PORT: int = 8001
+
+# ---------------------------------------------------------------------------
+# SQLite / SQLModel — chat-history persistence
+# ---------------------------------------------------------------------------
+
+# WHY: Storing the DB inside DATA_DIR (not the project root) keeps the repo
+#      root clean and makes the .gitignore pattern "data/rag.db" unambiguous.
+SQLITE_PATH: Path = DATA_DIR / "rag.db"
+
+# WHY: SQLModel (and SQLAlchemy underneath) expect a URL string, not a Path
+#      object.  We derive it from SQLITE_PATH so the two never drift apart.
+SQLITE_URL: str = f"sqlite:///{SQLITE_PATH}"
+
+# ---------------------------------------------------------------------------
+# ChromaDB — persistent vector store
+# ---------------------------------------------------------------------------
+
+# WHY: ChromaDB's PersistentClient wants a plain string path, not a Path.
+#      Keeping it under DATA_DIR means one .gitignore entry covers the whole
+#      data/ subtree.
+CHROMA_PATH: str = str(DATA_DIR / "chroma")
+
+# PATTERN: A single collection name constant prevents typos when the same
+#          name must be used in both the ingest and query code paths.
+CHROMA_COLLECTION: str = "documents"
+
+# ---------------------------------------------------------------------------
+# Chat / LLM settings
+# ---------------------------------------------------------------------------
+
+# WHY: A named default model constant lets the UI and API share the same
+#      fallback without hard-coding the string in multiple places.
+DEFAULT_MODEL: str = "glm-5.1"
+
+# WHY: Sliding-window chat history keeps the LLM context window manageable.
+#      5 turns (10 messages) is a practical balance: enough context for
+#      follow-up questions, small enough to stay within token budgets.
+SLIDING_WINDOW_SIZE: int = 5
+
+# WHY: Truncating long document titles in the UI prevents layout overflow
+#      while still giving the user enough text to identify the source.
+MAX_TITLE_LENGTH: int = 60
+
+# ---------------------------------------------------------------------------
+# Runtime directory bootstrap
+# ---------------------------------------------------------------------------
+
+# WHY: We create DATA_DIR at import time so every downstream module (DB
+#      initialiser, ChromaDB client) can assume the directory exists.
+#      parents=True handles the case where the whole data/ tree is absent.
+for _dir in [DATA_DIR]:
+    _dir.mkdir(parents=True, exist_ok=True)
