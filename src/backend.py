@@ -394,7 +394,7 @@ class RAGBackend:
 
             # PHASE 5: Save assistant message + sources
             assistant_content = "".join(full_response)
-            self._save_message(
+            assistant_msg_id = self._save_message(
                 conversation_id, "assistant", assistant_content,
                 model=handler.model, sources=sources,
             )
@@ -402,13 +402,22 @@ class RAGBackend:
             # PHASE 6: Auto-title on first message
             self._auto_title(conversation_id, question)
 
+            # WHY: Include message_id and conversation_id in the done event
+            #      so the frontend can update its local state (add the new
+            #      message to the conversation without re-fetching).
+            yield ("done", {
+                "sources": sources,
+                "message_id": assistant_msg_id,
+                "conversation_id": conversation_id,
+            })
+
         else:
             # No conversation — simple single-turn streaming
             for token in handler.stream_response(user_prompt, system_prompt=system_prompt):
                 full_response.append(token)
                 yield ("token", token)
 
-        yield ("done", {"sources": sources})
+            yield ("done", {"sources": sources})
 
     # ------------------------------------------------------------------ #
     # Document management                                                  #
