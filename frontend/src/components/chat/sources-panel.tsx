@@ -13,9 +13,13 @@ interface SourcesPanelProps {
   sources: SourceInfo[];
 }
 
+// TRADE-OFF: ChromaDB cosine similarity scores are typically 0.2–0.6 for
+//            dense embeddings (all-MiniLM-L6-v2). Scores above 0.5 are
+//            strong matches. The old TF-IDF thresholds (0.85/0.5) were too
+//            high — everything showed as red/destructive.
 function scoreColor(score: number): "default" | "secondary" | "destructive" {
-  if (score >= 0.85) return "default";
-  if (score >= 0.5) return "secondary";
+  if (score >= 0.45) return "default";
+  if (score >= 0.25) return "secondary";
   return "destructive";
 }
 
