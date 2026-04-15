@@ -1,0 +1,540 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+   Expressive Design System — Clean, structured, personality-driven.
+   Font: IBM Plex Mono (all weights)
+   Palette: Blue primary (#0d74e7), Green accent (#2fbb4f)
+   Background: Subtle dot-grid pattern
+   ============================================================ */
+
+@theme inline {
+    --font-heading: 'IBM Plex Mono', monospace;
+    --font-sans: 'IBM Plex Mono', monospace;
+    --font-mono: 'IBM Plex Mono', monospace;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-2xl: 20px;
+    --radius-3xl: 24px;
+    --radius-4xl: 28px;
+}
+
+/* ============================================================
+   Color Palette — Blue (#0d74e7) + Green (#2fbb4f)
+   ============================================================ */
+
+:root {
+    --background: #FAFAFA;
+    --foreground: #24292d;
+    --card: #FFFFFF;
+    --card-foreground: #24292d;
+    --popover: #FFFFFF;
+    --popover-foreground: #24292d;
+    --primary: #0d74e7;
+    --primary-foreground: #FFFFFF;
+    --secondary: #2fbb4f;
+    --secondary-foreground: #FFFFFF;
+    --muted: #F3F4F6;
+    --muted-foreground: #6B7280;
+    --accent: #2fbb4f;
+    --accent-foreground: #24292d;
+    --destructive: #DC2626;
+    --destructive-foreground: #FFFFFF;
+    --border: #E5E7EB;
+    --input: #FFFFFF;
+    --ring: #0d74e7;
+    --chart-1: #0d74e7;
+    --chart-2: #2fbb4f;
+    --chart-3: #16A34A;
+    --chart-4: #2563eb;
+    --chart-5: #8B5CF6;
+    --radius: 12px;
+    --sidebar: #24292d;
+    --sidebar-foreground: #F3F4F6;
+    --sidebar-primary: #0d74e7;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #2b3137;
+    --sidebar-accent-foreground: #F9FAFB;
+    --sidebar-border: #3a4149;
+    --sidebar-ring: #0d74e7;
+}
+
+.dark {
+    --background: #FAFAFA;
+    --foreground: #24292d;
+    --card: #FFFFFF;
+    --card-foreground: #24292d;
+    --popover: #FFFFFF;
+    --popover-foreground: #24292d;
+    --primary: #0d74e7;
+    --primary-foreground: #FFFFFF;
+    --secondary: #2fbb4f;
+    --secondary-foreground: #FFFFFF;
+    --muted: #F3F4F6;
+    --muted-foreground: #6B7280;
+    --accent: #2fbb4f;
+    --accent-foreground: #24292d;
+    --destructive: #DC2626;
+    --destructive-foreground: #FFFFFF;
+    --border: #E5E7EB;
+    --input: #FFFFFF;
+    --ring: #0d74e7;
+    --sidebar: #24292d;
+    --sidebar-foreground: #F3F4F6;
+    --sidebar-primary: #0d74e7;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #2b3137;
+    --sidebar-accent-foreground: #F9FAFB;
+    --sidebar-border: #3a4149;
+    --sidebar-ring: #0d74e7;
+}
+
+/* ============================================================
+   Base layer
+   ============================================================ */
+
+@layer base {
+    * {
+        @apply border-border outline-ring/50;
+    }
+    body {
+        @apply bg-background text-foreground;
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 13px;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+    }
+    html {
+        @apply font-sans;
+    }
+}
+
+/* ============================================================
+   Dot-grid background pattern
+   ============================================================ */
+
+.dot-pattern {
+    background-image: radial-gradient(circle, #D1D5DB 1px, transparent 1px);
+    background-size: 20px 20px;
+}
+
+/* ============================================================
+   Component Overrides — Clean, structured, blue + green
+   ============================================================ */
+
+/* --- Cards: clean white, subtle shadow --- */
+[data-slot="card"] {
+    border: 1px solid #E5E7EB !important;
+    border-left: 4px solid #0d74e7 !important;
+    border-radius: 12px !important;
+    background: #FFFFFF !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02);
+    transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+[data-slot="card"]:hover {
+    box-shadow: 0 4px 12px rgba(13, 116, 231, 0.08), 0 2px 4px rgba(0,0,0,0.04);
+    transform: translateY(-1px);
+}
+
+/* --- Buttons: blue primary --- */
+[data-slot="button"] {
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-weight: 600 !important;
+    font-size: 12px !important;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    border-radius: 8px !important;
+    transition: all 0.15s ease;
+}
+[data-slot="button"]:not([data-variant="ghost"]):not([data-variant="link"]):not([data-variant="outline"]):not([data-variant="destructive"]):not([disabled]) {
+    background: #0d74e7 !important;
+    border: none !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 1px 3px rgba(13, 116, 231, 0.3);
+}
+[data-slot="button"]:not([data-variant="ghost"]):not([data-variant="link"]):not([data-variant="outline"]):not([data-variant="destructive"]):not([disabled]):hover {
+    background: #0a5cbf !important;
+    box-shadow: 0 4px 12px rgba(13, 116, 231, 0.35);
+    transform: translateY(-1px);
+}
+[data-slot="button"]:not([data-variant="ghost"]):not([data-variant="link"]):not([data-variant="outline"]):not([data-variant="destructive"]):not([disabled]):active {
+    transform: translateY(0);
+    box-shadow: 0 1px 2px rgba(13, 116, 231, 0.2);
+}
+
+/* Ghost buttons */
+[data-slot="button"][data-variant="ghost"] {
+    border: none !important;
+    box-shadow: none !important;
+}
+[data-slot="button"][data-variant="ghost"]:hover {
+    background: #F3F4F6 !important;
+}
+
+/* Outline buttons — dark border, clean look */
+[data-variant="outline"] {
+    border: 1.5px solid #24292d !important;
+    box-shadow: none;
+    color: #24292d !important;
+    background: transparent !important;
+}
+[data-variant="outline"]:hover {
+    border-color: #0d74e7 !important;
+    color: #0d74e7 !important;
+    background: #EBF3FE !important;
+}
+/* Outline buttons inside the dark sidebar need inverted colors */
+aside [data-variant="outline"] {
+    border-color: #3a4149 !important;
+    color: #F3F4F6 !important;
+    background: #2b3137 !important;
+}
+aside [data-variant="outline"]:hover {
+    border-color: #0d74e7 !important;
+    color: #0d74e7 !important;
+    background: #3a4149 !important;
+}
+
+/* --- Inputs: clean with blue focus ring --- */
+input:not([type="file"]):not([type="checkbox"]):not([type="radio"]),
+textarea,
+[data-slot="input"],
+[data-slot="textarea"] {
+    border: 1.5px solid #E5E7EB !important;
+    border-radius: 8px !important;
+    background: #FFFFFF !important;
+    font-family: 'IBM Plex Mono', monospace;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+input:focus,
+textarea:focus,
+[data-slot="input"]:focus,
+[data-slot="textarea"]:focus {
+    border-color: #0d74e7 !important;
+    box-shadow: 0 0 0 3px rgba(13, 116, 231, 0.12) !important;
+}
+
+/* --- Sliders: green track --- */
+[data-slot="slider-track"] {
+    background: #E5E7EB !important;
+    border: none !important;
+    border-radius: 99px !important;
+    height: 6px !important;
+}
+[data-slot="slider-range"] {
+    background: #2fbb4f !important;
+}
+[data-slot="slider-thumb"] {
+    border: 3px solid #2fbb4f !important;
+    background: #FFFFFF !important;
+    box-shadow: 0 2px 6px rgba(47, 187, 79, 0.3);
+    width: 18px !important;
+    height: 18px !important;
+}
+[data-slot="slider-thumb"]:hover {
+    box-shadow: 0 0 0 4px rgba(47, 187, 79, 0.12);
+}
+
+/* --- Dropdowns / Popovers --- */
+[data-slot="dropdown-menu-content"],
+[data-slot="popover-content"],
+[role="menu"] {
+    border: 1px solid #E5E7EB !important;
+    border-radius: 12px !important;
+    background: #FFFFFF !important;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08), 0 4px 10px rgba(0,0,0,0.04) !important;
+}
+
+/* --- Dialog --- */
+[data-slot="dialog-content"] {
+    border: none !important;
+    border-radius: 16px !important;
+    background: #FFFFFF !important;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.15) !important;
+    overflow: hidden;
+}
+[data-slot="dialog-overlay"] {
+    background: rgba(17, 24, 39, 0.4) !important;
+    backdrop-filter: blur(4px);
+}
+
+/* --- Badges: clean, small, uppercase --- */
+[data-slot="badge"] {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-radius: 6px !important;
+}
+
+/* --- Table --- */
+table {
+    border-collapse: separate;
+    border-spacing: 0;
+}
+thead tr {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6B7280;
+    border-bottom: 2px solid #E5E7EB;
+}
+tbody tr {
+    transition: background 0.15s ease;
+    border-bottom: 1px solid #F3F4F6;
+}
+tbody tr:hover {
+    background: #EBF3FE;
+}
+
+/* --- Sidebar: dark #24292d --- */
+aside,
+[data-slot="sidebar"] {
+    background: #24292d !important;
+    border-right: none !important;
+    box-shadow: none !important;
+}
+
+/* --- Separator --- */
+[data-slot="separator"] {
+    background: #E5E7EB !important;
+    height: 1px !important;
+    border: none !important;
+}
+[data-slot="separator"][data-orientation="vertical"] {
+    width: 1px !important;
+    height: auto !important;
+    background: #E5E7EB !important;
+}
+
+/* --- Progress bar --- */
+[data-slot="progress"] {
+    background: #F3F4F6 !important;
+    border: none !important;
+    border-radius: 99px !important;
+    overflow: hidden;
+}
+[data-slot="progress-indicator"] {
+    background: #0d74e7 !important;
+    border-radius: 99px;
+}
+
+/* --- Toast --- */
+[data-sonner-toaster] [data-sonner-toast] {
+    border: 1px solid #E5E7EB !important;
+    border-radius: 12px !important;
+    background: #FFFFFF !important;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08) !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+}
+
+/* --- Skeleton --- */
+[data-slot="skeleton"] {
+    background: linear-gradient(90deg, #F3F4F6, #E5E7EB, #F3F4F6) !important;
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.5s infinite;
+    border-radius: 8px;
+}
+@keyframes skeleton-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* --- Typing indicator (WhatsApp-style bouncing dots) --- */
+@keyframes typing-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+    30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* --- Scroll area --- */
+[data-slot="scroll-area"] {
+    box-shadow: none;
+    border-radius: 0;
+}
+
+/* ============================================================
+   Typography — Clean, structured, monospace-driven
+   ============================================================ */
+
+h1, h2, h3 {
+    font-family: 'IBM Plex Mono', monospace;
+    color: #24292d;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+h1 { font-size: 1.5rem; }
+h2 { font-size: 1.15rem; }
+h3 { font-size: 0.95rem; }
+
+/* Stats numbers — blue */
+.tabular-nums {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 700;
+    color: #0d74e7;
+}
+
+/* Uppercase labels */
+.uppercase {
+    font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+}
+
+/* ============================================================
+   Scrollbar — thin, hidden until hover
+   ============================================================ */
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: transparent; border-radius: 4px; transition: background 0.2s; }
+*:hover > ::-webkit-scrollbar-thumb,
+*:hover::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); }
+*:hover > ::-webkit-scrollbar-thumb:hover,
+*:hover::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.3); }
+
+::selection {
+    background: rgba(13, 116, 231, 0.15);
+    color: #24292d;
+}
+
+*:focus-visible {
+    outline: 2px solid #0d74e7;
+    outline-offset: 2px;
+}
+
+/* ============================================================
+   Utility Classes
+   ============================================================ */
+
+/* Gradient text — blue */
+.text-gradient {
+    background: linear-gradient(135deg, #0d74e7, #2fbb4f);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* Hover lift */
+.hover-pop {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.hover-pop:hover {
+    transform: translateY(-2px) scale(1.01);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.08);
+}
+
+/* --- Chat markdown prose --- */
+.prose-chat {
+    font-size: 13px;
+    line-height: 1.7;
+    word-break: break-word;
+}
+.prose-chat p {
+    margin: 0.5em 0;
+}
+.prose-chat p:first-child {
+    margin-top: 0;
+}
+.prose-chat p:last-child {
+    margin-bottom: 0;
+}
+.prose-chat strong {
+    font-weight: 700;
+    color: #111827;
+}
+.prose-chat em {
+    font-style: italic;
+}
+.prose-chat ul, .prose-chat ol {
+    margin: 0.5em 0;
+    padding-left: 1.5em;
+}
+.prose-chat li {
+    margin: 0.25em 0;
+}
+.prose-chat li::marker {
+    color: #6B7280;
+}
+.prose-chat code {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.9em;
+    background: #F3F4F6;
+    border: 1px solid #E5E7EB;
+    border-radius: 4px;
+    padding: 0.1em 0.35em;
+}
+.prose-chat pre {
+    margin: 0.75em 0;
+    padding: 0.75em 1em;
+    background: #F9FAFB;
+    border: 1px solid #E5E7EB;
+    border-radius: 8px;
+    overflow-x: auto;
+}
+.prose-chat pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 0.85em;
+}
+.prose-chat blockquote {
+    margin: 0.5em 0;
+    padding-left: 1em;
+    border-left: 3px solid #0d74e7;
+    color: #6B7280;
+}
+.prose-chat h1, .prose-chat h2, .prose-chat h3 {
+    margin: 0.75em 0 0.25em;
+    font-weight: 700;
+}
+.prose-chat hr {
+    margin: 0.75em 0;
+    border: none;
+    border-top: 1px solid #E5E7EB;
+}
+
+/* Dot pattern background */
+.dot-pattern {
+    background-image: radial-gradient(circle, #D1D5DB 1px, transparent 1px);
+    background-size: 20px 20px;
+}
