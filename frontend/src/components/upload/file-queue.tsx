@@ -1,6 +1,5 @@
 import type { FileQueueItem } from "@/hooks/use-upload";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import {
   Table,
   TableBody,
@@ -31,8 +30,8 @@ function StatusCell({ item }: { item: FileQueueItem }) {
       return <Badge variant="outline">Pending</Badge>;
     case "uploading":
       return (
-        <div className="w-24">
-          <Progress value={null} />
+        <div className="w-24 h-1 rounded-full bg-muted overflow-hidden">
+          <div className="h-full w-1/3 rounded-full bg-primary animate-[progress-indeterminate_1.5s_ease-in-out_infinite]" />
         </div>
       );
     case "done":

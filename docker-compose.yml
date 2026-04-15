@@ -22,6 +22,10 @@ services:
       - ./tests:/app/tests
       - ./data:/app/data
       - ./books:/app/books
+      # WHY: Cache the ChromaDB ONNX embedding model (79MB) so it doesn't
+      #      re-download on every container restart. First startup is slow,
+      #      subsequent starts are instant.
+      - chroma-model-cache:/root/.cache/chroma
     env_file:
       - path: .env
         required: false
@@ -63,3 +67,5 @@ services:
     depends_on:
       api:
         condition: service_healthy
+volumes:
+  chroma-model-cache:
