@@ -1,7 +1,27 @@
-import { useState } from "react";
-import { NavLink } from "react-router";
+/**
+ * Sidebar — conversation list, navigation, and settings.
+ *
+ * RAG Pipeline Position:
+ *   This is a NAVIGATION component. It sits outside the pipeline but provides
+ *   the primary interface for managing conversations (create, rename, pin,
+ *   export, share, delete) and configuring retrieval settings (model, top-k).
+ *
+ * Layout (top to bottom):
+ *   1. Logo/brand area with collapse toggle
+ *   2. "+ New Chat" button
+ *   3. Search input (debounced 300ms)
+ *   4. Scrollable conversation list grouped by: Pinned, Today, Yesterday, This Week, Older
+ *   5. Navigation links (Upload, Documents)
+ *   6. Settings (Model dropdown, Top-K slider)
+ *   7. Collection stats
+ *
+ * WHY: Conversations replace the old "Chat" nav link. Each conversation item
+ *      is clickable to navigate to /chat/:id, with a context menu for actions.
+ */
+
+import { useEffect, useState } from "react";
+import { NavLink, useLocation, useNavigate } from "react-router";
 import {
-  MessageSquare,
   Upload,
   FolderOpen,
   Menu,
@@ -10,8 +30,20 @@ import {
   Database,
   HardDrive,
   Layers,
+  Plus,
+  Search,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
+  Download,
+  Share2,
+  Trash2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Tooltip,
   TooltipTrigger,
@@ -21,19 +53,97 @@ import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import { Slider } from "@/components/ui/slider";
 import { useSettings, MODEL_OPTIONS } from "@/hooks/use-settings";
 import { useDocuments } from "@/hooks/use-documents";
+import { useConversations } from "@/hooks/use-conversations";
+import { api } from "@/api/client";
 import { cn } from "@/lib/utils";
+import type { ConversationSummary } from "@/api/types";
+
+// --- Navigation items (Chat is replaced by conversation list) ---
 
 const NAV_ITEMS = [
-  { to: "/chat", label: "Chat", icon: MessageSquare },
   { to: "/upload", label: "Upload", icon: Upload },
   { to: "/documents", label: "Documents", icon: FolderOpen },
 ] as const;
+
+// --- Date grouping helper ---
+
+/**
+ * Groups conversations into time-based categories for the sidebar.
+ *
+ * WHY: Users expect recent conversations at the top. Grouping by relative
+ *      time (Today, Yesterday, This Week, Older) matches the pattern from
+ *      ChatGPT and similar UIs — familiar and scannable.
+ *
+ * PATTERN: Pinned conversations always appear first regardless of date.
+ *          Within each group, conversations are sorted by updated_at descending
+ *          (most recent first) since that's the API default.
+ */
+function groupByDate(conversations: ConversationSummary[]) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today.getTime() - 86400000);
+  const weekAgo = new Date(today.getTime() - 7 * 86400000);
+
+  const groups: { label: string; items: ConversationSummary[] }[] = [];
+  const pinned = conversations.filter((c) => c.pinned);
+  const unpinned = conversations.filter((c) => !c.pinned);
+
+  if (pinned.length) groups.push({ label: "Pinned", items: pinned });
+
+  const todayItems = unpinned.filter((c) => new Date(c.updated_at) >= today);
+  const yesterdayItems = unpinned.filter((c) => {
+    const d = new Date(c.updated_at);
+    return d >= yesterday && d < today;
+  });
+  const weekItems = unpinned.filter((c) => {
+    const d = new Date(c.updated_at);
+    return d >= weekAgo && d < yesterday;
+  });
+  const olderItems = unpinned.filter(
+    (c) => new Date(c.updated_at) < weekAgo,
+  );
+
+  if (todayItems.length) groups.push({ label: "Today", items: todayItems });
+  if (yesterdayItems.length)
+    groups.push({ label: "Yesterday", items: yesterdayItems });
+  if (weekItems.length) groups.push({ label: "This Week", items: weekItems });
+  if (olderItems.length) groups.push({ label: "Older", items: olderItems });
+
+  return groups;
+}
+
+/**
+ * Formats a date as a relative timestamp (e.g., "2h ago", "3d ago").
+ *
+ * WHY: Relative timestamps are more immediately useful than absolute dates
+ *      in a sidebar where screen space is limited.
+ */
+function relativeTime(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffMs = now - then;
+  const diffMin = Math.floor(diffMs / 60000);
+
+  if (diffMin < 1) return "now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay < 30) return `${diffDay}d ago`;
+
+  const diffMonth = Math.floor(diffDay / 30);
+  return `${diffMonth}mo ago`;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -43,9 +153,48 @@ function formatBytes(bytes: number): string {
 
 export function Sidebar() {
   const [expanded, setExpanded] = useState(true);
-  const { settings, update } = useSettings();
+  const { settings, update: updateSettings } = useSettings();
   const { data: documents } = useDocuments();
+  const { conversations, create, remove, update } = useConversations();
+  const navigate = useNavigate();
+  const location = useLocation();
 
+  // WHY: Debounced search — typing fires a search after 300ms of inactivity
+  //      instead of on every keystroke. Reduces API calls and avoids UI jank.
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<
+    ConversationSummary[] | null
+  >(null);
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const results = await api.searchConversations(searchQuery);
+        setSearchResults(results);
+      } catch {
+        setSearchResults([]);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // PATTERN: Derive active conversation ID from the current URL path.
+  //          The sidebar renders at the layout level (parent of all routes),
+  //          so we parse location.pathname rather than relying on useParams
+  //          which only works inside the matched route.
+  const activeConversationId = location.pathname.startsWith("/chat/")
+    ? location.pathname.split("/chat/")[1]
+    : undefined;
+
+  // --- Conversation list data ---
+  const displayConversations = searchResults ?? conversations;
+  const groups = groupByDate(displayConversations);
+
+  // --- Collection stats ---
   const totalChunks =
     documents?.reduce((acc, doc) => acc + doc.chunks, 0) ?? 0;
   const totalSize =
@@ -55,18 +204,78 @@ export function Sidebar() {
     MODEL_OPTIONS.find((m) => m.value === settings.model)?.label ??
     settings.model;
 
+  // --- Action handlers ---
+
+  async function handleNewChat() {
+    const result = await create();
+    navigate(`/chat/${result.id}`);
+  }
+
+  function handleRename(conv: ConversationSummary) {
+    const newTitle = window.prompt("Rename conversation:", conv.title);
+    if (newTitle && newTitle.trim() !== conv.title) {
+      update({ id: conv.id, patch: { title: newTitle.trim() } });
+    }
+  }
+
+  function handleTogglePin(conv: ConversationSummary) {
+    update({ id: conv.id, patch: { pinned: !conv.pinned } });
+  }
+
+  async function handleExport(conv: ConversationSummary) {
+    try {
+      const text = await api.exportConversation(conv.id);
+      // WHY: Create a temporary download link via Blob + URL.createObjectURL.
+      //      This avoids needing a server-side file download endpoint.
+      const blob = new Blob([text], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${conv.title.replace(/[^a-zA-Z0-9]/g, "_")}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Conversation exported");
+    } catch {
+      toast.error("Failed to export conversation");
+    }
+  }
+
+  async function handleShare(conv: ConversationSummary) {
+    try {
+      const { share_url } = await api.shareConversation(conv.id);
+      await navigator.clipboard.writeText(share_url);
+      toast.success("Share link copied to clipboard");
+    } catch {
+      toast.error("Failed to share conversation");
+    }
+  }
+
+  function handleDelete(conv: ConversationSummary) {
+    const confirmed = window.confirm(
+      `Delete "${conv.title}"? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+    remove(conv.id);
+    // Navigate away if we deleted the active conversation
+    if (activeConversationId === conv.id) {
+      navigate("/chat");
+    }
+  }
+
   return (
     <aside
       className={cn(
         "flex h-screen flex-col bg-[#24292d] text-[#F3F4F6] transition-all duration-200",
-        expanded ? "w-60" : "w-16"
+        expanded ? "w-60" : "w-16",
       )}
     >
-      {/* Hamburger toggle — always visible at top */}
-      <div className={cn(
-        "flex items-center px-3 py-3 border-b border-[#3a4149]",
-        expanded ? "justify-between" : "justify-center"
-      )}>
+      {/* Hamburger toggle -- always visible at top */}
+      <div
+        className={cn(
+          "flex items-center px-3 py-3 border-b border-[#3a4149]",
+          expanded ? "justify-between" : "justify-center",
+        )}
+      >
         {expanded && (
           <span className="text-sm font-bold tracking-tight text-white">
             RAG <span className="text-[#2fbb4f]">Q&A</span>
@@ -86,8 +295,99 @@ export function Sidebar() {
         </Button>
       </div>
 
-      {/* Nav items */}
-      <nav className="flex flex-col gap-1 p-2 pt-3">
+      {/* New Chat button */}
+      {expanded ? (
+        <div className="p-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start gap-2 border-[#3a4149] text-[#8b949e] hover:text-white hover:bg-[#2b3137]"
+            onClick={handleNewChat}
+          >
+            <Plus className="size-4" />
+            New Chat
+          </Button>
+        </div>
+      ) : (
+        <div className="flex justify-center p-2">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8"
+                  onClick={handleNewChat}
+                />
+              }
+            >
+              <Plus className="size-4" />
+            </TooltipTrigger>
+            <TooltipContent side="right">New Chat</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+
+      {/* Search input -- only when expanded */}
+      {expanded && (
+        <div className="px-2 pb-2">
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 size-3.5 text-[#8b949e]" />
+            <Input
+              placeholder="Search chats..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="h-7 pl-7 text-xs bg-[#1c2024] border-[#3a4149] text-[#F3F4F6] placeholder:text-[#8b949e]"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Scrollable conversation list */}
+      {expanded && (
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="flex flex-col gap-1 p-2">
+            {groups.length === 0 && (
+              <p className="text-xs text-[#8b949e] text-center py-4">
+                {searchQuery ? "No results found" : "No conversations yet"}
+              </p>
+            )}
+            {groups.map((group) => (
+              <div key={group.label} className="mb-2">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-[#8b949e] px-2">
+                  {group.label}
+                </span>
+                <div className="flex flex-col gap-0.5 mt-1">
+                  {group.items.map((conv) => (
+                    <ConversationItem
+                      key={conv.id}
+                      conversation={conv}
+                      isActive={activeConversationId === conv.id}
+                      onNavigate={() => navigate(`/chat/${conv.id}`)}
+                      onRename={() => handleRename(conv)}
+                      onTogglePin={() => handleTogglePin(conv)}
+                      onExport={() => handleExport(conv)}
+                      onShare={() => handleShare(conv)}
+                      onDelete={() => handleDelete(conv)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+      )}
+
+      {/* Collapsed state: just show a chat icon */}
+      {!expanded && (
+        <div className="flex-1" />
+      )}
+
+      {/* Divider line */}
+      <div className="mx-3 my-1 h-px bg-[#3a4149]" />
+
+      {/* Navigation links (Upload, Documents) at bottom */}
+      <nav className="flex flex-col gap-1 p-2">
         {NAV_ITEMS.map(({ to, label, icon: Icon }) => {
           const link = (
             <NavLink
@@ -98,7 +398,7 @@ export function Sidebar() {
                   "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all",
                   isActive
                     ? "bg-[#0d74e7]/15 text-[#5ba3f0] border-l-2 border-[#0d74e7]"
-                    : "text-[#8b949e] hover:text-white hover:bg-[#2b3137] border-l-2 border-transparent"
+                    : "text-[#8b949e] hover:text-white hover:bg-[#2b3137] border-l-2 border-transparent",
                 )
               }
             >
@@ -121,9 +421,9 @@ export function Sidebar() {
       </nav>
 
       {/* Divider line */}
-      <div className="mx-3 my-2 h-px bg-[#3a4149]" />
+      <div className="mx-3 my-1 h-px bg-[#3a4149]" />
 
-      {/* Settings section — only when expanded */}
+      {/* Settings section -- only when expanded */}
       {expanded && (
         <div className="flex flex-col gap-4 p-3">
           <div className="flex flex-col gap-1.5">
@@ -145,7 +445,9 @@ export function Sidebar() {
               <DropdownMenuContent>
                 <DropdownMenuRadioGroup
                   value={settings.model}
-                  onValueChange={(value) => update({ model: value as string })}
+                  onValueChange={(value) =>
+                    updateSettings({ model: value as string })
+                  }
                 >
                   {MODEL_OPTIONS.map((opt) => (
                     <DropdownMenuRadioItem key={opt.value} value={opt.value}>
@@ -172,20 +474,17 @@ export function Sidebar() {
               value={[settings.topK]}
               onValueChange={(value) => {
                 const v = Array.isArray(value) ? value[0] : value;
-                update({ topK: v });
+                updateSettings({ topK: v });
               }}
             />
           </div>
         </div>
       )}
 
-      {/* Spacer */}
-      <div className="flex-1" />
-
       {/* Divider line */}
       <div className="mx-3 my-1 h-px bg-[#3a4149]" />
 
-      {/* Collection stats — only when expanded */}
+      {/* Collection stats -- only when expanded */}
       {expanded && documents && (
         <div className="grid grid-cols-2 gap-2 p-3 text-xs text-muted-foreground">
           <div className="flex items-center gap-1.5">
@@ -210,5 +509,112 @@ export function Sidebar() {
         </div>
       )}
     </aside>
+  );
+}
+
+// --- Conversation list item with context menu ---
+
+/**
+ * Individual conversation item in the sidebar list.
+ *
+ * WHY: Extracted as a separate component to keep the sidebar readable and
+ *      to isolate hover state management (the "..." menu button only appears
+ *      on hover, matching the ChatGPT sidebar pattern).
+ */
+interface ConversationItemProps {
+  conversation: ConversationSummary;
+  isActive: boolean;
+  onNavigate: () => void;
+  onRename: () => void;
+  onTogglePin: () => void;
+  onExport: () => void;
+  onShare: () => void;
+  onDelete: () => void;
+}
+
+function ConversationItem({
+  conversation,
+  isActive,
+  onNavigate,
+  onRename,
+  onTogglePin,
+  onExport,
+  onShare,
+  onDelete,
+}: ConversationItemProps) {
+  return (
+    <div
+      className={cn(
+        "group relative flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm cursor-pointer transition-all",
+        isActive
+          ? "bg-[#0d74e7]/15 text-[#5ba3f0]"
+          : "text-[#8b949e] hover:text-white hover:bg-[#2b3137]",
+      )}
+      onClick={onNavigate}
+    >
+      {/* Conversation title and timestamp */}
+      <div className="flex-1 min-w-0">
+        <div className="truncate text-xs font-medium leading-snug">
+          {conversation.title.length > 40
+            ? conversation.title.slice(0, 40) + "..."
+            : conversation.title}
+        </div>
+        <div className="text-[10px] text-[#8b949e] mt-0.5">
+          {relativeTime(conversation.updated_at)}
+        </div>
+      </div>
+
+      {/* Context menu — visible on hover */}
+      <div
+        className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="size-5 text-[#8b949e] hover:text-white"
+              />
+            }
+          >
+            <MoreHorizontal className="size-3" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="right" sideOffset={8}>
+            <DropdownMenuItem onClick={onRename}>
+              <Pencil className="size-3.5" />
+              Rename
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onTogglePin}>
+              {conversation.pinned ? (
+                <>
+                  <PinOff className="size-3.5" />
+                  Unpin
+                </>
+              ) : (
+                <>
+                  <Pin className="size-3.5" />
+                  Pin
+                </>
+              )}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onExport}>
+              <Download className="size-3.5" />
+              Export
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onShare}>
+              <Share2 className="size-3.5" />
+              Share
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onClick={onDelete}>
+              <Trash2 className="size-3.5" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </div>
   );
 }

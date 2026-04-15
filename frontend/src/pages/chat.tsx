@@ -1,4 +1,21 @@
-import { useCallback, useRef, useState } from "react";
+/**
+ * Chat page — main conversation interface with streaming responses.
+ *
+ * RAG Pipeline Position:
+ *   Document -> Chunks -> Embeddings -> Vector Store -> RETRIEVAL -> GENERATION -> [CHAT PAGE]
+ *                                                                                    ^^^
+ *   This page is the user-facing entry point. It sends queries via WebSocket,
+ *   receives streamed tokens, and displays source citations alongside answers.
+ *
+ * WHY: The page uses an optional :conversationId URL param to support both
+ *      new chats (no ID) and resuming existing conversations (with ID).
+ *      When an ID is present, we fetch the conversation history and populate
+ *      the chat thread before allowing new messages.
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useParams } from "react-router";
+import { useQuery } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatThread } from "@/components/chat/chat-thread";
@@ -6,22 +23,63 @@ import { ChatInput } from "@/components/chat/chat-input";
 import { SourcesPanel } from "@/components/chat/sources-panel";
 import { useChat } from "@/hooks/use-chat";
 import { useSettings } from "@/hooks/use-settings";
+import { api } from "@/api/client";
+import type { ChatMessage } from "@/api/types";
 
 const MIN_SOURCES_W = 200;
 const MAX_SOURCES_W = 600;
 const DEFAULT_SOURCES_W = 288;
 
 export default function ChatPage() {
-  const { messages, sources, isStreaming, sendMessage, clearChat } = useChat();
+  // WHY: Optional conversationId from URL — undefined means "new chat",
+  //      a value means "resume existing conversation".
+  const { conversationId } = useParams<{ conversationId: string }>();
+  const { messages, sources, isStreaming, sendMessage, clearChat, loadMessages } = useChat();
   const { settings } = useSettings();
   const [sourcesWidth, setSourcesWidth] = useState(DEFAULT_SOURCES_W);
   const dragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // PATTERN: Conditional query — only fetch conversation data when we have
+  //          a conversationId. This avoids a wasted API call on the "new chat" page.
+  const { data: conversationData } = useQuery({
+    queryKey: ["conversation", conversationId],
+    queryFn: () => api.getConversation(conversationId!),
+    enabled: !!conversationId,
+  });
+
+  // WHY: When the conversation ID changes (navigating between chats),
+  //      clear stale messages immediately so the user doesn't see the
+  //      previous conversation's messages flash before the new ones load.
+  const prevConversationId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (prevConversationId.current !== conversationId) {
+      clearChat();
+      prevConversationId.current = conversationId;
+    }
+  }, [conversationId, clearChat]);
+
+  // WHY: Once conversation data loads from the API, populate the chat thread
+  //      with existing messages so the user can continue the conversation.
+  useEffect(() => {
+    if (!conversationData) return;
+
+    const msgs: ChatMessage[] = conversationData.messages.map((m) => ({
+      id: m.id,
+      role: m.role as "user" | "assistant",
+      content: m.content,
+      sources: m.sources,
+    }));
+    loadMessages(msgs);
+  }, [conversationData, loadMessages]);
+
+  // PATTERN: Pass conversationId to sendMessage so the backend knows which
+  //          conversation to append the new message pair to.
   function handleSend(query: string) {
-    sendMessage(query, settings.model, settings.topK);
+    sendMessage(query, settings.model, settings.topK, conversationId);
   }
 
+  // --- Resizable sources panel drag handling ---
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     dragging.current = true;
