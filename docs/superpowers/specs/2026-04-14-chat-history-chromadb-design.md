@@ -104,9 +104,11 @@ Without this, `ondelete="CASCADE"` silently does nothing.
 
 Current IDs are deterministic SHA-256 content hashes (`src/document_loader.py:25-27`). `doc_id = hash(content)`, `chunk_id = hash(content + doc_id)`. This means re-uploading the same file produces identical IDs.
 
-**Dedup behavior:** Use `collection.upsert()` instead of `collection.upsert()` for ChromaDB operations. Upsert is idempotent — re-uploading the same document overwrites chunks with identical content, no duplicates. For SQLite, use `INSERT OR REPLACE` (or SQLModel equivalent) on the documents table, keyed by doc_id.
+**Dedup behavior:** Use `collection.upsert()` instead of `collection.add()` for ChromaDB operations. Upsert is idempotent — re-uploading the same document overwrites chunks with identical content, no duplicates. For SQLite, use `INSERT OR REPLACE` (or SQLModel equivalent) on the documents table, keyed by doc_id.
 
 **Different content, same filename:** Produces different doc_id (hash is content-based), so both versions coexist. This is the correct behavior — different content is a different document.
+
+**Same content, different filenames:** Produces the same doc_id. The second upload overwrites the first's metadata (filename changes, but content/chunks are identical). This is intentional — content-addressed storage deduplicates identical text regardless of filename. The document metadata (filename) reflects the most recent upload. If per-file identity is needed later, switch to UUID-based doc_id generation.
 
 **Versioning:** Not in v1 scope. If needed later, add a `version` column to documents and make PK composite `(doc_id, version)`.
 
@@ -225,9 +227,13 @@ Shutdown:
 ### Sliding window integration into stream_query()
 
 ```
-1. Retrieve sliding window: last N exchanges from SQLite
-2. Save user message to SQLite immediately (the question is always valid)
-3. Build messages list: [system_prompt, ...window_messages, user_prompt_with_context]
+1. Save user message to SQLite immediately (persistence — not lost on disconnect)
+2. Load sliding window: last N COMPLETED exchange pairs BEFORE the current turn
+   (the just-saved user message is excluded from the window — it has no assistant
+   reply yet, so it is not a complete pair)
+3. Build messages list: [system_prompt, ...window_pairs, user_prompt_with_context]
+   The current question appears ONLY as user_prompt_with_context (with retrieved
+   chunks prepended). It does NOT appear a second time inside the window.
 4. Stream LLM response
 5. After streaming completes successfully:
    - Save assistant message + sources to SQLite
@@ -239,7 +245,8 @@ Shutdown:
 **Two-phase persistence:** The user message is saved *before* streaming begins. The assistant message is saved *after* streaming completes. This ensures:
 - A disconnect/error never loses the user's question from history
 - Partial assistant responses are not persisted (error state is recorded instead)
-- The sliding window always includes the user turn even if the assistant response failed
+
+**Window exclusion rule:** The sliding window loads only COMPLETED exchange pairs (user + assistant). The current user message is excluded from the window because it has no reply yet. The current question reaches the LLM solely through `user_prompt_with_context` — never duplicated.
 
 ### LLMHandler adaptation for sliding window
 
@@ -398,9 +405,11 @@ User clicks "+ New Chat"
   -> Frontend: opens WebSocket, sends {query, conversation_id, top_k, model}
   -> Backend:
       1. Save user message to SQLite immediately
-      2. Load sliding window (includes the just-saved user message)
+      2. Load sliding window: last N completed pairs BEFORE current turn
+         (excludes the just-saved user message — no assistant reply yet)
       3. ChromaDB collection.query() -> top-K chunks with sources
-      4. Build prompt: [system, ...window, user_context_question]
+      4. Build prompt: [system, ...window_pairs, user_prompt_with_context]
+         Current question appears ONLY as user_prompt_with_context
       5. Stream tokens -> WebSocket -> Frontend renders incrementally
       6. After stream completes:
          - Save assistant message + sources to SQLite
@@ -420,9 +429,9 @@ User clicks conversation in sidebar
   -> Frontend: opens WebSocket, sends {query, conversation_id, ...}
   -> Backend:
       1. Save user message to SQLite immediately
-      2. Load sliding window: last 5 exchanges from this conversation
+      2. Load sliding window: last 5 completed pairs BEFORE current turn
       3. ChromaDB query for relevant chunks
-      4. Build prompt with window context -> LLM understands follow-ups
+      4. Build prompt: [system, ...window_pairs, user_prompt_with_context]
       5. Stream -> save assistant message after completion (same as above, but no auto-title)
 ```
 

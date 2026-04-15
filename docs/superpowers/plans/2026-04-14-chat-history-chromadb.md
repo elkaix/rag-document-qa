@@ -213,7 +213,8 @@ class DocumentRecord(SQLModel, table=True):
 
 - [ ] Tests for sliding window:
   - `test_sliding_window_empty` — new conversation returns empty list
-  - `test_sliding_window_respects_limit` — 10 messages, window=2 pairs returns last 4
+  - `test_sliding_window_excludes_unpaired` — save a user message with no assistant reply, window excludes it (only completed pairs)
+  - `test_sliding_window_respects_limit` — 10 messages (5 pairs), window=2 pairs returns last 4
 
 - [ ] Run: `python3 -m pytest tests/test_backend.py -v` -> FAIL
 
@@ -221,7 +222,7 @@ class DocumentRecord(SQLModel, table=True):
   - Constructor takes `engine` and `collection` (no more in-memory state)
   - `ingest_file()`: chunks -> `store.upsert()` -> save `DocumentRecord` to SQLite
   - `query()`: `store.query()` -> build context -> LLM generate
-  - `stream_query(conversation_id=)`: save user msg -> sliding window -> stream -> save assistant msg
+  - `stream_query(conversation_id=)`: save user msg -> load window (completed pairs BEFORE current turn, excludes just-saved user msg) -> build prompt [system, ...window, user_with_context] -> stream -> save assistant msg
   - `delete_document()`: ChromaDB first, then SQLite
   - Conversation CRUD: `create_conversation`, `list_conversations`, `get_conversation`, `update_conversation`, `delete_conversation`, `search_conversations`, `export_conversation`, `create_share_token`, `get_shared_conversation`
   - `_save_message()`, `_get_sliding_window()`, `_auto_title()`
@@ -270,7 +271,7 @@ class DocumentRecord(SQLModel, table=True):
   - Passes to `backend.stream_query(conversation_id=...)`
   - `done` message includes `message_id` and `conversation_id`
 
-- [ ] Start server: `python3 -m src.api.main` and test:
+- [ ] Start server: `uvicorn src.api.main:app --port 8001` and test:
   - `curl http://localhost:8001/health` -> `{"status":"healthy"}`
   - `curl -X POST http://localhost:8001/api/conversations -H "Content-Type: application/json" -d '{"title":"Test"}'` -> returns id
   - `curl http://localhost:8001/api/conversations` -> returns list
