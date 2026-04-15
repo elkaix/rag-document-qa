@@ -1,23 +1,60 @@
+# Dev compose — hot-reload for both backend and frontend
+#
+# Usage:
+#   docker compose up              # start both services
+#   docker compose up --build      # rebuild after requirements/deps change
+#   docker compose exec api python -m pytest tests/ -v   # run tests
+#
+# Backend: uvicorn --reload watches src/ for changes
+# Frontend: vite dev server with HMR watches src/ for changes
+# Data: SQLite + ChromaDB persist in ./data/ on host
+
 services:
   api:
-    build: .
-    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8001
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload
     ports:
       - "8001:8001"
-    env_file: .env
     volumes:
-      - ./books:/app/books
+      - ./src:/app/src
+      - ./tests:/app/tests
       - ./data:/app/data
+      - ./books:/app/books
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Pass through LLM API keys if set on host (all optional)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GLM_API_KEY=${GLM_API_KEY:-}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    command: npm run dev -- --host 0.0.0.0
     ports:
       - "3000:3000"
+    environment:
+      # WHY: Inside Docker, the backend is reachable via compose service name "api",
+      #      not "localhost". This env var configures the Vite proxy target.
+      - VITE_API_TARGET=http://api:8001
+    volumes:
+      # Mount source for HMR — but NOT node_modules (use container's copy)
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+      - ./frontend/tsconfig.app.json:/app/tsconfig.app.json
+      - ./frontend/tsconfig.node.json:/app/tsconfig.node.json
+      - ./frontend/components.json:/app/components.json
     depends_on:
       api:
         condition: service_healthy

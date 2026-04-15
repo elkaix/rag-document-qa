@@ -3,6 +3,11 @@ import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
+// WHY: In Docker, the backend hostname is "api" (the compose service name).
+//      On the host, it's "localhost". The env var lets both work.
+const API_TARGET = process.env.VITE_API_TARGET ?? "http://localhost:8001"
+const WS_TARGET = API_TARGET.replace("http", "ws")
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: {
@@ -14,15 +19,15 @@ export default defineConfig({
     port: 3000,
     proxy: {
       "/api/chat": {
-        target: "ws://localhost:8001",
+        target: WS_TARGET,
         ws: true,
       },
       "/api": {
-        target: "http://localhost:8001",
+        target: API_TARGET,
         changeOrigin: true,
       },
       "/health": {
-        target: "http://localhost:8001",
+        target: API_TARGET,
         changeOrigin: true,
       },
     },

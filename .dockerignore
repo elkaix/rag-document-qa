@@ -1,0 +1,28 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Node (frontend has its own .dockerignore via context)
+frontend/node_modules/
+frontend/dist/
+
+# Data (rebuilt at runtime)
+data/
+
+# Git & IDE
+.git/
+.gitignore
+.worktrees/
+*.md
+docs/
+
+# Misc
+.env
+.DS_Store
+e2e_screenshots/
+books/
