@@ -1,0 +1,7 @@
+# WHY: The frontend image installs its own dependencies and generates its own
+#      build output. Excluding host artifacts keeps the Docker build context
+#      small and prevents accidental coupling to local state.
+node_modules/
+dist/
+.env
+.DS_Store
