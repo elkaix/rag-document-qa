@@ -28,10 +28,16 @@ export function useConversations() {
 
   const searchFn = (q: string) => api.searchConversations(q);
 
+  // WHY: React Query's mutateAsync type still expects a variables argument even
+  //      when the mutation function makes it optional. Wrapping it preserves
+  //      the UI contract: callers can create a conversation with the default
+  //      title by calling `create()` with no arguments.
+  const createConversation = (title?: string) => createMutation.mutateAsync(title);
+
   return {
     conversations: listQuery.data ?? [],
     isLoading: listQuery.isLoading,
-    create: createMutation.mutateAsync,
+    create: createConversation,
     remove: deleteMutation.mutate,
     update: updateMutation.mutate,
     search: searchFn,
