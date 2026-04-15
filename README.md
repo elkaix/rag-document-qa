@@ -2,245 +2,239 @@
 
 # RAG Document Q&A
 
-**Retrieval-Augmented Generation** for intelligent document question answering
+Upload documents. Ask questions. Get answers with sources.
 
-[![Python](https://img.shields.io/badge/Python-3.14-3776AB?style=flat-square&logo=python)](https://python.org)
-[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react)](https://react.dev)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square)](https://fastapi.tiangolo.com)
-[![Tests](https://img.shields.io/badge/Tests-24%20passed-success?style=flat-square)](#testing)
-[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
+A full-stack **Retrieval-Augmented Generation** system built with FastAPI and React.
+
+[![Python](https://img.shields.io/badge/Python-3.14-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://typescriptlang.org)
+[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+
+<br />
+
+<img src="docs/images/chat.png" alt="Chat interface showing a LoRA question with streaming answer and source citations" width="820" />
+
+<sub>Streaming chat with source citations and relevance scores</sub>
 
 </div>
 
-## Overview
+<br />
 
-A full-stack **RAG (Retrieval-Augmented Generation)** system that answers questions over document collections. Upload PDFs, DOCX, TXT, Markdown, HTML, CSV, or JSON files — the system chunks them, builds a TF-IDF index, retrieves relevant passages via cosine similarity, and generates answers through any connected LLM.
+## What It Does
 
-Built as a portfolio project to demonstrate end-to-end RAG pipeline design, from document parsing through to a production-style React frontend with streaming chat.
+Upload PDFs, DOCX, TXT, Markdown, HTML, CSV, or JSON files. The system chunks them using recursive text splitting, builds a TF-IDF index, retrieves relevant passages via cosine similarity, and generates answers through any connected LLM -- with full source attribution.
+
+**No API keys required to run.** The retrieval pipeline works standalone with TF-IDF embeddings. Connect an LLM (OpenAI, Anthropic, GLM, or local Ollama) for generated answers.
+
+<br />
 
 ## Architecture
 
 ```
-                        ┌──────────────────────────────────────────────────┐
-                        │                  React Frontend                  │
-                        │       (Chat · Upload · Documents pages)          │
-                        └────────────┬──────────────────┬──────────────────┘
-                                REST │                  │ WebSocket
-                                     ▼                  ▼
-                        ┌──────────────────────────────────────────────────┐
-                        │                  FastAPI Backend                  │
-                        │           /api/upload · /api/query · /api/chat   │
-                        └────────────────────────┬─────────────────────────┘
-                                                 │
-                        ┌────────────────────────▼─────────────────────────┐
-                        │                   RAGBackend                      │
-                        │         (stateful facade, shared via app.state)   │
-                        └───┬──────────┬──────────┬──────────┬─────────────┘
-                            │          │          │          │
-                     ┌──────▼──┐ ┌─────▼────┐ ┌──▼───┐ ┌───▼────────┐
-                     │Document │ │  Text    │ │TF-IDF│ │   Vector   │
-                     │ Loader  │ │ Chunker  │ │Embed.│ │   Store    │
-                     └─────────┘ └──────────┘ └──────┘ └────────────┘
-                                                              │
-                                                       ┌──────▼──────┐
-                                                       │ LLM Handler │
-                                                       │ (multi-     │
-                                                       │  provider)  │
-                                                       └─────────────┘
+INDEXING     Document  ──>  Loader  ──>  Chunker  ──>  TF-IDF Embedder  ──>  Vector Store
+                                          (recursive)     (scikit-learn)        (numpy)
+
+QUERYING     Question  ──>  TF-IDF Embed  ──>  Cosine Search  ──>  Top-K Chunks  ──>  LLM  ──>  Answer
+                                                                                    (streaming)
 ```
 
-**Two data flows through the pipeline:**
+The **RAGBackend** facade wires all components together and persists state across requests via `app.state`, so documents indexed through `/upload` are immediately searchable via `/query`.
 
-| Flow | Path |
-|------|------|
-| **Indexing** | Document &rarr; Loader &rarr; Chunker &rarr; TF-IDF Embedder &rarr; Vector Store |
-| **Querying** | Question &rarr; TF-IDF Embedder &rarr; Cosine Search &rarr; Top-K Chunks &rarr; LLM &rarr; Answer |
+<br />
 
-## Features
+## Screenshots
 
-**Backend**
-- Multi-format document loading — PDF, DOCX, TXT, Markdown, HTML, CSV, JSON
-- Three chunking strategies — fixed-size, recursive (paragraph-aware), and semantic (sentence-level)
-- TF-IDF sparse embeddings with scikit-learn (zero model downloads)
-- In-memory vector store with cosine similarity search (Qdrant backend available)
-- Multi-provider LLM support — OpenAI, Anthropic, GLM (Zhipu), Ollama (local)
-- Streaming responses via WebSocket
-- Graceful fallback when no LLM is configured
+<table>
+<tr>
+<td width="50%">
 
-**Frontend**
-- React 19 SPA with TypeScript, Tailwind CSS, and shadcn/ui components
-- Real-time streaming chat with WebSocket connection
-- Drag-and-drop file upload with batch processing
-- Document browser with chunk inspection
-- Resizable sources panel showing retrieved passages with relevance scores
-- Sidebar with model selection and top-K configuration
-- Collection stats (documents, chunks, size, file types)
+**Documents & Collection Stats**
+
+<img src="docs/images/documents.png" alt="Documents page showing collection statistics and document table" width="400" />
+
+</td>
+<td width="50%">
+
+**API (Swagger UI)**
+
+<img src="docs/images/api.png" alt="FastAPI Swagger UI showing all API endpoints" width="400" />
+
+</td>
+</tr>
+</table>
+
+<br />
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui, TanStack Query |
-| Backend | Python 3.14, FastAPI, Uvicorn, Pydantic v2 |
-| NLP | TF-IDF (scikit-learn), cosine similarity (numpy) |
-| LLM | OpenAI SDK, Anthropic SDK, Ollama, GLM/Zhipu AI |
-| Document Parsing | pypdf, python-docx, BeautifulSoup4 |
-| Testing | pytest, httpx |
-| Deployment | Docker Compose (API + nginx frontend) |
+<table>
+<tr>
+<td><b>Frontend</b></td>
+<td>React 19 &middot; TypeScript &middot; Vite &middot; Tailwind CSS &middot; shadcn/ui &middot; TanStack Query</td>
+</tr>
+<tr>
+<td><b>Backend</b></td>
+<td>Python &middot; FastAPI &middot; Uvicorn &middot; Pydantic v2</td>
+</tr>
+<tr>
+<td><b>Retrieval</b></td>
+<td>TF-IDF (scikit-learn) &middot; Cosine Similarity (numpy) &middot; In-Memory / Qdrant vector store</td>
+</tr>
+<tr>
+<td><b>LLM</b></td>
+<td>OpenAI &middot; Anthropic &middot; GLM (Zhipu AI) &middot; Ollama (local)</td>
+</tr>
+<tr>
+<td><b>Parsing</b></td>
+<td>pypdf &middot; python-docx &middot; BeautifulSoup4</td>
+</tr>
+<tr>
+<td><b>Deploy</b></td>
+<td>Docker Compose (API + nginx frontend)</td>
+</tr>
+</table>
+
+<br />
 
 ## Quick Start
 
-### Prerequisites
-
-- Python 3.12+ and Node.js 22+
-- (Optional) An LLM API key or local Ollama server — the system works without one using dummy responses
-
-### Backend
+### With Docker (recommended)
 
 ```bash
 git clone https://github.com/mohamed-elkholy95/rag-document-qa.git
 cd rag-document-qa
+docker compose up --build
+```
 
+Frontend at `localhost:3000` -- API at `localhost:8001` -- Swagger at `localhost:8001/docs`
+
+### Manual Setup
+
+```bash
+# Backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+python -m src.api.main              # API on :8001
 
-# Start the API server (port 8001, Swagger UI at /docs)
-python -m src.api.main
+# Frontend (separate terminal)
+cd frontend && npm install
+npm run dev                         # Vite on :5173
 ```
 
-### Frontend
+<br />
 
-```bash
-cd frontend
-npm install
-npm run dev    # Vite dev server on port 5173
-```
+## API
 
-### Docker Compose
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/upload` | Upload and index a document |
+| `POST` | `/api/upload/batch` | Batch upload multiple files |
+| `POST` | `/api/query` | Ask a question, get answer + sources |
+| `WS` | `/api/chat` | Streaming chat via WebSocket |
+| `GET` | `/api/documents` | List indexed documents |
+| `GET` | `/api/documents/{id}/chunks` | Inspect document chunks |
+| `DELETE` | `/api/documents/{id}` | Remove a document |
+| `GET` | `/health` | Health check |
 
-```bash
-docker compose up --build
-# Frontend on :3000, API on :8001
-```
+<br />
 
 ## Project Structure
 
 ```
-rag-document-qa/
-├── src/                          # Python backend
-│   ├── api/
-│   │   ├── main.py               # FastAPI app with lifespan, CORS, routers
-│   │   ├── models.py             # Pydantic v2 request/response schemas
-│   │   └── routes/
-│   │       ├── upload.py         # POST /api/upload, /api/upload/batch
-│   │       ├── query.py          # POST /api/query, WS /api/chat
-│   │       └── documents.py      # GET/DELETE /api/documents
-│   ├── backend.py                # RAGBackend — stateful pipeline facade
-│   ├── document_loader.py        # Multi-format loader + 3 chunking strategies
-│   ├── embeddings.py             # TF-IDF embedder (scikit-learn)
-│   ├── vector_store.py           # Abstract store + InMemory/Qdrant backends
-│   ├── llm_handler.py            # Multi-provider LLM with streaming
-│   ├── retriever.py              # Cosine similarity retriever
-│   ├── generator.py              # Context assembly + prompt template
-│   ├── pipeline.py               # Lightweight RAG pipeline (used by tests)
-│   ├── evaluation.py             # Retrieval quality metrics
-│   ├── config.py                 # Constants and logging setup
-│   └── utils.py                  # Shared utilities
-├── frontend/                     # React SPA
-│   ├── src/
-│   │   ├── pages/                # Chat, Upload, Documents
-│   │   ├── components/
-│   │   │   ├── chat/             # ChatThread, ChatInput, ChatMessage, SourcesPanel
-│   │   │   ├── upload/           # Dropzone, FileQueue
-│   │   │   ├── documents/        # DocTable, DocStats, ChunkViewer
-│   │   │   ├── layout/           # AppLayout, Sidebar
-│   │   │   └── ui/               # shadcn/ui primitives
-│   │   ├── hooks/                # useChat, useUpload, useDocuments, useSettings
-│   │   └── api/                  # API client + TypeScript types
-│   ├── Dockerfile                # Multi-stage build → nginx
-│   └── package.json
-├── tests/                        # pytest suite (24 tests)
-│   ├── conftest.py               # Fixtures + deterministic embeddings
-│   └── test_document_loader.py   # Loader, chunker, and validation tests
-├── docker-compose.yml            # API + frontend services
-└── requirements.txt
+src/
+├── api/
+│   ├── main.py                 # FastAPI app — lifespan, CORS, routers
+│   ├── models.py               # Pydantic v2 request/response schemas
+│   └── routes/
+│       ├── upload.py            # File upload + validation
+│       ├── query.py             # REST query + WebSocket streaming
+│       └── documents.py         # Document CRUD
+├── backend.py                   # RAGBackend — stateful pipeline facade
+├── document_loader.py           # Multi-format loader (PDF, DOCX, HTML, CSV, JSON, TXT, MD)
+├── chunker.py                   # Fixed-size + sentence-based chunking
+├── embeddings.py                # TF-IDF embedder (scikit-learn)
+├── vector_store.py              # Abstract store — InMemory + Qdrant backends
+├── llm_handler.py               # Multi-provider LLM with streaming support
+├── retriever.py                 # Cosine similarity search
+├── generator.py                 # Context assembly + prompt templates
+└── pipeline.py                  # Lightweight pipeline (used by tests)
+
+frontend/src/
+├── pages/                       # Chat, Upload, Documents
+├── components/
+│   ├── chat/                    # ChatThread, ChatInput, ChatMessage, SourcesPanel
+│   ├── upload/                  # Dropzone, FileQueue
+│   ├── documents/               # DocTable, DocStats, ChunkViewer
+│   └── layout/                  # AppLayout, Sidebar (model selector, top-K, stats)
+├── hooks/                       # useChat, useUpload, useDocuments, useSettings
+└── api/                         # Typed API client + WebSocket helper
 ```
 
-## API Endpoints
+<br />
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Health check |
-| `POST` | `/api/upload` | Upload and index a single document |
-| `POST` | `/api/upload/batch` | Upload multiple documents at once |
-| `POST` | `/api/query` | Ask a question, get an answer with sources |
-| `WS` | `/api/chat` | Streaming chat over WebSocket |
-| `GET` | `/api/documents` | List all indexed documents |
-| `DELETE` | `/api/documents/{doc_id}` | Delete a document and its chunks |
-| `GET` | `/api/documents/{doc_id}/chunks` | Inspect chunks for a document |
+## Key Features
 
-Interactive API docs available at `/docs` (Swagger UI) when the server is running.
+**Retrieval Pipeline**
+- Three chunking strategies: fixed-size, recursive (paragraph-aware), semantic (sentence-level)
+- Recursive chunking as default -- splits on `\n\n` > `\n` > `. ` > ` ` hierarchy
+- TF-IDF sparse embeddings (zero model downloads, deterministic)
+- Cosine similarity search with configurable top-K
 
-## Frontend Pages
+**LLM Integration**
+- Auto-detect provider from model name (`gpt-*` -> OpenAI, `claude-*` -> Anthropic, `glm-*` -> Zhipu, else -> Ollama)
+- Token-by-token streaming over WebSocket
+- Graceful fallback to dummy responses when no provider is available
 
-| Page | Description |
-|------|-------------|
-| **Chat** | Streaming Q&A interface with a resizable sources panel showing retrieved chunks and relevance scores |
-| **Upload** | Drag-and-drop file upload with a processing queue, batch upload support, and per-file status tracking |
-| **Documents** | Collection overview with stats cards, document table, and a chunk viewer for inspecting how documents were split |
+**Frontend**
+- Real-time streaming chat with markdown rendering
+- Drag-and-drop upload with batch processing queue
+- Resizable sources panel with relevance scores per chunk
+- Document browser with chunk inspector
+- Sidebar with model selection, top-K slider, and live collection stats
 
-## LLM Providers
+<br />
 
-The system auto-detects the provider from the model name:
+## Design Decisions
 
-| Prefix | Provider | Required |
-|--------|----------|----------|
-| `gpt-*`, `o1-*`, `o3-*` | OpenAI | `OPENAI_API_KEY` |
-| `claude-*` | Anthropic | `ANTHROPIC_API_KEY` |
-| `glm-*` | GLM / Zhipu AI | `GLM_API_KEY` |
-| Everything else | Ollama (local) | Ollama server running |
+| Choice | Why |
+|--------|-----|
+| **TF-IDF over neural embeddings** | Zero dependencies, fast, deterministic -- good baseline before adding model complexity |
+| **Recursive chunking** | Preserves paragraph/sentence structure vs. naive fixed-size windows |
+| **In-memory vector store** | No infrastructure needed; Qdrant backend available when persistence matters |
+| **Multi-provider LLM** | Adapter pattern -- swap models by name, zero code changes |
+| **WebSocket streaming** | Token-by-token delivery for responsive UX |
+| **React over Streamlit** | Full control over UX, real-time streaming, production component architecture |
+| **Shared `app.state` backend** | Singleton ensures `/query` sees documents from `/ingest` |
 
-No API keys are required to run the system — without them, a dummy response is returned with the assembled context, which is useful for testing the retrieval pipeline in isolation.
-
-## Environment Variables
-
-| Variable | Required | Used By |
-|----------|----------|---------|
-| `OPENAI_API_KEY` | Only for OpenAI models | `LLMHandler` |
-| `ANTHROPIC_API_KEY` | Only for Anthropic models | `LLMHandler` |
-| `GLM_API_KEY` | Only for GLM models | `LLMHandler` |
-| `GLM_BASE_URL` | Optional GLM endpoint override | `LLMHandler` |
-| `QDRANT_URL` | Only for Qdrant vector backend | `QdrantVectorStore` |
-| `VITE_API_URL` | Optional API base URL for frontend | Frontend API client |
+<br />
 
 ## Testing
 
 ```bash
-# Run all tests
-python -m pytest tests/ -v
-
-# Run with coverage
-python -m pytest tests/ --cov=src --cov-report=term-missing
-
-# Run a specific test class
-python -m pytest tests/test_document_loader.py::TestTextChunkerFixed -v
+python -m pytest tests/ -v                                    # 24 tests
+python -m pytest tests/ --cov=src --cov-report=term-missing   # with coverage
 ```
 
-## Design Decisions
+<br />
 
-| Decision | Rationale |
-|----------|-----------|
-| **TF-IDF over neural embeddings** | Zero model downloads, fast, deterministic. Good baseline that demonstrates the retrieval concept before adding complexity. |
-| **Recursive chunking as default** | Splits on paragraph &rarr; sentence &rarr; word boundaries, preserving document structure better than fixed-size windows. |
-| **In-memory vector store** | No external services required. Qdrant backend available for persistence. |
-| **Multi-provider LLM handler** | Demonstrates adapter pattern — swap providers by changing the model name, no code changes. |
-| **WebSocket streaming** | Token-by-token delivery for responsive chat UX. Falls back to REST for non-streaming queries. |
-| **React + Vite over Streamlit** | Production-grade frontend with full control over UX, real-time streaming, and component architecture. |
-| **Shared backend via `app.state`** | Singleton pattern — pipeline state persists across requests so `/query` can find documents from `/upload`. |
+## Environment Variables
+
+All optional. The system runs fully without any keys using TF-IDF retrieval + dummy LLM responses.
+
+| Variable | Provider |
+|----------|----------|
+| `OPENAI_API_KEY` | OpenAI (`gpt-*` models) |
+| `ANTHROPIC_API_KEY` | Anthropic (`claude-*` models) |
+| `GLM_API_KEY` | Zhipu AI (`glm-*` models) |
+| `QDRANT_URL` | Qdrant vector store backend |
+
+<br />
 
 ## Author
 
-**Mohamed Elkholy** — [GitHub](https://github.com/mohamed-elkholy95)
+**Mohamed Elkholy** -- [GitHub](https://github.com/mohamed-elkholy95)
 
 ---
 
