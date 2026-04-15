@@ -34,9 +34,9 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from sqlalchemy import Engine, or_
+from sqlalchemy import Engine
 from sqlmodel import Session, select
 
 from .config import DEFAULT_MODEL, MAX_TITLE_LENGTH, SLIDING_WINDOW_SIZE, TOP_K_RESULTS
@@ -895,23 +895,24 @@ class RAGBackend:
                 .order_by(Message.created_at)
             ).all()
 
-        # Build completed pairs only
-        # WHY: We walk the message list looking for consecutive user->assistant
-        #      pairs. Any other pattern (user->user, assistant->assistant,
-        #      standalone messages) is skipped.
-        pairs: list[Message] = []
-        i = 0
-        while i < len(messages) - 1:
-            if messages[i].role == "user" and messages[i + 1].role == "assistant":
-                pairs.append(messages[i])
-                pairs.append(messages[i + 1])
-                i += 2
-            else:
-                i += 1
+            # Build completed pairs only (inside session scope to prevent
+            # DetachedInstanceError if a future change adds a commit above).
+            # WHY: We walk the message list looking for consecutive user->assistant
+            #      pairs. Any other pattern (user->user, assistant->assistant,
+            #      standalone messages) is skipped.
+            pairs: list[Message] = []
+            i = 0
+            while i < len(messages) - 1:
+                if messages[i].role == "user" and messages[i + 1].role == "assistant":
+                    pairs.append(messages[i])
+                    pairs.append(messages[i + 1])
+                    i += 2
+                else:
+                    i += 1
 
-        # Take the last max_pairs * 2 messages (each pair = 2 messages)
-        window = pairs[-(max_pairs * 2):]
-        return [{"role": m.role, "content": m.content} for m in window]
+            # Take the last max_pairs * 2 messages (each pair = 2 messages)
+            window = pairs[-(max_pairs * 2):]
+            return [{"role": m.role, "content": m.content} for m in window]
 
     def _auto_title(
         self,
