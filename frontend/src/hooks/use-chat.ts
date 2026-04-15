@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { wsUrl } from "@/api/client";
 import type { ChatMessage, SourceInfo, WsMessage } from "@/api/types";
 
@@ -13,9 +14,10 @@ export function useChat() {
   const [isStreaming, setIsStreaming] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const assistantIdRef = useRef<string>("");
+  const qc = useQueryClient();
 
   const sendMessage = useCallback(
-    (query: string, model: string, topK: number) => {
+    (query: string, model: string, topK: number, conversationId?: string) => {
       const userMsg: ChatMessage = { id: nextId(), role: "user", content: query };
       const asstId = nextId();
       assistantIdRef.current = asstId;
@@ -29,7 +31,12 @@ export function useChat() {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ query, top_k: topK, model }));
+        ws.send(JSON.stringify({
+          query,
+          top_k: topK,
+          model,
+          conversation_id: conversationId ?? null,
+        }));
       };
 
       ws.onmessage = (event) => {
@@ -52,6 +59,7 @@ export function useChat() {
             )
           );
           setIsStreaming(false);
+          qc.invalidateQueries({ queryKey: ["conversations"] });
           ws.close();
         } else if (data.type === "error") {
           setMessages((prev) =>
@@ -77,7 +85,7 @@ export function useChat() {
         setIsStreaming(false);
       };
     },
-    []
+    [qc]
   );
 
   const clearChat = useCallback(() => {
@@ -87,5 +95,9 @@ export function useChat() {
     setIsStreaming(false);
   }, []);
 
-  return { messages, sources, isStreaming, sendMessage, clearChat };
+  const loadMessages = useCallback((msgs: ChatMessage[]) => {
+    setMessages(msgs);
+  }, []);
+
+  return { messages, sources, isStreaming, sendMessage, clearChat, loadMessages };
 }
