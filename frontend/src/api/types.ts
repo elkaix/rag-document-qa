@@ -58,6 +58,8 @@ export interface WsTokenMessage {
 export interface WsDoneMessage {
   type: "done";
   sources: SourceInfo[];
+  message_id: string | null;
+  conversation_id: string | null;
 }
 
 export interface WsErrorMessage {
@@ -72,4 +74,26 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   sources?: SourceInfo[];
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  pinned: boolean;
+  created_at: string;
+  updated_at: string;
+  share_token: string | null;
+}
+
+export interface MessageInfo {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  model: string | null;
+  created_at: string;
+  sources: SourceInfo[];
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  messages: MessageInfo[];
 }
