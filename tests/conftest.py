@@ -2,6 +2,7 @@
 Shared pytest fixtures for the RAG Document Q&A test suite.
 
 All fixtures use mock/in-memory data — no external dependencies required.
+Uses ChromaDB EphemeralClient for vector store fixtures (no disk I/O, no cleanup needed).
 """
 
 from __future__ import annotations
@@ -19,9 +20,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pytest
 import numpy as np
+import chromadb
 
 from src.document_loader import Chunk, Document
-from src.vector_store import InMemoryVectorStore
+from src.vector_store import ChromaVectorStore
 
 
 # --------------------------------------------------------------------------- #
@@ -116,38 +118,47 @@ def _make_deterministic_embedding(text: str, dim: int = EMBEDDING_DIM) -> List[f
 
 
 @pytest.fixture
-def mock_embeddings(sample_chunks: List[Chunk]) -> List[List[float]]:
-    """Deterministic embeddings matching the sample_chunks fixture."""
-    return [_make_deterministic_embedding(c.content) for c in sample_chunks]
+def chroma_collection():
+    """
+    Ephemeral ChromaDB collection for testing.
+
+    WHY EphemeralClient: no disk I/O, no teardown needed — each test gets
+    a fresh in-memory collection that vanishes when the fixture goes out of scope.
+    PATTERN: cosine distance matches how the production vector store is configured.
+    """
+    client = chromadb.EphemeralClient()
+    return client.get_or_create_collection(
+        name="test_docs",
+        metadata={"hnsw:space": "cosine"},
+        # WHY None: we supply our own deterministic embeddings via upsert(),
+        # so ChromaDB must not auto-embed — passing embedding_function=None
+        # disables the default all-MiniLM-L6-v2 auto-embedder.
+        embedding_function=None,
+    )
 
 
 @pytest.fixture
-def mock_query_embedding() -> List[float]:
-    """Embedding for a typical RAG query."""
-    return _make_deterministic_embedding("What is Retrieval-Augmented Generation?")
+def populated_vector_store(sample_chunks: List[Chunk], chroma_collection) -> ChromaVectorStore:
+    """
+    A ChromaVectorStore pre-loaded with sample_chunks and deterministic embeddings.
 
-
-# --------------------------------------------------------------------------- #
-# Vector store fixture                                                         #
-# --------------------------------------------------------------------------- #
-
-@pytest.fixture
-def populated_vector_store(
-    sample_chunks: List[Chunk],
-    mock_embeddings: List[List[float]],
-) -> InMemoryVectorStore:
-    """InMemoryVectorStore pre-loaded with sample_chunks."""
-    store = InMemoryVectorStore()
-    docs = [
-        {
-            "content": c.content,
-            "metadata": c.metadata,
-            "doc_id": c.doc_id,
-            "chunk_id": c.chunk_id,
-        }
-        for c in sample_chunks
-    ]
-    store.add_documents(docs, mock_embeddings)
+    Replaces the old InMemoryVectorStore-based fixture now that TF-IDF has been
+    removed. Tests that need a ready-to-query store use this fixture directly.
+    """
+    store = ChromaVectorStore(chroma_collection)
+    store.upsert(
+        ids=[c.chunk_id for c in sample_chunks],
+        documents=[c.content for c in sample_chunks],
+        metadatas=[
+            {
+                "doc_id": c.doc_id,
+                "filename": c.metadata.get("filename", ""),
+                "chunk_index": c.metadata.get("chunk_index", 0),
+            }
+            for c in sample_chunks
+        ],
+        embeddings=[_make_deterministic_embedding(c.content) for c in sample_chunks],
+    )
     return store
 
 

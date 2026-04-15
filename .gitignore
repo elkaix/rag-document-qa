@@ -7,3 +7,5 @@ CLAUDE.md
 e2e_screenshots/
 books/
 .worktrees/
+data/rag.db
+data/chroma/

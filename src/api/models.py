@@ -75,3 +75,86 @@ class ErrorResponse(BaseModel):
     error: str = Field(description="Short error code or type.")
     detail: Optional[str] = Field(default=None, description="Detailed error message.")
     request_id: Optional[str] = Field(default=None, description="Optional request trace ID.")
+
+
+# --------------------------------------------------------------------------- #
+# Conversation models                                                          #
+# --------------------------------------------------------------------------- #
+
+# WHY: Separate Create/Update models from Summary/Detail models.
+#      Create/Update carry user input (validated, constrained).
+#      Summary/Detail carry server output (includes generated fields like id, timestamps).
+#      This is the standard Pydantic "schema separation" pattern.
+
+
+class ConversationCreate(BaseModel):
+    """Request body for creating a new conversation."""
+
+    title: str = Field(default="New Chat", max_length=200, description="Conversation title.")
+
+
+class ConversationUpdate(BaseModel):
+    """Request body for updating a conversation (partial update via PATCH).
+
+    Both fields are optional — only provided fields are applied.
+    This is the standard "partial update" pattern for PATCH endpoints.
+    """
+
+    title: Optional[str] = Field(default=None, max_length=200, description="New title.")
+    pinned: Optional[bool] = Field(default=None, description="Pin/unpin the conversation.")
+
+
+class ConversationSummary(BaseModel):
+    """Lightweight conversation metadata returned in list endpoints.
+
+    WHY separate from ConversationDetail: List endpoints return many conversations.
+    Including full message history in each would be wasteful. Summary has just
+    enough for a sidebar listing; Detail adds the messages array.
+    """
+
+    id: str
+    title: str
+    pinned: bool
+    created_at: str = Field(description="ISO-8601 UTC timestamp.")
+    updated_at: str = Field(description="ISO-8601 UTC timestamp.")
+    share_token: Optional[str] = Field(
+        default=None,
+        description="Opaque share token for read-only public access.",
+    )
+
+
+class MessageInfo(BaseModel):
+    """A single message within a conversation detail response.
+
+    Mirrors the Message SQLModel table but as a plain Pydantic model —
+    decoupling the API response shape from the database schema.
+    """
+
+    id: str
+    role: str = Field(description="'user' or 'assistant'.")
+    content: str
+    model: Optional[str] = Field(default=None, description="LLM model (assistant messages only).")
+    created_at: str = Field(description="ISO-8601 UTC timestamp.")
+    sources: List[SourceInfo] = Field(
+        default_factory=list,
+        description="Document chunks cited by this message.",
+    )
+
+
+class ConversationDetail(BaseModel):
+    """Full conversation with messages — returned by the detail endpoint.
+
+    Extends ConversationSummary conceptually, but uses composition rather than
+    inheritance to keep the Pydantic JSON schema clean and explicit.
+    """
+
+    id: str
+    title: str
+    pinned: bool
+    created_at: str
+    updated_at: str
+    share_token: Optional[str] = None
+    messages: List[MessageInfo] = Field(
+        default_factory=list,
+        description="Chronologically ordered messages in this conversation.",
+    )

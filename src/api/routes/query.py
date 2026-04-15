@@ -94,14 +94,26 @@ async def chat_websocket(websocket: WebSocket) -> None:
             top_k = int(payload.get("top_k", 5))
             model = payload.get("model")
 
+            # WHY: conversation_id links the WebSocket chat to a persisted
+            #      conversation in SQLite. When provided, stream_query saves
+            #      user/assistant messages and returns message_id + conversation_id
+            #      in the done event so the frontend can update its local state.
+            conversation_id = payload.get("conversation_id")
+
             try:
                 for event_type, data in backend.stream_query(
-                    query_text, top_k=top_k, model=model
+                    query_text, top_k=top_k, model=model,
+                    conversation_id=conversation_id,
                 ):
                     if event_type == "token":
                         await websocket.send_json({"type": "token", "content": data})
                     elif event_type == "done":
-                        await websocket.send_json({"type": "done", "sources": data})
+                        await websocket.send_json({
+                            "type": "done",
+                            "sources": data.get("sources", []),
+                            "message_id": data.get("message_id"),
+                            "conversation_id": data.get("conversation_id"),
+                        })
             except Exception as exc:
                 logger.error("Streaming error: %s", exc)
                 await websocket.send_json(

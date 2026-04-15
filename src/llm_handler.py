@@ -206,6 +206,84 @@ class LLMHandler:
         for word in self._dummy_response(prompt).split():
             yield word + " "
 
+    def generate_messages(self, messages: List[dict]) -> str:
+        """Generate a response given a full conversation messages list.
+
+        This is the messages-list counterpart to generate(). It accepts the
+        standard OpenAI-style messages format (list of role/content dicts),
+        which carries the full sliding-window chat history.
+
+        RAG Pipeline Position:
+          Chat History → [generate_messages] → Provider → Answer
+                              ^^^
+          Whereas generate() wraps a single prompt string, this method passes
+          the conversation history straight through to the provider — enabling
+          multi-turn awareness at the LLM level.
+
+        Args:
+            messages: Conversation history as OpenAI-style dicts, e.g.:
+                [
+                    {"role": "system", "content": "..."},
+                    {"role": "user",   "content": "..."},
+                    {"role": "assistant", "content": "..."},
+                    {"role": "user",   "content": "..."},  ← latest turn
+                ]
+
+        Returns:
+            Model response string, or dummy fallback if provider fails.
+        """
+        try:
+            if self._provider == "openai":
+                return self._openai_generate_messages(messages)
+            if self._provider == "glm":
+                return self._glm_generate_messages(messages)
+            if self._provider == "anthropic":
+                return self._anthropic_generate_messages(messages)
+            if self._provider == "ollama":
+                return self._ollama_generate_messages(messages)
+        except Exception as exc:
+            logger.error("generate_messages failed (%s): %s", self._provider, exc)
+
+        return self._dummy_messages_response(messages)
+
+    def stream_messages(
+        self, messages: List[dict]
+    ) -> Generator[str, None, None]:
+        """Stream a response given a full conversation messages list.
+
+        Streaming counterpart to generate_messages(). Yields text chunks as
+        they arrive so the frontend can display tokens incrementally without
+        waiting for the full response.
+
+        Args:
+            messages: Conversation history as OpenAI-style dicts (same shape
+                as generate_messages()).
+
+        Yields:
+            Text chunks from the model, or dummy fallback tokens if the
+            provider fails.
+        """
+        try:
+            if self._provider == "openai":
+                yield from self._openai_stream_messages(messages)
+                return
+            if self._provider == "glm":
+                yield from self._glm_stream_messages(messages)
+                return
+            if self._provider == "anthropic":
+                yield from self._anthropic_stream_messages(messages)
+                return
+            if self._provider == "ollama":
+                yield from self._ollama_stream_messages(messages)
+                return
+        except Exception as exc:
+            logger.error("stream_messages failed (%s): %s", self._provider, exc)
+
+        # Fallback: yield dummy response word by word so the caller gets a
+        # valid generator even when every provider is unreachable.
+        for word in self._dummy_messages_response(messages).split():
+            yield word + " "
+
     def list_models(self) -> List[str]:
         """Return a list of available models for the current provider.
 
@@ -442,6 +520,238 @@ class LLMHandler:
                     if data.get("done"):
                         break
 
+    # ------------------------------------------------------------------ #
+    # OpenAI — messages-list API                                          #
+    # ------------------------------------------------------------------ #
+
+    def _openai_generate_messages(self, messages: List[dict]) -> str:
+        """Pass a messages list directly to the OpenAI chat completions API.
+
+        WHY: Unlike _openai_generate() which builds the messages list itself
+        from a single prompt, this method receives the already-assembled list
+        so the caller controls the full conversation history.
+        """
+        if not _OPENAI_AVAILABLE:
+            raise RuntimeError("openai package not installed")
+
+        client = _openai_module.OpenAI(  # type: ignore[union-attr]
+            api_key=self.api_key or os.getenv("OPENAI_API_KEY")
+        )
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,  # type: ignore[arg-type]
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        return response.choices[0].message.content or ""
+
+    def _openai_stream_messages(
+        self, messages: List[dict]
+    ) -> Generator[str, None, None]:
+        """Stream a response from OpenAI given a messages list."""
+        if not _OPENAI_AVAILABLE:
+            raise RuntimeError("openai package not installed")
+
+        client = _openai_module.OpenAI(  # type: ignore[union-attr]
+            api_key=self.api_key or os.getenv("OPENAI_API_KEY")
+        )
+        stream = client.chat.completions.create(
+            model=self.model,
+            messages=messages,  # type: ignore[arg-type]
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                yield delta.content
+
+    # ------------------------------------------------------------------ #
+    # GLM — messages-list API                                             #
+    # ------------------------------------------------------------------ #
+
+    def _glm_generate_messages(self, messages: List[dict]) -> str:
+        """Pass a messages list to the GLM (OpenAI-compatible) API.
+
+        WHY: GLM uses the same OpenAI chat completions wire format, so we
+        just reuse the same client/request pattern with GLM's base URL.
+        """
+        client = self._glm_client()
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,  # type: ignore[arg-type]
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        return response.choices[0].message.content or ""
+
+    def _glm_stream_messages(
+        self, messages: List[dict]
+    ) -> Generator[str, None, None]:
+        """Stream a response from GLM given a messages list."""
+        client = self._glm_client()
+        stream = client.chat.completions.create(
+            model=self.model,
+            messages=messages,  # type: ignore[arg-type]
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                yield delta.content
+
+    # ------------------------------------------------------------------ #
+    # Anthropic — messages-list API                                       #
+    # ------------------------------------------------------------------ #
+
+    def _anthropic_generate_messages(self, messages: List[dict]) -> str:
+        """Generate a response from Anthropic given a messages list.
+
+        WHY: Anthropic's API does NOT accept "system" role messages inside the
+        messages list — it expects system instructions as a separate top-level
+        `system=` kwarg. We therefore filter out system messages first and join
+        their content, then pass only user/assistant turns in `messages`.
+
+        TRADE-OFF: Multiple system messages are joined with newlines. In practice,
+        well-formed chat histories have at most one system message (the first one),
+        but defensive handling is safer.
+        """
+        if not _ANTHROPIC_AVAILABLE:
+            raise RuntimeError("anthropic package not installed")
+
+        client = _anthropic_module.Anthropic(  # type: ignore[union-attr]
+            api_key=self.api_key or os.getenv("ANTHROPIC_API_KEY")
+        )
+
+        # PATTERN: Separate system messages from conversation turns.
+        #          Anthropic requires this split at the API level.
+        system_parts = [m["content"] for m in messages if m["role"] == "system"]
+        non_system = [m for m in messages if m["role"] != "system"]
+
+        kwargs: dict = dict(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=non_system,
+        )
+        if system_parts:
+            kwargs["system"] = "\n".join(system_parts)
+
+        response = client.messages.create(**kwargs)
+        block = response.content[0]
+        return block.text if hasattr(block, "text") else str(block)
+
+    def _anthropic_stream_messages(
+        self, messages: List[dict]
+    ) -> Generator[str, None, None]:
+        """Stream a response from Anthropic given a messages list.
+
+        See _anthropic_generate_messages() for the system-message separation
+        rationale — the same split applies here.
+        """
+        if not _ANTHROPIC_AVAILABLE:
+            raise RuntimeError("anthropic package not installed")
+
+        client = _anthropic_module.Anthropic(  # type: ignore[union-attr]
+            api_key=self.api_key or os.getenv("ANTHROPIC_API_KEY")
+        )
+
+        system_parts = [m["content"] for m in messages if m["role"] == "system"]
+        non_system = [m for m in messages if m["role"] != "system"]
+
+        kwargs: dict = dict(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=non_system,
+        )
+        if system_parts:
+            kwargs["system"] = "\n".join(system_parts)
+
+        with client.messages.stream(**kwargs) as stream:
+            for text in stream.text_stream:
+                yield text
+
+    # ------------------------------------------------------------------ #
+    # Ollama — messages-list API  (/api/chat)                             #
+    # ------------------------------------------------------------------ #
+
+    def _ollama_generate_messages(self, messages: List[dict]) -> str:
+        """Generate a response from Ollama using the /api/chat endpoint.
+
+        WHY: The existing _ollama_generate() uses /api/generate, which accepts
+        a single prompt string. /api/chat is the correct Ollama endpoint for
+        multi-turn conversations — it accepts an OpenAI-style messages list
+        and understands role context (system/user/assistant).
+
+        Response format differs from /api/generate:
+          /api/generate  → {"response": "token", "done": false}
+          /api/chat      → {"message": {"role": "assistant", "content": "token"}, "done": false}
+        """
+        if not _REQUESTS_AVAILABLE:
+            raise RuntimeError("requests package not installed")
+
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": self.max_tokens,
+            },
+        }
+
+        resp = _requests_module.post(  # type: ignore[union-attr]
+            f"{self.ollama_base_url}/api/chat",
+            json=payload,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        # WHY: /api/chat wraps the response inside a "message" object, unlike
+        #      /api/generate which puts it at the top-level "response" key.
+        return resp.json().get("message", {}).get("content", "")
+
+    def _ollama_stream_messages(
+        self, messages: List[dict]
+    ) -> Generator[str, None, None]:
+        """Stream a response from Ollama /api/chat endpoint.
+
+        See _ollama_generate_messages() for endpoint and response-format details.
+        """
+        if not _REQUESTS_AVAILABLE:
+            raise RuntimeError("requests package not installed")
+
+        import json
+
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": self.max_tokens,
+            },
+        }
+
+        with _requests_module.post(  # type: ignore[union-attr]
+            f"{self.ollama_base_url}/api/chat",
+            json=payload,
+            stream=True,
+            timeout=120,
+        ) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if line:
+                    data = json.loads(line)
+                    # WHY: /api/chat nests the token inside data["message"]["content"],
+                    #      not at data["response"] like /api/generate does.
+                    token = data.get("message", {}).get("content", "")
+                    if token:
+                        yield token
+                    if data.get("done"):
+                        break
+
     def _ollama_list_models(self) -> List[str]:
         if not _REQUESTS_AVAILABLE:
             return list(OLLAMA_DEFAULT_MODELS)
@@ -477,5 +787,30 @@ class LLMHandler:
         return (
             "[LLM unavailable] This is a placeholder response. "
             f"Your prompt was {len(prompt)} characters. "
+            "Please configure a valid LLM provider (OpenAI, Anthropic, or Ollama)."
+        )
+
+    @staticmethod
+    def _dummy_messages_response(messages: List[dict]) -> str:
+        """Return a safe fallback response for the messages-list API.
+
+        WHY: generate_messages() receives a List[dict] instead of a plain string,
+        so we can't call _dummy_response(prompt) directly. We derive a meaningful
+        length metric from the last user message (same sentinel, different context).
+
+        PATTERN: Extract last user turn for the character count so the fallback
+        message is as informative as the prompt-based one.
+        """
+        # Find the last user message to report its length in the fallback string
+        last_user_content = ""
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user_content = msg.get("content", "")
+                break
+
+        return (
+            "[LLM unavailable] This is a placeholder response. "
+            f"Your last message was {len(last_user_content)} characters "
+            f"(conversation has {len(messages)} turn(s)). "
             "Please configure a valid LLM provider (OpenAI, Anthropic, or Ollama)."
         )
