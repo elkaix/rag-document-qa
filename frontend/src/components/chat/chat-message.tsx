@@ -67,27 +67,31 @@ export function ChatMessage({ message }: ChatMessageProps) {
     <div
       className={cn("group/msg flex flex-col gap-1", isUser ? "items-end" : "items-start")}
     >
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {isUser ? "You" : "Assistant"}
-        </span>
-        {!isUser && !isLoading && <CopyButton text={message.content} />}
-      </div>
-      <div
-        className={cn(
-          "relative max-w-[85%] rounded-xl px-4 py-3 text-sm leading-relaxed",
-          isUser
-            ? "bg-[#0d74e7] text-white rounded-br-sm"
-            : "bg-white text-[#24292d] border border-[#E5E7EB] rounded-bl-sm shadow-sm"
-        )}
-      >
-        {isLoading ? (
-          <TypingIndicator />
-        ) : isUser ? (
-          <span className="whitespace-pre-wrap">{message.content}</span>
-        ) : (
-          <div className="prose-chat">
-            <Markdown>{message.content}</Markdown>
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {isUser ? "You" : "Assistant"}
+      </span>
+      <div className="relative max-w-[85%]">
+        <div
+          className={cn(
+            "rounded-xl px-4 py-3 text-sm leading-relaxed",
+            isUser
+              ? "bg-[#0d74e7] text-white rounded-br-sm"
+              : "bg-white text-[#24292d] border border-[#E5E7EB] rounded-bl-sm shadow-sm"
+          )}
+        >
+          {isLoading ? (
+            <TypingIndicator />
+          ) : isUser ? (
+            <span className="whitespace-pre-wrap">{message.content}</span>
+          ) : (
+            <div className="prose-chat">
+              <Markdown>{message.content}</Markdown>
+            </div>
+          )}
+        </div>
+        {!isUser && !isLoading && (
+          <div className="absolute -top-1 -right-9">
+            <CopyButton text={message.content} />
           </div>
         )}
       </div>
