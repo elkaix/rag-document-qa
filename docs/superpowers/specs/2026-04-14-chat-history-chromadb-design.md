@@ -81,12 +81,34 @@ SQLModel cascade pattern (from official docs):
 - Child side: `Field(foreign_key="conversation.id", ondelete="CASCADE")`
 - Both `cascade_delete` and `ondelete` must be set for proper cascade behavior
 
+**Critical: SQLite foreign key enforcement.** SQLite does not enforce foreign keys by default. The engine must emit `PRAGMA foreign_keys=ON` on every connection. Use an event listener on the engine:
+```python
+from sqlalchemy import event
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+```
+Without this, `ondelete="CASCADE"` silently does nothing.
+
 ### Design notes
 
 - `message_sources` is a separate table (not JSON in messages) so you can query "which conversations referenced this document"
 - `documents` table mirrors what's currently in `RAGBackend._documents` dict, making document metadata persistent
 - `share_token` enables sharing via a unique URL without auth complexity
 - `token_count` on messages enables the sliding window to count tokens, not just message count
+
+### ID strategy and re-ingest dedup
+
+Current IDs are deterministic SHA-256 content hashes (`src/document_loader.py:25-27`). `doc_id = hash(content)`, `chunk_id = hash(content + doc_id)`. This means re-uploading the same file produces identical IDs.
+
+**Dedup behavior:** Use `collection.upsert()` instead of `collection.add()` for ChromaDB operations. Upsert is idempotent — re-uploading the same document overwrites chunks with identical content, no duplicates. For SQLite, use `INSERT OR REPLACE` (or SQLModel equivalent) on the documents table, keyed by doc_id.
+
+**Different content, same filename:** Produces different doc_id (hash is content-based), so both versions coexist. This is the correct behavior — different content is a different document.
+
+**Versioning:** Not in v1 scope. If needed later, add a `version` column to documents and make PK composite `(doc_id, version)`.
 
 ---
 
@@ -110,6 +132,10 @@ data/
 - ChromaDB handles embedding via its default `all-MiniLM-L6-v2` sentence-transformer (ONNX runtime)
 - At query time: `collection.query(query_texts=[question], n_results=top_k)`
 - Collection created with `metadata={"hnsw:space": "cosine"}` for cosine similarity (best for semantic search)
+
+### Deployment constraint: single-writer process
+
+ChromaDB's embedded `PersistentClient` is **not process-safe** for multiple writers. Only one process may write to `data/chroma/` at a time. This is fine for this app because all writes go through the single FastAPI server process. Do NOT run multiple uvicorn workers writing to the same Chroma path. If horizontal scaling is needed later, switch to ChromaDB's client-server mode (`HttpClient` + standalone Chroma server).
 
 ### ChromaDB v1.0+ notes (released March 2025, rewritten in Rust)
 
@@ -139,7 +165,15 @@ data/
 
 `collection.delete(where={"doc_id": target_id})` -- ChromaDB supports metadata-filtered deletes natively.
 
-**Deletion order for atomicity:** Delete from ChromaDB first, then SQLite. If ChromaDB succeeds but SQLite fails, the document metadata remains in SQLite (recoverable -- retry the SQLite delete). The reverse order would leave orphaned embeddings in ChromaDB with no metadata record, which is harder to clean up.
+### Cross-store consistency
+
+SQLite and ChromaDB are independent stores — there is no distributed transaction. Partial failures can leave inconsistent state. Mitigate with operation ordering and compensating actions:
+
+**Ingest order:** Write to ChromaDB first (via `collection.upsert()`), then save document metadata to SQLite. If SQLite fails after ChromaDB succeeds, the chunks are searchable but undiscoverable via the documents list — recoverable by retrying the SQLite insert. The reverse (SQLite first, ChromaDB fails) would list a document with no searchable content, which is worse UX.
+
+**Deletion order:** Delete from ChromaDB first, then SQLite. If ChromaDB succeeds but SQLite fails, the document metadata remains in SQLite (recoverable -- retry the SQLite delete). The reverse order would leave orphaned embeddings in ChromaDB with no metadata record, which is harder to clean up.
+
+**Health check:** Add a periodic or on-demand consistency check that compares doc_ids in SQLite vs distinct doc_id values in ChromaDB metadata, logging any orphans. Not required for v1 but the implementation plan should note it as a follow-up.
 
 ---
 
@@ -192,12 +226,20 @@ Shutdown:
 
 ```
 1. Retrieve sliding window: last N exchanges from SQLite
-2. Build messages list: [system_prompt, ...window_messages, user_prompt_with_context]
-3. Stream LLM response
-4. After streaming completes: save user message + assistant message + sources to SQLite
+2. Save user message to SQLite immediately (the question is always valid)
+3. Build messages list: [system_prompt, ...window_messages, user_prompt_with_context]
+4. Stream LLM response
+5. After streaming completes successfully:
+   - Save assistant message + sources to SQLite
+6. On stream error:
+   - Save assistant message with error content (e.g., "[Generation failed]")
+   - User message is already persisted — not lost on disconnect
 ```
 
-Messages are saved *after* the full response is generated, not during streaming. This avoids partial messages in the DB if the stream errors mid-way. The frontend still gets real-time tokens via WebSocket -- persistence is a post-stream side effect.
+**Two-phase persistence:** The user message is saved *before* streaming begins. The assistant message is saved *after* streaming completes. This ensures:
+- A disconnect/error never loses the user's question from history
+- Partial assistant responses are not persisted (error state is recorded instead)
+- The sliding window always includes the user turn even if the assistant response failed
 
 ### LLMHandler adaptation for sliding window
 
@@ -327,6 +369,21 @@ Current:                          New:
 - Read-only conversation view, no sidebar, minimal layout
 - Shows all messages + sources, no input box
 
+**Router restructure required:** The current `App.tsx` nests all pages under `AppLayout` which always renders the sidebar. The `/shared/:token` route must be a **sibling** of the `AppLayout` route, not a child:
+```tsx
+const router = createBrowserRouter([
+  {
+    Component: AppLayout,          // has sidebar
+    children: [
+      { path: "chat/:conversationId?", Component: ChatPage },
+      { path: "upload", Component: UploadPage },
+      { path: "documents", Component: DocumentsPage },
+    ],
+  },
+  { path: "shared/:token", Component: SharedPage },  // no sidebar
+]);
+```
+
 ---
 
 ## Section 6: Data Flow (End to End)
@@ -437,6 +494,20 @@ sqlmodel >= 0.0.24       # ORM (Pydantic + SQLAlchemy) for SQLite
 
 - `scikit-learn` -- no longer needed for TF-IDF (keep in requirements for tests but not imported in production path)
 - `numpy` -- still used indirectly by ChromaDB, but no longer directly imported in backend
+
+### Legacy TF-IDF code to deprecate/remove
+
+The repo has TF-IDF-centric modules that will be superseded by ChromaDB. These must be explicitly handled to avoid a half-ported state:
+
+| File | Action |
+|------|--------|
+| `src/pipeline.py` | **Remove.** Replaced entirely by `RAGBackend`. Currently unused by the API layer. |
+| `src/retriever.py` | **Remove.** Cosine similarity search replaced by `collection.query()`. |
+| `src/embeddings.py` | **Remove or gut.** TF-IDF embedding logic replaced by ChromaDB's built-in embedder. |
+| `src/vector_store.py` | **Rewrite.** Replace `InMemoryVectorStore` / `QdrantVectorStore` with `ChromaVectorStore`. |
+| `src/chunker.py` | **Keep.** Still used by `document_loader.py: TextChunker` which is the active chunking system. |
+| `src/evaluation.py` | **Keep but update imports.** If it references TF-IDF embedder, update to use ChromaDB. |
+| `tests/conftest.py` | **Rewrite fixtures.** Current deterministic SHA-256-seeded embeddings won't work with ChromaDB. Replace with `EphemeralClient()` + real sentence-transformer embeddings, or mock ChromaDB's embedding function for deterministic tests. |
 
 ### Configuration (src/config.py)
 
