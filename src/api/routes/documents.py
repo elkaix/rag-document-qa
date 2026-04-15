@@ -32,11 +32,13 @@ async def list_documents(request: Request) -> List[DocumentInfo]:
     backend = request.app.state.backend
     entries = backend.list_documents()
 
+    # BUG FIX: Backend returns "id" and "chunks_count" (matching DocumentRecord
+    #          field names), not "doc_id" and "chunks" (the old in-memory format).
     return [
         DocumentInfo(
-            doc_id=entry["doc_id"],
+            doc_id=entry["id"],
             filename=entry["filename"],
-            chunks=entry["chunks"],
+            chunks=entry["chunks_count"],
             upload_date=datetime.fromisoformat(entry["upload_date"]),
             file_type=entry.get("file_type"),
             file_size_bytes=entry.get("file_size_bytes"),
@@ -58,7 +60,7 @@ async def delete_document(doc_id: str, request: Request) -> Dict[str, Any]:
     backend = request.app.state.backend
 
     # Check existence
-    docs = {d["doc_id"]: d for d in backend.list_documents()}
+    docs = {d["id"]: d for d in backend.list_documents()}
     if doc_id not in docs:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -91,7 +93,7 @@ async def get_document_chunks(doc_id: str, request: Request) -> Dict[str, Any]:
     backend = request.app.state.backend
 
     # Check existence
-    docs = {d["doc_id"]: d for d in backend.list_documents()}
+    docs = {d["id"]: d for d in backend.list_documents()}
     if doc_id not in docs:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
