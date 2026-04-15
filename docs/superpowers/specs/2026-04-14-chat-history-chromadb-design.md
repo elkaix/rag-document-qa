@@ -104,7 +104,7 @@ Without this, `ondelete="CASCADE"` silently does nothing.
 
 Current IDs are deterministic SHA-256 content hashes (`src/document_loader.py:25-27`). `doc_id = hash(content)`, `chunk_id = hash(content + doc_id)`. This means re-uploading the same file produces identical IDs.
 
-**Dedup behavior:** Use `collection.upsert()` instead of `collection.add()` for ChromaDB operations. Upsert is idempotent — re-uploading the same document overwrites chunks with identical content, no duplicates. For SQLite, use `INSERT OR REPLACE` (or SQLModel equivalent) on the documents table, keyed by doc_id.
+**Dedup behavior:** Use `collection.upsert()` instead of `collection.upsert()` for ChromaDB operations. Upsert is idempotent — re-uploading the same document overwrites chunks with identical content, no duplicates. For SQLite, use `INSERT OR REPLACE` (or SQLModel equivalent) on the documents table, keyed by doc_id.
 
 **Different content, same filename:** Produces different doc_id (hash is content-based), so both versions coexist. This is the correct behavior — different content is a different document.
 
@@ -149,9 +149,9 @@ ChromaDB's embedded `PersistentClient` is **not process-safe** for multiple writ
 
 | Current | New |
 |---------|-----|
-| `TfidfEmbedder.fit_transform()` | ChromaDB auto-embeds on `collection.add()` |
+| `TfidfEmbedder.fit_transform()` | ChromaDB auto-embeds on `collection.upsert()` |
 | `TfidfEmbedder.transform()` (query) | ChromaDB auto-embeds on `collection.query()` |
-| `InMemoryVectorStore.add_documents()` | `collection.add(documents, metadatas, ids)` |
+| `InMemoryVectorStore.add_documents()` | `collection.upsert(documents, metadatas, ids)` |
 | `InMemoryVectorStore.search()` | `collection.query(query_texts, n_results)` |
 | `_rebuild_index()` on every add/delete | Not needed -- ChromaDB indexes incrementally |
 
@@ -199,7 +199,7 @@ Shutdown:
 
 | Method | Current (in-memory) | New (persistent) |
 |--------|---------------------|-------------------|
-| `ingest_file()` | Chunks -> TF-IDF -> numpy array -> `_all_chunks` list | Chunks -> `collection.add()` + save doc metadata to SQLite |
+| `ingest_file()` | Chunks -> TF-IDF -> numpy array -> `_all_chunks` list | Chunks -> `collection.upsert()` + save doc metadata to SQLite |
 | `query()` | `embedder.transform()` -> numpy cosine sim | `collection.query()` -> build context -> LLM |
 | `stream_query()` | Same as query but streams | Same + prepend sliding window from SQLite |
 | `delete_document()` | Filter list + `_rebuild_index()` | `collection.delete(where={doc_id})` + delete from SQLite |
@@ -397,15 +397,15 @@ User clicks "+ New Chat"
   -> User types question
   -> Frontend: opens WebSocket, sends {query, conversation_id, top_k, model}
   -> Backend:
-      1. Load sliding window (empty for new conversation)
-      2. ChromaDB collection.query() -> top-K chunks with sources
-      3. Build prompt: [system, ...window, user_context_question]
-      4. Stream tokens -> WebSocket -> Frontend renders incrementally
-      5. After stream completes:
-         - Save user message to SQLite
+      1. Save user message to SQLite immediately
+      2. Load sliding window (includes the just-saved user message)
+      3. ChromaDB collection.query() -> top-K chunks with sources
+      4. Build prompt: [system, ...window, user_context_question]
+      5. Stream tokens -> WebSocket -> Frontend renders incrementally
+      6. After stream completes:
          - Save assistant message + sources to SQLite
          - Auto-title: UPDATE conversation SET title = first_query[:60]
-      6. Send {"type": "done", "sources": [...], "message_id", "conversation_id"}
+      7. Send {"type": "done", "sources": [...], "message_id", "conversation_id"}
   -> Frontend: invalidates ["conversations"] -> sidebar refreshes with new title
 ```
 
@@ -419,10 +419,11 @@ User clicks conversation in sidebar
   -> User types follow-up question
   -> Frontend: opens WebSocket, sends {query, conversation_id, ...}
   -> Backend:
-      1. Load sliding window: last 5 exchanges from this conversation
-      2. ChromaDB query for relevant chunks
-      3. Build prompt with window context -> LLM understands follow-ups
-      4. Stream -> save -> done (same as above, but no auto-title)
+      1. Save user message to SQLite immediately
+      2. Load sliding window: last 5 exchanges from this conversation
+      3. ChromaDB query for relevant chunks
+      4. Build prompt with window context -> LLM understands follow-ups
+      5. Stream -> save assistant message after completion (same as above, but no auto-title)
 ```
 
 ### Document ingestion flow
@@ -433,7 +434,7 @@ User uploads file on /upload page
   -> Backend:
       1. DocumentLoader.load() -> Document
       2. TextChunker.chunk() -> List[Chunk]
-      3. ChromaDB collection.add(
+      3. ChromaDB collection.upsert(
            documents=[c.content for c in chunks],
            metadatas=[{doc_id, filename, chunk_index} for c in chunks],
            ids=[c.chunk_id for c in chunks]
@@ -488,7 +489,7 @@ chromadb >= 1.0.0        # Vector store + default sentence-transformer embedding
 sqlmodel >= 0.0.24       # ORM (Pydantic + SQLAlchemy) for SQLite
 ```
 
-**Note on async:** SQLModel's `Session` is synchronous. FastAPI automatically runs sync `def` endpoints and `Depends(get_session)` callables in a threadpool, so there is no performance penalty. No async SQLite driver needed.
+**Note on async:** SQLModel's `Session` is synchronous. FastAPI automatically runs sync `def` endpoints and `Depends(get_session)` callables in a threadpool. This adds minor threadpool overhead vs native async, but is fully acceptable for this single-user app and is the documented SQLModel + FastAPI pattern. No async SQLite driver needed.
 
 ### Removed/demoted dependencies
 
@@ -505,7 +506,7 @@ The repo has TF-IDF-centric modules that will be superseded by ChromaDB. These m
 | `src/retriever.py` | **Remove.** Cosine similarity search replaced by `collection.query()`. |
 | `src/embeddings.py` | **Remove or gut.** TF-IDF embedding logic replaced by ChromaDB's built-in embedder. |
 | `src/vector_store.py` | **Rewrite.** Replace `InMemoryVectorStore` / `QdrantVectorStore` with `ChromaVectorStore`. |
-| `src/chunker.py` | **Keep.** Still used by `document_loader.py: TextChunker` which is the active chunking system. |
+| `src/chunker.py` | **Remove.** Only imported by `pipeline.py` (confirmed via grep). The active chunking system is `TextChunker` inside `document_loader.py`, which is independent. |
 | `src/evaluation.py` | **Keep but update imports.** If it references TF-IDF embedder, update to use ChromaDB. |
 | `tests/conftest.py` | **Rewrite fixtures.** Current deterministic SHA-256-seeded embeddings won't work with ChromaDB. Replace with `EphemeralClient()` + real sentence-transformer embeddings, or mock ChromaDB's embedding function for deterministic tests. |
 
@@ -522,7 +523,7 @@ DEFAULT_MODEL = "glm-5.1"
 DEFAULT_TOP_K = 5
 SLIDING_WINDOW_SIZE = 5       # number of exchange pairs
 MAX_TITLE_LENGTH = 60
-SHARE_TOKEN_LENGTH = 16
+# Share tokens are UUID4 strings (e.g., "a1b2c3d4-e5f6-..."), not truncated hashes
 ```
 
 ### File structure changes
@@ -539,9 +540,9 @@ src/
 ├── vector_store.py        <- refactored: ChromaDB implementation replaces numpy
 ├── embeddings.py          <- simplified or removed (ChromaDB handles embedding)
 ├── backend.py             <- refactored: uses Session + ChromaDB
-├── llm_handler.py         <- unchanged (already fixed max_tokens)
-├── document_loader.py     <- unchanged
-├── chunker.py             <- unchanged
+├── llm_handler.py         <- refactored: add messages-list API, switch Ollama to /api/chat
+├── document_loader.py     <- unchanged (TextChunker lives here, still active)
+├── chunker.py             <- REMOVE (only used by pipeline.py which is also removed)
 └── api/
     ├── main.py            <- lifespan creates engine + ChromaDB client
     ├── models.py          <- expanded with conversation/message schemas
