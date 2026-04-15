@@ -8,10 +8,22 @@ interface Settings {
 const STORAGE_KEY = "rag-settings";
 const DEFAULTS: Settings = { model: "glm-5.1", topK: 5 };
 
+// BUG FIX: useSyncExternalStore compares snapshots with Object.is().
+// BEFORE: getSnapshot() returned a new object on every call, causing
+//         infinite re-renders because Object.is({}, {}) is always false.
+// AFTER:  Cache the last parsed value and only create a new object when
+//         the raw JSON string actually changes.
+let _cachedRaw: string | null = null;
+let _cachedSettings: Settings = DEFAULTS;
+
 function getSnapshot(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? { ...DEFAULTS, ...JSON.parse(raw) } : DEFAULTS;
+    if (raw !== _cachedRaw) {
+      _cachedRaw = raw;
+      _cachedSettings = raw ? { ...DEFAULTS, ...JSON.parse(raw) } : DEFAULTS;
+    }
+    return _cachedSettings;
   } catch {
     return DEFAULTS;
   }

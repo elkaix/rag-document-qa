@@ -48,22 +48,24 @@ export default function ChatPage() {
     enabled: !!conversationId,
   });
 
-  // WHY: When the conversation ID changes (navigating between chats),
-  //      clear stale messages immediately so the user doesn't see the
-  //      previous conversation's messages flash before the new ones load.
-  const prevConversationId = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    if (prevConversationId.current !== conversationId) {
-      clearChat();
-      prevConversationId.current = conversationId;
-    }
-  }, [conversationId, clearChat]);
+  // WHY: Track which conversation data we've already loaded into the chat
+  //      thread to avoid infinite re-render loops. Without this, clearChat
+  //      and loadMessages ping-pong setState calls.
+  const loadedDataRef = useRef<string | null>(null);
 
-  // WHY: Once conversation data loads from the API, populate the chat thread
-  //      with existing messages so the user can continue the conversation.
+  // Clear chat when navigating to a different conversation
   useEffect(() => {
-    if (!conversationData) return;
+    loadedDataRef.current = null;
+    clearChat();
+  }, [conversationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Load conversation messages once when data arrives
+  if (
+    conversationData &&
+    conversationData.id === conversationId &&
+    loadedDataRef.current !== conversationData.id
+  ) {
+    loadedDataRef.current = conversationData.id;
     const msgs: ChatMessage[] = conversationData.messages.map((m) => ({
       id: m.id,
       role: m.role as "user" | "assistant",
@@ -71,7 +73,7 @@ export default function ChatPage() {
       sources: m.sources,
     }));
     loadMessages(msgs);
-  }, [conversationData, loadMessages]);
+  }
 
   // PATTERN: Pass conversationId to sendMessage so the backend knows which
   //          conversation to append the new message pair to.
