@@ -22,12 +22,16 @@ services:
       - ./tests:/app/tests
       - ./data:/app/data
       - ./books:/app/books
+    env_file:
+      - path: .env
+        required: false
     environment:
       - PYTHONUNBUFFERED=1
-      # Pass through LLM API keys if set on host (all optional)
+      # Pass through LLM API keys if set on host (override .env)
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GLM_API_KEY=${GLM_API_KEY:-}
+      - GLM_BASE_URL=${GLM_BASE_URL:-}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 5s
@@ -48,6 +52,7 @@ services:
       - VITE_API_TARGET=http://api:8001
     volumes:
       # Mount source for HMR — but NOT node_modules (use container's copy)
+      - ./frontend/public:/app/public
       - ./frontend/src:/app/src
       - ./frontend/index.html:/app/index.html
       - ./frontend/vite.config.ts:/app/vite.config.ts
