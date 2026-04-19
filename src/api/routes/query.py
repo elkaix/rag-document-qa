@@ -8,6 +8,7 @@ when the requested model differs from the default.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -106,14 +107,30 @@ async def chat_websocket(websocket: WebSocket) -> None:
             #      in the done event so the frontend can update its local state.
             conversation_id = payload.get("conversation_id")
 
+            # WHY run_in_executor: stream_query() is a synchronous generator
+            #      that makes blocking HTTP calls to the LLM API. Iterating
+            #      it directly in this async handler would block the event
+            #      loop, preventing WebSocket frames from being flushed
+            #      between tokens — the user would see everything at once
+            #      instead of real-time streaming. Running next() in a thread
+            #      keeps the event loop free so each send_json flushes
+            #      immediately.
+            loop = asyncio.get_running_loop()
+            gen = backend.stream_query(
+                query_text, top_k=top_k, model=model,
+                conversation_id=conversation_id,
+            )
+            _sentinel = object()
+
             try:
-                for event_type, data in backend.stream_query(
-                    query_text, top_k=top_k, model=model,
-                    conversation_id=conversation_id,
-                ):
-                    # WHY: Forward each backend event variant verbatim so the
-                    #      frontend can render status lines, reasoning tokens,
-                    #      and answer tokens as distinct UI states.
+                while True:
+                    item = await loop.run_in_executor(
+                        None, next, gen, _sentinel
+                    )
+                    if item is _sentinel:
+                        break
+                    event_type, data = item
+
                     if event_type == "token":
                         await websocket.send_json({"type": "token", "content": data})
                     elif event_type == "reasoning":
@@ -132,6 +149,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 await websocket.send_json(
                     {"type": "error", "content": f"Streaming error: {exc}"}
                 )
+            finally:
+                gen.close()
 
     except WebSocketDisconnect:
         logger.debug("WebSocket client disconnected")
