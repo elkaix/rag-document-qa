@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { wsUrl } from "@/api/client";
-import type { ChatMessage, SourceInfo, WsMessage } from "@/api/types";
+import type { ChatMessage, EvaluationScore, SourceInfo, WsMessage } from "@/api/types";
 
 let msgCounter = 0;
 function nextId() {
@@ -121,6 +121,23 @@ export function useChat() {
           thinkingStartRef.current = null;
           qc.invalidateQueries({ queryKey: ["conversations"] });
           ws.close();
+        } else if (data.type === "evaluation") {
+          // WHY: The backend fires a separate WebSocket event after the "done"
+          //      event with real-time faithfulness scores. We attach it to the
+          //      assistant message so the UI can show the inline badge.
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantIdRef.current
+                ? {
+                    ...m,
+                    evaluation: [
+                      ...(m.evaluation ?? []),
+                      data.content,
+                    ],
+                  }
+                : m
+            )
+          );
         } else if (data.type === "error") {
           setMessages((prev) =>
             prev.map((m) =>
@@ -161,5 +178,16 @@ export function useChat() {
     setMessages(msgs);
   }, []);
 
-  return { messages, sources, isStreaming, sendMessage, clearChat, loadMessages };
+  const updateEvaluation = useCallback(
+    (messageId: string, scores: EvaluationScore[]) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId ? { ...m, evaluation: scores } : m
+        )
+      );
+    },
+    []
+  );
+
+  return { messages, sources, isStreaming, sendMessage, clearChat, loadMessages, updateEvaluation };
 }
