@@ -457,7 +457,18 @@ class RAGBackend:
 
         system_prompt = (
             "You are a helpful assistant. Answer the user's question based solely on the "
-            "provided context. If the context does not contain enough information, say so."
+            "provided context. If the context does not contain enough information, say so.\n\n"
+            "Format your response using Markdown for readability:\n"
+            "- Use ## for main sections and ### for sub-sections (max 3 levels)\n"
+            "- Use **bold** for key terms and important concepts\n"
+            "- Use bullet points (-) for lists of related items\n"
+            "- Use numbered lists (1.) for sequential steps\n"
+            "- Use `inline code` for technical terms, parameters, or commands\n"
+            "- Use fenced code blocks (```language) for code snippets\n"
+            "- Use > blockquotes for notable quotes from the context\n"
+            "- Keep paragraphs short (2-3 sentences max)\n"
+            "- Add blank lines between sections for visual breathing room\n"
+            "Do NOT use # (h1) headings. Start directly with content or ## sections."
         )
         user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
 
