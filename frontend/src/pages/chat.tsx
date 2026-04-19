@@ -24,7 +24,7 @@ import { SourcesPanel } from "@/components/chat/sources-panel";
 import { useChat } from "@/hooks/use-chat";
 import { useSettings } from "@/hooks/use-settings";
 import { api } from "@/api/client";
-import type { ChatMessage } from "@/api/types";
+import type { ChatMessage, EvaluationScore } from "@/api/types";
 
 const MIN_SOURCES_W = 200;
 const MAX_SOURCES_W = 600;
@@ -34,7 +34,7 @@ export default function ChatPage() {
   // WHY: Optional conversationId from URL — undefined means "new chat",
   //      a value means "resume existing conversation".
   const { conversationId } = useParams<{ conversationId: string }>();
-  const { messages, sources, isStreaming, sendMessage, clearChat, loadMessages } = useChat();
+  const { messages, sources, isStreaming, sendMessage, clearChat, loadMessages, updateEvaluation } = useChat();
   const { settings } = useSettings();
   const [sourcesWidth, setSourcesWidth] = useState(DEFAULT_SOURCES_W);
   const dragging = useRef(false);
@@ -80,6 +80,22 @@ export default function ChatPage() {
   function handleSend(query: string) {
     sendMessage(query, settings.model, settings.topK, conversationId);
   }
+
+  // WHY: Delegate evaluation score persistence to the useChat hook so the
+  //      message state stays the single source of truth for evaluation data.
+  const handleEvaluate = useCallback(
+    (messageId: string, scores: EvaluationScore[]) => {
+      updateEvaluation(messageId, scores);
+    },
+    [updateEvaluation]
+  );
+
+  // PATTERN: Derive the most recent evaluation from the message list so the
+  //          SourcesPanel always reflects the last completed answer — no
+  //          separate state needed.
+  const latestEvaluation = [...messages].reverse().find(
+    (m) => m.role === "assistant" && m.evaluation && m.evaluation.length > 0
+  )?.evaluation;
 
   // --- Resizable sources panel drag handling ---
   const onPointerDown = useCallback((e: React.PointerEvent) => {
@@ -132,7 +148,7 @@ export default function ChatPage() {
 
       {/* Row 2: Content */}
       <div className="flex flex-col overflow-hidden">
-        <ChatThread messages={messages} />
+        <ChatThread messages={messages} onEvaluate={handleEvaluate} />
         <ChatInput onSend={handleSend} disabled={isStreaming} />
       </div>
 
@@ -146,7 +162,7 @@ export default function ChatPage() {
 
       {/* Sources panel — contained, scrolls independently */}
       <div className="overflow-hidden">
-        <SourcesPanel sources={sources} />
+        <SourcesPanel sources={sources} evaluation={latestEvaluation} />
       </div>
     </div>
   );

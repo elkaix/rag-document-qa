@@ -1,13 +1,14 @@
 import { useEffect, useRef } from "react";
 import { MessageSquare } from "lucide-react";
-import type { ChatMessage as ChatMessageType } from "@/api/types";
+import type { ChatMessage as ChatMessageType, EvaluationScore } from "@/api/types";
 import { ChatMessage } from "./chat-message";
 
 interface ChatThreadProps {
   messages: ChatMessageType[];
+  onEvaluate?: (messageId: string, scores: EvaluationScore[]) => void;
 }
 
-export function ChatThread({ messages }: ChatThreadProps) {
+export function ChatThread({ messages, onEvaluate }: ChatThreadProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -25,7 +26,7 @@ export function ChatThread({ messages }: ChatThreadProps) {
       ) : (
         <div className="flex flex-col gap-4 p-4">
           {messages.map((msg) => (
-            <ChatMessage key={msg.id} message={msg} />
+            <ChatMessage key={msg.id} message={msg} onEvaluate={onEvaluate} />
           ))}
         </div>
       )}

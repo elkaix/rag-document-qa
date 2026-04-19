@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Check, Copy } from "lucide-react";
-import type { ChatMessage as ChatMessageType } from "@/api/types";
+import type { ChatMessage as ChatMessageType, EvaluationScore } from "@/api/types";
 import { cn } from "@/lib/utils";
 import { ThinkingPanel } from "./thinking-panel";
 import { MarkdownRenderer } from "./markdown-renderer";
+import { EvaluationBadge } from "./evaluation-badge";
 
 // WHY removed TypingIndicator: The bouncing-dots placeholder used to show
 // for the brief window between sending a query and the first server event.
@@ -14,6 +15,7 @@ import { MarkdownRenderer } from "./markdown-renderer";
 
 interface ChatMessageProps {
   message: ChatMessageType;
+  onEvaluate?: (messageId: string, scores: EvaluationScore[]) => void;
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -57,7 +59,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-export function ChatMessage({ message }: ChatMessageProps) {
+export function ChatMessage({ message, onEvaluate }: ChatMessageProps) {
   const isUser = message.role === "user";
   // A freshly spawned assistant message has statusLog=[] (defined) even
   // before any event arrives. Persisted messages loaded from history have
@@ -118,6 +120,18 @@ export function ChatMessage({ message }: ChatMessageProps) {
             </div>
           )}
         </div>
+      )}
+
+      {/* PATTERN: EvaluationBadge is shown only after streaming completes
+          (streamDone=true) so it doesn't flash up mid-response. The badge
+          triggers the LLM-as-judge evaluation call on first render and
+          surfaces faithfulness/relevancy/precision scores. */}
+      {!isUser && hasAnswer && message.streamDone && (
+        <EvaluationBadge
+          messageId={message.id}
+          evaluation={message.evaluation}
+          onEvaluationComplete={(scores) => onEvaluate?.(message.id, scores)}
+        />
       )}
     </div>
   );

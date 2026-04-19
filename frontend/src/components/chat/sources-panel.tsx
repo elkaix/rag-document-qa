@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { FileText } from "lucide-react";
-import type { SourceInfo } from "@/api/types";
+import type { SourceInfo, EvaluationScore } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
+import { EvaluationSection } from "./evaluation-section";
 import {
   Collapsible,
   CollapsibleTrigger,
@@ -11,6 +12,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 interface SourcesPanelProps {
   sources: SourceInfo[];
+  evaluation?: EvaluationScore[];
 }
 
 // TRADE-OFF: ChromaDB cosine similarity scores are typically 0.2–0.6 for
@@ -23,22 +25,31 @@ function scoreColor(score: number): "default" | "secondary" | "destructive" {
   return "destructive";
 }
 
-export function SourcesPanel({ sources }: SourcesPanelProps) {
+export function SourcesPanel({ sources, evaluation }: SourcesPanelProps) {
   const [expandedIndex, setExpandedIndex] = useState<number | null>(
     sources.length > 0 ? 0 : null
   );
 
   if (sources.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-muted-foreground px-4">
-        <FileText className="size-12 opacity-30" />
-        <p className="text-sm">Sources will appear here after a query.</p>
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {evaluation && evaluation.length > 0 && (
+          <EvaluationSection evaluation={evaluation} />
+        )}
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-muted-foreground px-4">
+          <FileText className="size-12 opacity-30" />
+          <p className="text-sm">Sources will appear here after a query.</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <ScrollArea className="flex-1">
+    <div className="flex flex-1 flex-col overflow-hidden">
+      {evaluation && evaluation.length > 0 && (
+        <EvaluationSection evaluation={evaluation} />
+      )}
+      <ScrollArea className="flex-1">
       <div className="flex flex-col gap-2 p-4">
         {sources.map((source, idx) => (
           <Collapsible
@@ -67,6 +78,7 @@ export function SourcesPanel({ sources }: SourcesPanelProps) {
           </Collapsible>
         ))}
       </div>
-    </ScrollArea>
+      </ScrollArea>
+    </div>
   );
 }
