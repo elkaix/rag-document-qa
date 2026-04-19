@@ -6,7 +6,11 @@ interface Settings {
 }
 
 const STORAGE_KEY = "rag-settings";
-const DEFAULTS: Settings = { model: "glm-5.1", topK: 5 };
+// WHY gpt-5-mini as default: best speed/quality/cost balance on OpenAI's
+// current lineup (April 2026) — ~250 tok/s streaming, $0.25/$2.00 per 1M,
+// 400K context. Small enough to feel instant in chat, capable enough for
+// RAG answers grounded in retrieved context.
+const DEFAULTS: Settings = { model: "gpt-5-mini", topK: 5 };
 
 // BUG FIX: useSyncExternalStore compares snapshots with Object.is().
 // BEFORE: getSnapshot() returned a new object on every call, causing
@@ -52,9 +56,19 @@ export function useSettings() {
   return { settings, update };
 }
 
+// WHY this lineup (April 2026): OpenAI retired GPT-4 / GPT-3.5 Turbo for new
+// work; the current fast tier is the GPT-5 family. Ordered by recommended
+// default first (balanced) -> ultra-fast -> premium -> long-context -> other.
+//
+// PATTERN: label = short canonical name (fits one line in the sidebar pill);
+//          hint  = one-word tier descriptor rendered dimmer beside the label.
+//          Splitting them keeps menu items from wrapping and keeps the
+//          radio-item checkmark aligned to a single row.
 export const MODEL_OPTIONS = [
-  { label: "GLM 5.1", value: "glm-5.1" },
-  { label: "GPT-4", value: "gpt-4" },
-  { label: "GPT-3.5 Turbo", value: "gpt-3.5-turbo" },
-  { label: "Llama 3 (Local)", value: "llama3" },
+  { label: "GPT-5 Mini",   hint: "fast default", value: "gpt-5-mini" },
+  { label: "GPT-5.4 Nano", hint: "fastest",      value: "gpt-5.4-nano" },
+  { label: "GPT-5.4",      hint: "premium",      value: "gpt-5.4" },
+  { label: "GPT-4.1 Mini", hint: "1M ctx",       value: "gpt-4.1-mini" },
+  { label: "GLM 5.1",      hint: "",             value: "glm-5.1" },
+  { label: "Llama 3",      hint: "local",        value: "llama3" },
 ] as const;

@@ -436,13 +436,13 @@ export function Sidebar() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="w-full justify-start"
+                    className="w-full justify-start whitespace-nowrap overflow-hidden"
                   />
                 }
               >
                 {modelLabel}
               </DropdownMenuTrigger>
-              <DropdownMenuContent>
+              <DropdownMenuContent className="min-w-[14rem]">
                 <DropdownMenuRadioGroup
                   value={settings.model}
                   onValueChange={(value) =>
@@ -450,8 +450,22 @@ export function Sidebar() {
                   }
                 >
                   {MODEL_OPTIONS.map((opt) => (
-                    <DropdownMenuRadioItem key={opt.value} value={opt.value}>
-                      {opt.label}
+                    <DropdownMenuRadioItem
+                      key={opt.value}
+                      value={opt.value}
+                      className="whitespace-nowrap"
+                    >
+                      {/* PATTERN: flex row with label left, hint right-aligned.
+                          Keeps the radio checkmark on the same row as the name
+                          regardless of hint length. */}
+                      <span className="flex w-full items-baseline justify-between gap-3">
+                        <span>{opt.label}</span>
+                        {opt.hint && (
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                            {opt.hint}
+                          </span>
+                        )}
+                      </span>
                     </DropdownMenuRadioItem>
                   ))}
                 </DropdownMenuRadioGroup>
