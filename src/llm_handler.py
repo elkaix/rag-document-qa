@@ -69,11 +69,6 @@ ANTHROPIC_MODELS = [
     "claude-3-opus-20240229",
 ]
 
-GLM_MODELS = [
-    "glm-5.1",
-    "glm-5",
-]
-
 OLLAMA_DEFAULT_MODELS = [
     "llama3",
     "mistral",
@@ -83,12 +78,11 @@ OLLAMA_DEFAULT_MODELS = [
 
 
 class LLMHandler:
-    """Unified LLM interface supporting OpenAI, Anthropic, GLM (Zhipu), and Ollama.
+    """Unified LLM interface supporting OpenAI, Anthropic, and Ollama.
 
     Provider selection is automatic based on the model prefix:
     - Models starting with 'gpt' / 'o1' / 'o3' → OpenAI
     - Models starting with 'claude' → Anthropic
-    - Models starting with 'glm' → GLM (Zhipu AI, OpenAI-compatible)
     - Others → Ollama (localhost)
 
     Falls back to a dummy response if the selected provider is unavailable.
@@ -144,8 +138,6 @@ class LLMHandler:
         try:
             if self._provider == "openai":
                 return self._openai_generate(prompt, system_prompt)
-            if self._provider == "glm":
-                return self._glm_generate(prompt, system_prompt)
             if self._provider == "anthropic":
                 return self._anthropic_generate(prompt, system_prompt)
             if self._provider == "ollama":
@@ -190,9 +182,6 @@ class LLMHandler:
             if self._provider == "openai":
                 yield from self._openai_stream(prompt, system_prompt)
                 return
-            if self._provider == "glm":
-                yield from self._glm_stream(prompt, system_prompt)
-                return
             if self._provider == "anthropic":
                 yield from self._anthropic_stream(prompt, system_prompt)
                 return
@@ -235,8 +224,6 @@ class LLMHandler:
         try:
             if self._provider == "openai":
                 return self._openai_generate_messages(messages)
-            if self._provider == "glm":
-                return self._glm_generate_messages(messages)
             if self._provider == "anthropic":
                 return self._anthropic_generate_messages(messages)
             if self._provider == "ollama":
@@ -267,9 +254,6 @@ class LLMHandler:
             if self._provider == "openai":
                 yield from self._openai_stream_messages(messages)
                 return
-            if self._provider == "glm":
-                yield from self._glm_stream_messages(messages)
-                return
             if self._provider == "anthropic":
                 yield from self._anthropic_stream_messages(messages)
                 return
@@ -292,8 +276,6 @@ class LLMHandler:
         """
         if self._provider == "openai":
             return self._openai_list_models()
-        if self._provider == "glm":
-            return list(GLM_MODELS)
         if self._provider == "anthropic":
             return list(ANTHROPIC_MODELS)
         if self._provider == "ollama":
@@ -388,59 +370,6 @@ class LLMHandler:
         except Exception as exc:
             logger.warning("Could not list OpenAI models: %s", exc)
             return list(OPENAI_MODELS)
-
-    # ------------------------------------------------------------------ #
-    # GLM (Zhipu AI — OpenAI-compatible)                                   #
-    # ------------------------------------------------------------------ #
-
-    def _glm_client(self):
-        """Create an OpenAI client pointed at the GLM endpoint."""
-        if not _OPENAI_AVAILABLE:
-            raise RuntimeError("openai package not installed (required for GLM)")
-        return _openai_module.OpenAI(
-            api_key=self.api_key or os.getenv("GLM_API_KEY"),
-            base_url=os.getenv("GLM_BASE_URL", "https://api.z.ai/api/coding/paas/v4"),
-        )
-
-    def _glm_generate(self, prompt: str, system_prompt: Optional[str]) -> str:
-        client = self._glm_client()
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.temperature,
-            # WHY max_completion_tokens: The GPT-5 family and o-series reject
-            #      the legacy `max_tokens` parameter. `max_completion_tokens`
-            #      is the new canonical name supported by all modern OpenAI
-            #      chat models (gpt-4o onwards) and required by gpt-5*.
-            max_completion_tokens=self.max_tokens,
-        )
-        return response.choices[0].message.content or ""
-
-    def _glm_stream(
-        self, prompt: str, system_prompt: Optional[str]
-    ) -> Generator[str, None, None]:
-        client = self._glm_client()
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
-        stream = client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            stream=True,
-        )
-        for chunk in stream:
-            delta = chunk.choices[0].delta
-            if delta and delta.content:
-                yield delta.content
 
     # ------------------------------------------------------------------ #
     # Anthropic                                                            #
@@ -584,42 +513,6 @@ class LLMHandler:
         )
         stream = client.chat.completions.create(
             **self._openai_kwargs(messages=messages, stream=True)  # type: ignore[arg-type]
-        )
-        for chunk in stream:
-            delta = chunk.choices[0].delta
-            if delta and delta.content:
-                yield delta.content
-
-    # ------------------------------------------------------------------ #
-    # GLM — messages-list API                                             #
-    # ------------------------------------------------------------------ #
-
-    def _glm_generate_messages(self, messages: List[dict]) -> str:
-        """Pass a messages list to the GLM (OpenAI-compatible) API.
-
-        WHY: GLM uses the same OpenAI chat completions wire format, so we
-        just reuse the same client/request pattern with GLM's base URL.
-        """
-        client = self._glm_client()
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=messages,  # type: ignore[arg-type]
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
-        return response.choices[0].message.content or ""
-
-    def _glm_stream_messages(
-        self, messages: List[dict]
-    ) -> Generator[str, None, None]:
-        """Stream a response from GLM given a messages list."""
-        client = self._glm_client()
-        stream = client.chat.completions.create(
-            model=self.model,
-            messages=messages,  # type: ignore[arg-type]
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            stream=True,
         )
         for chunk in stream:
             delta = chunk.choices[0].delta
@@ -798,8 +691,6 @@ class LLMHandler:
         lower = model.lower()
         if lower.startswith("gpt") or lower.startswith("o1") or lower.startswith("o3"):
             return "openai"
-        if lower.startswith("glm"):
-            return "glm"
         if lower.startswith("claude"):
             return "anthropic"
         return "ollama"

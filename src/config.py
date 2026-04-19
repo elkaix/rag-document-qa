@@ -100,7 +100,7 @@ CHROMA_COLLECTION: str = "documents"
 
 # WHY: A named default model constant lets the UI and API share the same
 #      fallback without hard-coding the string in multiple places.
-DEFAULT_MODEL: str = "glm-5.1"
+DEFAULT_MODEL: str = "gpt-5-mini"
 
 # WHY a dedicated reasoning model: The chain-of-thought pass produces short,
 #      throwaway scaffolding (3-5 sentences). Running it through the same

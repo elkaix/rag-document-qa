@@ -69,6 +69,5 @@ export const MODEL_OPTIONS = [
   { label: "GPT-5.4 Nano", hint: "fastest",      value: "gpt-5.4-nano" },
   { label: "GPT-5.4",      hint: "premium",      value: "gpt-5.4" },
   { label: "GPT-4.1 Mini", hint: "1M ctx",       value: "gpt-4.1-mini" },
-  { label: "GLM 5.1",      hint: "",             value: "glm-5.1" },
   { label: "Llama 3",      hint: "local",        value: "llama3" },
 ] as const;
