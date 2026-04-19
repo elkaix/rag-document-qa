@@ -36,6 +36,7 @@ from __future__ import annotations
 #           be created and tests will fail with "no such table" errors.
 from src.models.conversation import Conversation
 from src.models.document import DocumentRecord
+from src.models.evaluation import MessageEvaluation
 from src.models.message import Message, MessageSource
 
 __all__ = [
@@ -43,4 +44,5 @@ __all__ = [
     "Message",
     "MessageSource",
     "DocumentRecord",
+    "MessageEvaluation",
 ]
