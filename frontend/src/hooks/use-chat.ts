@@ -198,3 +198,4 @@ export function useChat() {
 
   return { messages, sources, isStreaming, sendMessage, clearChat, loadMessages, updateEvaluation };
 }
+// force reload 1776630168
