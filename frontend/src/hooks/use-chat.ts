@@ -120,7 +120,13 @@ export function useChat() {
           setIsStreaming(false);
           thinkingStartRef.current = null;
           qc.invalidateQueries({ queryKey: ["conversations"] });
-          ws.close();
+          // WHY: Don't close the WebSocket here — the backend sends an
+          //      "evaluation" event AFTER "done" once real-time faithfulness
+          //      scoring completes. Closing now would drop that event.
+          //      Instead, set a timeout to close if no evaluation arrives.
+          setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) ws.close();
+          }, 30_000);
         } else if (data.type === "evaluation") {
           // WHY: The backend fires a separate WebSocket event after the "done"
           //      event with real-time faithfulness scores. We attach it to the
@@ -138,6 +144,7 @@ export function useChat() {
                 : m
             )
           );
+          ws.close();
         } else if (data.type === "error") {
           setMessages((prev) =>
             prev.map((m) =>

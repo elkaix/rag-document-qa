@@ -50,9 +50,9 @@ def _parse_json_response(text: str) -> dict | None:
     Returns:
         Parsed dict, or None if the string cannot be decoded as JSON.
     """
-    # PATTERN: Try direct parse first (most common case for well-behaved models).
-    #          Fall back to fence-stripping only when that fails — avoids
-    #          accidentally mangling valid JSON that happens to contain backticks.
+    # PATTERN: Strip markdown fences unconditionally, then parse. Stripping
+    #          fences from bare JSON is harmless (no backticks to remove), so
+    #          a single code path handles both fenced and unfenced responses.
     stripped = text.strip()
 
     # Remove ```json ... ``` or ``` ... ``` fences
@@ -65,6 +65,17 @@ def _parse_json_response(text: str) -> dict | None:
     except (json.JSONDecodeError, ValueError):
         logger.warning("Failed to parse LLM JSON response: %r", text[:200])
         return None
+
+
+def _clamp_score(value: float) -> float:
+    """Clamp a score to the [0.0, 1.0] range.
+
+    WHY: LLMs are not guaranteed to return scores within bounds — a model
+    might output 1.5 or -0.3 despite the prompt requesting 0.0–1.0. Clamping
+    prevents out-of-range values from producing nonsensical UI displays (e.g.
+    "150%") and violating the normalized score contract.
+    """
+    return max(0.0, min(1.0, value))
 
 
 # --------------------------------------------------------------------------- #
@@ -145,7 +156,7 @@ def evaluate_faithfulness(
             None,
         )
 
-    score = float(parsed.get("score", 0.0))
+    score = _clamp_score(float(parsed.get("score", 0.0)))
     reasoning = str(parsed.get("reasoning", ""))
     # Store the full parsed response as a JSON string for the details column
     details = json.dumps(parsed)
@@ -207,7 +218,7 @@ def evaluate_answer_relevancy(
             "Evaluation failed: LLM returned malformed JSON.",
         )
 
-    score = float(parsed.get("score", 0.0))
+    score = _clamp_score(float(parsed.get("score", 0.0)))
     reasoning = str(parsed.get("reasoning", ""))
 
     return score, reasoning
@@ -280,7 +291,7 @@ def evaluate_context_precision(
             None,
         )
 
-    score = float(parsed.get("score", 0.0))
+    score = _clamp_score(float(parsed.get("score", 0.0)))
     reasoning = str(parsed.get("reasoning", ""))
     details = json.dumps(parsed)
 

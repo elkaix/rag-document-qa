@@ -1061,8 +1061,15 @@ class RAGBackend:
                 "reasoning": existing_faith.reasoning,
             })
 
-        # ---- Answer relevancy -------------------------------------------------
-        if question:
+        # ---- Answer relevancy (skip if already scored) -------------------------
+        with self._session() as session:
+            existing_rel = session.exec(
+                select(MessageEvaluation).where(
+                    MessageEvaluation.message_id == message_id,
+                    MessageEvaluation.metric == "answer_relevancy",
+                )
+            ).first()
+        if existing_rel is None and question:
             score, reasoning = evaluate_answer_relevancy(question, answer, self.eval_llm)
             eval_row = MessageEvaluation(
                 message_id=message_id,
@@ -1076,9 +1083,22 @@ class RAGBackend:
                 session.add(eval_row)
                 session.commit()
             results.append({"metric": "answer_relevancy", "score": score, "reasoning": reasoning})
+        elif existing_rel is not None:
+            results.append({
+                "metric": "answer_relevancy",
+                "score": existing_rel.score,
+                "reasoning": existing_rel.reasoning,
+            })
 
-        # ---- Context precision ------------------------------------------------
-        if question and contexts:
+        # ---- Context precision (skip if already scored) -----------------------
+        with self._session() as session:
+            existing_prec = session.exec(
+                select(MessageEvaluation).where(
+                    MessageEvaluation.message_id == message_id,
+                    MessageEvaluation.metric == "context_precision",
+                )
+            ).first()
+        if existing_prec is None and question and contexts:
             score, reasoning, details = evaluate_context_precision(
                 question, contexts, self.eval_llm
             )
@@ -1094,6 +1114,12 @@ class RAGBackend:
                 session.add(eval_row)
                 session.commit()
             results.append({"metric": "context_precision", "score": score, "reasoning": reasoning})
+        elif existing_prec is not None:
+            results.append({
+                "metric": "context_precision",
+                "score": existing_prec.score,
+                "reasoning": existing_prec.reasoning,
+            })
 
         return results
 

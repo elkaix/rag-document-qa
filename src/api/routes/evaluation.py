@@ -32,11 +32,16 @@ router = APIRouter(prefix="/api", tags=["evaluation"])
     "/messages/{message_id}/evaluate",
     summary="Run full evaluation on a message",
 )
-async def evaluate_message(message_id: str, request: Request):
+def evaluate_message(message_id: str, request: Request):
     """Trigger all three evaluation metrics for a stored assistant message.
 
     Runs faithfulness (if not already scored), answer_relevancy, and
     context_precision. Results are persisted to the MessageEvaluation table.
+
+    WHY sync def (not async): evaluate_message makes three blocking LLM API
+    calls. An async def handler runs on the main event loop — blocking it
+    for 10-30 seconds would freeze all other requests. FastAPI auto-runs
+    sync def handlers in a threadpool, keeping the event loop free.
 
     Returns:
         List of score dicts, or 404 if message not found / no results.
@@ -52,7 +57,7 @@ async def evaluate_message(message_id: str, request: Request):
     "/messages/{message_id}/evaluation",
     summary="Get existing evaluation scores for a message",
 )
-async def get_evaluation(message_id: str, request: Request):
+def get_evaluation(message_id: str, request: Request):
     """Retrieve previously computed evaluation scores for a message.
 
     Returns:
