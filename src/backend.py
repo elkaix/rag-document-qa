@@ -129,7 +129,7 @@ class RAGBackend:
         #      answer to judge itself creates self-evaluation bias. A separate mid-tier
         #      model (gpt-4.1-mini by default) is cheap enough for real-time checks
         #      while strong enough to catch factual errors.
-        self.eval_llm = LLMHandler(model=EVAL_MODEL)
+        self.eval_llm = LLMHandler(model=EVAL_MODEL, max_tokens=4096)
 
         logger.info(
             "RAGBackend initialised (engine=%s, answer_model=%s, reasoning_model=%s, eval_model=%s)",

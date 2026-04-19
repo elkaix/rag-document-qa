@@ -117,10 +117,11 @@ def evaluate_faithfulness(
     #     original question. This is a standard LLM-as-judge technique.
     system_prompt = (
         "You are a strict faithfulness evaluator for a RAG system. "
-        "Your task is to decompose an answer into atomic claims and verify "
-        "each claim against the provided context passages. "
+        "Your task is to decompose an answer into its TOP 5 most important "
+        "atomic claims and verify each claim against the provided context passages. "
         "A claim is supported ONLY if the context explicitly states or directly implies it. "
         "Do not assume knowledge outside the context. "
+        "Keep your response concise — at most 5 claims. "
         "Respond ONLY with a valid JSON object — no prose, no code fences."
     )
 
