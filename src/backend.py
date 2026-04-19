@@ -39,7 +39,13 @@ from typing import Any
 from sqlalchemy import Engine
 from sqlmodel import Session, select
 
-from .config import DEFAULT_MODEL, MAX_TITLE_LENGTH, SLIDING_WINDOW_SIZE, TOP_K_RESULTS
+from .config import (
+    DEFAULT_MODEL,
+    MAX_TITLE_LENGTH,
+    REASONING_MODEL,
+    SLIDING_WINDOW_SIZE,
+    TOP_K_RESULTS,
+)
 from .document_loader import DocumentLoader, TextChunker
 from .llm_handler import LLMHandler
 from .models.conversation import Conversation
@@ -99,7 +105,23 @@ class RAGBackend:
         #      same fallback model without hard-coding the name.
         self.llm = LLMHandler(model=DEFAULT_MODEL)
 
-        logger.info("RAGBackend initialised (engine=%s)", engine.url)
+        # PATTERN: Separate handler for the CoT reasoning pass. Cached once
+        #          in the backend so we don't re-construct an LLMHandler on
+        #          every query — the reasoning model is fixed by config, so
+        #          caching is safe regardless of which answer model a user picks.
+        # WHY max_tokens=2048: The reasoning pass is the "Step 1" of the UI's
+        #      two-step visible flow (think → answer). Making it beefy enough
+        #      to produce 6-10 sentences of genuine analysis (~400-700 tokens)
+        #      gives users a clear thinking phase to watch, instead of a blink
+        #      that ends before they notice. Headroom also protects against a
+        #      future swap to a reasoning-style model whose hidden tokens
+        #      would otherwise consume a tight budget.
+        self.reasoning_llm = LLMHandler(model=REASONING_MODEL, max_tokens=2048)
+
+        logger.info(
+            "RAGBackend initialised (engine=%s, answer_model=%s, reasoning_model=%s)",
+            engine.url, DEFAULT_MODEL, REASONING_MODEL,
+        )
 
     # ------------------------------------------------------------------ #
     # Session helper                                                       #
@@ -317,33 +339,51 @@ class RAGBackend:
         model: str | None = None,
         conversation_id: str | None = None,
     ):
-        """Retrieve context and stream LLM tokens, with optional conversation persistence.
+        """Retrieve context and stream reasoning + answer with chain-of-thought events.
 
-        Two-phase persistence (when conversation_id is provided):
-          1. Save user message BEFORE streaming starts
-          2. Load sliding window (completed pairs BEFORE current turn)
-          3. Build messages list: [system, ...window_pairs, user_prompt_with_context]
-          4. Stream via handler.stream_messages()
-          5. Save assistant message + sources AFTER streaming completes
-          6. Auto-title if this is the first message in the conversation
+        Event stream shape (in order):
+          ("status", str)       — programmatic retrieval milestones
+          ("reasoning", str)    — LLM chain-of-thought tokens (brief pre-answer pass)
+          ("token", str)        — final answer tokens
+          ("done", dict)        — sources + persistence metadata
 
-        WHY two-phase: Saving the user message first ensures it is persisted
-        even if streaming fails mid-way. The assistant message is only saved
-        after full completion so partial responses are never stored.
+        WHY two LLM calls: The reasoning pass uses a focused prompt that asks
+        the model to think out loud about the retrieved context BEFORE giving
+        an answer. This makes the agent's reasoning visible to users (like
+        ChatGPT's "thinking" mode) at the cost of a short extra call.
+
+        WHY only the answer is persisted: Reasoning is ephemeral scaffolding
+        for UX, not a durable artifact of the conversation. Persisting it
+        would double storage and confuse the sliding-window context.
 
         Yields:
-            Tuples of ("token", str) for each token, then ("done", dict) with
-            sources and metadata.
+            Tuples as described above.
         """
         k = top_k or TOP_K_RESULTS
+
+        # ---- PHASE 0: Retrieval ------------------------------------------------
+        yield ("status", "Searching indexed documents...")
         results = self.vector_store.query(query_text=question, top_k=k)
 
         if not results:
+            yield ("status", "No indexed documents — nothing to retrieve.")
             yield ("token", "No documents indexed yet. Please upload documents first.")
             yield ("done", {"sources": []})
             return
 
-        # Build context from retrieved chunks
+        # WHY: Summarise retrieval in one status line so the user can see which
+        #      files contributed without inspecting the sources panel yet.
+        filenames = [r.metadata.get("filename", "unknown") for r in results]
+        unique_files = sorted({f for f in filenames if f})
+        file_summary = ", ".join(unique_files[:3])
+        if len(unique_files) > 3:
+            file_summary += f" (+{len(unique_files) - 3} more)"
+        yield (
+            "status",
+            f"Retrieved {len(results)} chunk(s) across {len(unique_files)} file(s): {file_summary}",
+        )
+
+        # Build context from retrieved chunks (shared by reasoning + answer)
         context = "\n\n".join(
             f"[{r.metadata.get('filename', 'unknown')}] {r.content}"
             for r in results
@@ -352,12 +392,6 @@ class RAGBackend:
         handler = self.llm
         if model and model != self.llm.model:
             handler = LLMHandler(model=model)
-
-        system_prompt = (
-            "You are a helpful assistant. Answer the user's question based solely on the "
-            "provided context. If the context does not contain enough information, say so."
-        )
-        user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
 
         sources = [
             {
@@ -369,6 +403,63 @@ class RAGBackend:
             }
             for r in results
         ]
+
+        # ---- PHASE 1: Reasoning pass (chain-of-thought) ------------------------
+        # WHY a dedicated reasoning prompt: Asking the model to "think first,
+        # answer later" in a single call is brittle — formatting drifts between
+        # providers. A separate short call with a focused system prompt gives
+        # deterministic reasoning tokens we can stream as their own event type.
+        #
+        # WHY a dedicated reasoning model: The CoT output is short, throwaway
+        # scaffolding. Running it through the user's (potentially premium)
+        # answer model doubles cost for no quality gain. self.reasoning_llm is
+        # cached to REASONING_MODEL (default: gpt-5-nano) independent of the
+        # answer model — so premium answers stay cheap to "think" about.
+        yield ("status", f"Analyzing retrieved context ({self.reasoning_llm.model})...")
+
+        # WHY a detailed prompt: This is Step 1 of the UI's two-step visible
+        #      flow. A rich thinking stream makes the reasoning phase feel
+        #      substantive — the user watches the model deliberate before
+        #      Step 2 (the actual answer) begins. Prompt is tuned to produce
+        #      6-10 sentences of plain-text analysis at a relaxed pace.
+        reasoning_system = (
+            "You are a reasoning assistant for a retrieval-augmented Q&A system. "
+            "Given the user's question and the retrieved document excerpts, think "
+            "out loud in 6-10 plain sentences about how you will construct the "
+            "answer. Walk through, in order:\n"
+            "1) What the user is really asking and any ambiguity to resolve.\n"
+            "2) Which retrieved excerpts look most relevant and why.\n"
+            "3) Any gaps, conflicts, or caveats in the retrieved context.\n"
+            "4) The outline or structure of the answer you will give next.\n"
+            "Write in the first person ('I'll start by...', 'I notice that...'). "
+            "No bullet lists. No markdown headings. No preamble. Do NOT give the "
+            "final answer — a later step handles that. Keep a natural, deliberate "
+            "pace — the user is watching this stream in real time."
+        )
+        reasoning_user = (
+            f"Context:\n{context}\n\nQuestion: {question}\n\n"
+            "Reasoning (think out loud, do not answer):"
+        )
+
+        try:
+            for token in self.reasoning_llm.stream_response(
+                reasoning_user, system_prompt=reasoning_system
+            ):
+                yield ("reasoning", token)
+        except Exception as exc:
+            # PATTERN: Reasoning is best-effort — a failure here must not block
+            # the final answer. Log, emit a terse status, continue to the answer.
+            logger.warning("Reasoning pass failed: %s", exc)
+            yield ("status", "Reasoning unavailable — skipping to answer.")
+
+        # ---- PHASE 2: Answer pass ----------------------------------------------
+        yield ("status", "Composing answer...")
+
+        system_prompt = (
+            "You are a helpful assistant. Answer the user's question based solely on the "
+            "provided context. If the context does not contain enough information, say so."
+        )
+        user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
 
         # Accumulate full response for persistence
         full_response = []

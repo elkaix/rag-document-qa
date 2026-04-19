@@ -65,14 +65,20 @@ async def query(request_body: QueryRequest, request: Request) -> QueryResponse:
 
 @router.websocket("/chat")
 async def chat_websocket(websocket: WebSocket) -> None:
-    """WebSocket endpoint for streaming chat responses.
+    """WebSocket endpoint for streaming chat responses with chain-of-thought.
 
     Send a JSON message:
-        {"query": "...", "top_k": 5, "model": "gpt-4"}
+        {"query": "...", "top_k": 5, "model": "gpt-4", "conversation_id": "..."}
 
-    Receive token-by-token streaming chunks, then a final done message:
-        {"type": "token", "content": "..."}
-        {"type": "done", "sources": [...]}
+    Receive a stream of events describing what the agent is doing, followed
+    by reasoning tokens, then answer tokens, then a final done message:
+        {"type": "status",    "content": "Searching indexed documents..."}
+        {"type": "status",    "content": "Retrieved 5 chunk(s) across 2 file(s): ..."}
+        {"type": "status",    "content": "Analyzing retrieved context..."}
+        {"type": "reasoning", "content": "..."}   ← CoT tokens (streamed)
+        {"type": "status",    "content": "Composing answer..."}
+        {"type": "token",     "content": "..."}   ← answer tokens (streamed)
+        {"type": "done",      "sources": [...], "message_id": "...", "conversation_id": "..."}
     """
     await websocket.accept()
     backend = websocket.app.state.backend
@@ -105,8 +111,15 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     query_text, top_k=top_k, model=model,
                     conversation_id=conversation_id,
                 ):
+                    # WHY: Forward each backend event variant verbatim so the
+                    #      frontend can render status lines, reasoning tokens,
+                    #      and answer tokens as distinct UI states.
                     if event_type == "token":
                         await websocket.send_json({"type": "token", "content": data})
+                    elif event_type == "reasoning":
+                        await websocket.send_json({"type": "reasoning", "content": data})
+                    elif event_type == "status":
+                        await websocket.send_json({"type": "status", "content": data})
                     elif event_type == "done":
                         await websocket.send_json({
                             "type": "done",

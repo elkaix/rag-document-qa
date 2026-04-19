@@ -102,6 +102,19 @@ CHROMA_COLLECTION: str = "documents"
 #      fallback without hard-coding the string in multiple places.
 DEFAULT_MODEL: str = "glm-5.1"
 
+# WHY a dedicated reasoning model: The chain-of-thought pass produces short,
+#      throwaway scaffolding (3-5 sentences). Running it through the same
+#      expensive model as the final answer doubles cost for no quality gain.
+#
+# WHY gpt-4.1-nano (not gpt-5-nano): The GPT-5 family are *reasoning* models
+#      that consume hidden "reasoning tokens" from the completion budget
+#      BEFORE emitting visible output. With a small budget (~512 tokens),
+#      the hidden reasoning eats everything and the visible stream is empty
+#      — which defeats the whole point of a visible CoT panel. gpt-4.1-nano
+#      is a plain generation model (same $0.10/$0.40 per 1M pricing) whose
+#      tokens all end up in the visible stream. Perfect for scaffolding.
+REASONING_MODEL: str = "gpt-4.1-nano"
+
 # WHY: Sliding-window chat history keeps the LLM context window manageable.
 #      5 turns (10 messages) is a practical balance: enough context for
 #      follow-up questions, small enough to stay within token budgets.
