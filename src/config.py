@@ -115,6 +115,13 @@ DEFAULT_MODEL: str = "glm-5.1"
 #      tokens all end up in the visible stream. Perfect for scaffolding.
 REASONING_MODEL: str = "gpt-4.1-nano"
 
+# WHY a dedicated evaluation model: Using the same model that generated the
+#      answer to judge itself creates self-evaluation bias -- models are less
+#      likely to flag their own hallucinations. A mid-tier model like
+#      gpt-4.1-mini is cheap enough for real-time faithfulness checks while
+#      strong enough to catch factual errors.
+EVAL_MODEL: str = "gpt-4.1-mini"
+
 # WHY: Sliding-window chat history keeps the LLM context window manageable.
 #      5 turns (10 messages) is a practical balance: enough context for
 #      follow-up questions, small enough to stay within token budgets.
