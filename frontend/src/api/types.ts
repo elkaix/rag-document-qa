@@ -77,12 +77,27 @@ export interface WsErrorMessage {
   content: string;
 }
 
+export interface EvaluationScore {
+  metric: string;
+  score: number;
+  reasoning: string;
+  details?: string;
+  judge_model?: string;
+  evaluated_at?: string;
+}
+
+export interface WsEvaluationMessage {
+  type: "evaluation";
+  content: EvaluationScore;
+}
+
 export type WsMessage =
   | WsTokenMessage
   | WsReasoningMessage
   | WsStatusMessage
   | WsDoneMessage
-  | WsErrorMessage;
+  | WsErrorMessage
+  | WsEvaluationMessage;
 
 export interface ChatMessage {
   id: string;
@@ -99,6 +114,8 @@ export interface ChatMessage {
    *  to decide when to collapse the Thinking panel. Kept open through the
    *  whole answer stream so reasoning stays visible in real time. */
   streamDone?: boolean;
+  /** LLM-as-judge evaluation scores (faithfulness, relevancy, precision). */
+  evaluation?: EvaluationScore[];
 }
 
 export interface ConversationSummary {

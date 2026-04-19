@@ -3,6 +3,7 @@ import type {
   ConversationSummary,
   DocumentChunksResponse,
   DocumentInfo,
+  EvaluationScore,
   QueryRequest,
   QueryResponse,
   UploadResponse,
@@ -92,6 +93,14 @@ export const api = {
 
   getShared: (token: string) =>
     request<ConversationDetail>(`/api/shared/${token}`),
+
+  evaluateMessage: (messageId: string) =>
+    request<EvaluationScore[]>(`/api/messages/${messageId}/evaluate`, {
+      method: "POST",
+    }),
+
+  getEvaluation: (messageId: string) =>
+    request<EvaluationScore[]>(`/api/messages/${messageId}/evaluation`),
 };
 
 export function wsUrl(): string {
