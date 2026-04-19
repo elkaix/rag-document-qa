@@ -55,6 +55,16 @@ export interface WsTokenMessage {
   content: string;
 }
 
+export interface WsReasoningMessage {
+  type: "reasoning";
+  content: string;
+}
+
+export interface WsStatusMessage {
+  type: "status";
+  content: string;
+}
+
 export interface WsDoneMessage {
   type: "done";
   sources: SourceInfo[];
@@ -67,13 +77,28 @@ export interface WsErrorMessage {
   content: string;
 }
 
-export type WsMessage = WsTokenMessage | WsDoneMessage | WsErrorMessage;
+export type WsMessage =
+  | WsTokenMessage
+  | WsReasoningMessage
+  | WsStatusMessage
+  | WsDoneMessage
+  | WsErrorMessage;
 
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   sources?: SourceInfo[];
+  /** LLM chain-of-thought tokens streamed before the answer. */
+  reasoning?: string;
+  /** Programmatic status events describing retrieval progress. */
+  statusLog?: string[];
+  /** Seconds spent on the CoT reasoning pass. Set when answer starts streaming. */
+  thinkingSeconds?: number;
+  /** True once the final `done` event has been received — used by the UI
+   *  to decide when to collapse the Thinking panel. Kept open through the
+   *  whole answer stream so reasoning stays visible in real time. */
+  streamDone?: boolean;
 }
 
 export interface ConversationSummary {

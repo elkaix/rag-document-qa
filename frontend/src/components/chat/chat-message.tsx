@@ -3,19 +3,17 @@ import Markdown from "react-markdown";
 import { Check, Copy } from "lucide-react";
 import type { ChatMessage as ChatMessageType } from "@/api/types";
 import { cn } from "@/lib/utils";
+import { ThinkingPanel } from "./thinking-panel";
+
+// WHY removed TypingIndicator: The bouncing-dots placeholder used to show
+// for the brief window between sending a query and the first server event.
+// That visual slot is now owned by the ThinkingPanel — as soon as an
+// assistant message is created, the panel renders a shimmering "Thinking"
+// header that morphs into the live reasoning stream. The reasoning IS the
+// loading indicator now.
 
 interface ChatMessageProps {
   message: ChatMessageType;
-}
-
-function TypingIndicator() {
-  return (
-    <div className="flex items-center gap-1 px-1 py-0.5">
-      <span className="size-1.5 rounded-full bg-[#6B7280] animate-[typing-bounce_1.4s_ease-in-out_infinite]" />
-      <span className="size-1.5 rounded-full bg-[#6B7280] animate-[typing-bounce_1.4s_ease-in-out_0.2s_infinite]" />
-      <span className="size-1.5 rounded-full bg-[#6B7280] animate-[typing-bounce_1.4s_ease-in-out_0.4s_infinite]" />
-    </div>
-  );
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -61,7 +59,13 @@ function CopyButton({ text }: { text: string }) {
 
 export function ChatMessage({ message }: ChatMessageProps) {
   const isUser = message.role === "user";
-  const isLoading = !isUser && message.content === "";
+  // A freshly spawned assistant message has statusLog=[] (defined) even
+  // before any event arrives. Persisted messages loaded from history have
+  // statusLog=undefined — we use that distinction to decide whether to show
+  // the live Thinking panel as the loading indicator vs. skipping it
+  // entirely for a completed historical answer.
+  const isLiveAssistant = !isUser && message.statusLog !== undefined;
+  const hasAnswer = message.content !== "";
 
   return (
     <div
@@ -70,31 +74,48 @@ export function ChatMessage({ message }: ChatMessageProps) {
       <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {isUser ? "You" : "Assistant"}
       </span>
-      <div className="relative max-w-[85%]">
-        <div
-          className={cn(
-            "rounded-xl px-4 py-3 text-sm leading-relaxed",
-            isUser
-              ? "bg-[#0d74e7] text-white rounded-br-sm"
-              : "bg-white text-[#24292d] border border-[#E5E7EB] rounded-bl-sm shadow-sm"
-          )}
-        >
-          {isLoading ? (
-            <TypingIndicator />
-          ) : isUser ? (
-            <span className="whitespace-pre-wrap">{message.content}</span>
-          ) : (
-            <div className="prose-chat">
-              <Markdown>{message.content}</Markdown>
+
+      {/* PATTERN: Render the Thinking panel for any live assistant message.
+          While empty it shows the shimmering "Thinking" header (replacing the
+          old bouncing-dots placeholder). As soon as the first status / reasoning
+          event arrives, the panel expands with live content. */}
+      {isLiveAssistant && (
+        <ThinkingPanel
+          statusLog={message.statusLog}
+          reasoning={message.reasoning}
+          thinkingSeconds={message.thinkingSeconds}
+          streamDone={message.streamDone}
+        />
+      )}
+
+      {/* Answer bubble — render only once the answer stream has produced
+          content. We no longer show an empty bubble with a typing indicator,
+          because the Thinking panel above already signals "in progress". */}
+      {(hasAnswer || (isUser && !hasAnswer)) && (
+        <div className="relative max-w-[85%]">
+          <div
+            className={cn(
+              "rounded-xl px-4 py-3 text-sm leading-relaxed",
+              isUser
+                ? "bg-[#0d74e7] text-white rounded-br-sm"
+                : "bg-white text-[#24292d] border border-[#E5E7EB] rounded-bl-sm shadow-sm"
+            )}
+          >
+            {isUser ? (
+              <span className="whitespace-pre-wrap">{message.content}</span>
+            ) : (
+              <div className="prose-chat">
+                <Markdown>{message.content}</Markdown>
+              </div>
+            )}
+          </div>
+          {!isUser && hasAnswer && (
+            <div className="absolute -top-1 -right-9">
+              <CopyButton text={message.content} />
             </div>
           )}
         </div>
-        {!isUser && !isLoading && (
-          <div className="absolute -top-1 -right-9">
-            <CopyButton text={message.content} />
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

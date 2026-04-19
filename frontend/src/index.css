@@ -392,6 +392,28 @@ aside,
     30% { transform: translateY(-4px); opacity: 1; }
 }
 
+/* --- Thinking label shimmer (ChatGPT-style reasoning header) --- */
+@keyframes thinking-shimmer {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+}
+.thinking-shimmer {
+    background-image: linear-gradient(
+        90deg,
+        #6B7280 0%,
+        #6B7280 40%,
+        #111827 50%,
+        #6B7280 60%,
+        #6B7280 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+    animation: thinking-shimmer 2.2s linear infinite;
+}
+
 /* --- Scroll area --- */
 [data-slot="scroll-area"] {
     box-shadow: none;
