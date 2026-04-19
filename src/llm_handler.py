@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Generator, List, Optional
+from typing import Any, Generator, List, Optional
 
 # Load .env from project root
 try:
@@ -304,6 +304,39 @@ class LLMHandler:
     # OpenAI                                                               #
     # ------------------------------------------------------------------ #
 
+    def _is_constrained_openai_model(self) -> bool:
+        """Return True if the current model rejects `temperature` overrides.
+
+        WHY: GPT-5 family and the o-series reasoning models only accept the
+        default temperature (1). Sending any other value raises a 400.
+        Older families (gpt-4, gpt-4o, gpt-4.1) still accept the full range.
+        """
+        m = self.model.lower()
+        return (
+            m.startswith("gpt-5")
+            or m.startswith("o1")
+            or m.startswith("o3")
+            or m.startswith("o4")
+        )
+
+    def _openai_kwargs(self, **extra: Any) -> dict:
+        """Build kwargs for an OpenAI chat completions call.
+
+        PATTERN: Centralised so every call site picks up the same constraints:
+          - Always use `max_completion_tokens` (gpt-5*/o* require it; modern
+            gpt-4* accept it).
+          - Omit `temperature` for constrained models rather than sending the
+            default, so a future SDK default change doesn't surprise us.
+        """
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_completion_tokens": self.max_tokens,
+            **extra,
+        }
+        if not self._is_constrained_openai_model():
+            kwargs["temperature"] = self.temperature
+        return kwargs
+
     def _openai_generate(self, prompt: str, system_prompt: Optional[str]) -> str:
         if not _OPENAI_AVAILABLE:
             raise RuntimeError("openai package not installed")
@@ -317,10 +350,7 @@ class LLMHandler:
         messages.append({"role": "user", "content": prompt})
 
         response = client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
+            **self._openai_kwargs(messages=messages)
         )
         return response.choices[0].message.content or ""
 
@@ -339,11 +369,7 @@ class LLMHandler:
         messages.append({"role": "user", "content": prompt})
 
         stream = client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            stream=True,
+            **self._openai_kwargs(messages=messages, stream=True)
         )
         for chunk in stream:
             delta = chunk.choices[0].delta
@@ -387,7 +413,11 @@ class LLMHandler:
             model=self.model,
             messages=messages,
             temperature=self.temperature,
-            max_tokens=self.max_tokens,
+            # WHY max_completion_tokens: The GPT-5 family and o-series reject
+            #      the legacy `max_tokens` parameter. `max_completion_tokens`
+            #      is the new canonical name supported by all modern OpenAI
+            #      chat models (gpt-4o onwards) and required by gpt-5*.
+            max_completion_tokens=self.max_tokens,
         )
         return response.choices[0].message.content or ""
 
@@ -538,10 +568,7 @@ class LLMHandler:
             api_key=self.api_key or os.getenv("OPENAI_API_KEY")
         )
         response = client.chat.completions.create(
-            model=self.model,
-            messages=messages,  # type: ignore[arg-type]
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
+            **self._openai_kwargs(messages=messages)  # type: ignore[arg-type]
         )
         return response.choices[0].message.content or ""
 
@@ -556,11 +583,7 @@ class LLMHandler:
             api_key=self.api_key or os.getenv("OPENAI_API_KEY")
         )
         stream = client.chat.completions.create(
-            model=self.model,
-            messages=messages,  # type: ignore[arg-type]
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            stream=True,
+            **self._openai_kwargs(messages=messages, stream=True)  # type: ignore[arg-type]
         )
         for chunk in stream:
             delta = chunk.choices[0].delta
