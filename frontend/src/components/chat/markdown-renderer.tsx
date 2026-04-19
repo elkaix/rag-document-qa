@@ -59,7 +59,7 @@ function CodeCopyButton({ code }: { code: string }) {
 
 export function MarkdownRenderer({ content }: { content: string }) {
   return (
-    <div className="max-w-[65ch] text-[13px] leading-[1.75] text-[#24292d]">
+    <div className="max-w-none text-[13px] leading-[1.75] text-[#24292d]">
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{

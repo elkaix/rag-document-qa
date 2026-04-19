@@ -36,9 +36,9 @@ export function SourcesPanel({ sources, evaluation }: SourcesPanelProps) {
         {evaluation && evaluation.length > 0 && (
           <EvaluationSection evaluation={evaluation} />
         )}
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-muted-foreground px-4">
-          <FileText className="size-12 opacity-30" />
-          <p className="text-sm">Sources will appear here after a query.</p>
+        <div className="flex h-full flex-col items-center justify-center gap-3 text-center px-4">
+          <FileText className="size-12" style={{ color: "#4B5563" }} />
+          <p className="text-sm" style={{ color: "#6B7280" }}>Sources will appear here after a query.</p>
         </div>
       </div>
     );
@@ -57,8 +57,8 @@ export function SourcesPanel({ sources, evaluation }: SourcesPanelProps) {
             open={expandedIndex === idx}
             onOpenChange={(open) => setExpandedIndex(open ? idx : null)}
           >
-            <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm rounded-lg border border-[#E5E7EB] bg-white hover:border-[#0d74e7] hover:bg-[#EBF3FE] transition-all">
-              <FileText className="size-4 shrink-0 text-muted-foreground" />
+            <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm rounded-lg border border-[#3a3f44] bg-[#2d3339] hover:border-[#0d74e7] hover:bg-[#0d74e7]/10 transition-all" style={{ color: "#F3F4F6" }}>
+              <FileText className="size-4 shrink-0" style={{ color: "#9CA3AF" }} />
               <span className="flex-1 truncate">
                 {source.filename ?? "Unknown file"}
               </span>
@@ -67,10 +67,10 @@ export function SourcesPanel({ sources, evaluation }: SourcesPanelProps) {
               </Badge>
             </CollapsibleTrigger>
             <CollapsibleContent className="px-3 py-2 mt-1">
-              <p className="whitespace-pre-wrap p-3 text-xs leading-relaxed text-muted-foreground rounded-lg bg-[#F9FAFB] border-l-2 border-[#0d74e7]">
+              <p className="whitespace-pre-wrap p-3 text-xs leading-relaxed rounded-lg bg-[#1a1f23] border-l-2 border-[#0d74e7]" style={{ color: "#9CA3AF" }}>
                 {source.excerpt}
               </p>
-              <div className="mt-2 flex gap-3 text-[10px] text-muted-foreground/70">
+              <div className="mt-2 flex gap-3 text-[10px]" style={{ color: "#6B7280" }}>
                 <span>doc: {source.doc_id.slice(0, 8)}</span>
                 <span>chunk: {source.chunk_id.slice(0, 8)}</span>
               </div>

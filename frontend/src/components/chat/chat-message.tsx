@@ -77,45 +77,47 @@ export function ChatMessage({ message, onEvaluate }: ChatMessageProps) {
         {isUser ? "You" : "Assistant"}
       </span>
 
-      {/* PATTERN: Render the Thinking panel for any live assistant message.
-          While empty it shows the shimmering "Thinking" header (replacing the
-          old bouncing-dots placeholder). As soon as the first status / reasoning
-          event arrives, the panel expands with live content. */}
-      {isLiveAssistant && (
-        <ThinkingPanel
-          statusLog={message.statusLog}
-          reasoning={message.reasoning}
-          thinkingSeconds={message.thinkingSeconds}
-          streamDone={message.streamDone}
-        />
-      )}
+      {(isUser || hasAnswer || isLiveAssistant) && (
+        <div
+          className={cn(
+            "relative",
+            isUser ? "max-w-[75%]" : "max-w-[97%]"
+          )}
+        >
+          {/* Thinking panel — same width container as the answer bubble */}
+          {isLiveAssistant && (
+            <ThinkingPanel
+              statusLog={message.statusLog}
+              reasoning={message.reasoning}
+              thinkingSeconds={message.thinkingSeconds}
+              streamDone={message.streamDone}
+            />
+          )}
 
-      {/* Answer bubble — render only once the answer stream has produced
-          content. We no longer show an empty bubble with a typing indicator,
-          because the Thinking panel above already signals "in progress". */}
-      {(hasAnswer || (isUser && !hasAnswer)) && (
-        <div className="relative max-w-[85%]">
-          <div
-            className={cn(
-              "rounded-xl px-4 py-3",
-              isUser
-                ? "bg-[#0d74e7] text-sm leading-relaxed text-white rounded-br-sm"
-                : "bg-white text-[#24292d] border border-[#E5E7EB] rounded-bl-sm shadow-sm"
-            )}
-          >
-            {isUser ? (
-              <span className="whitespace-pre-wrap">{message.content}</span>
-            ) : (
-              <MarkdownRenderer content={message.content} />
-            )}
-          </div>
-          {isUser && (
-            <div className="absolute -top-1 -left-9">
-              <CopyButton text={message.content} />
+          {/* Answer bubble */}
+          {(hasAnswer || isUser) && (
+            <div
+              className={cn(
+                "relative rounded-xl px-4 py-3",
+                isUser
+                  ? "bg-[#0d74e7] text-sm leading-relaxed text-white rounded-br-sm"
+                  : "bg-white text-[#24292d] border border-[#E5E7EB] rounded-bl-sm shadow-sm"
+              )}
+            >
+              {!isUser && hasAnswer && (
+                <div className="absolute top-2 right-2">
+                  <CopyButton text={message.content} />
+                </div>
+              )}
+              {isUser ? (
+                <span className="whitespace-pre-wrap">{message.content}</span>
+              ) : (
+                <MarkdownRenderer content={message.content} />
+              )}
             </div>
           )}
-          {!isUser && hasAnswer && (
-            <div className="absolute -top-1 -right-9">
+          {isUser && hasAnswer && (
+            <div className="mt-1 flex justify-end">
               <CopyButton text={message.content} />
             </div>
           )}

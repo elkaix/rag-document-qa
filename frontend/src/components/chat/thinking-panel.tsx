@@ -43,21 +43,22 @@ export function ThinkingPanel({
   streamDone,
 }: ThinkingPanelProps) {
   const reasoningActive = thinkingSeconds === undefined;
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll the content area to bottom as reasoning tokens stream in.
   useEffect(() => {
     if (open && contentRef.current) {
-      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+      // While reasoning is still streaming, follow the bottom so the user
+      // sees new tokens arrive. Once complete, reset to the top so
+      // expanding the panel shows the reasoning from the beginning.
+      contentRef.current.scrollTop = reasoningActive
+        ? contentRef.current.scrollHeight
+        : 0;
     }
-  }, [reasoning, statusLog, open]);
+  }, [reasoning, statusLog, open, reasoningActive]);
 
-  // Collapse as soon as the answer starts streaming so the answer bubble
-  // gets full visual focus. User can re-expand to inspect reasoning.
-  useEffect(() => {
-    if (thinkingSeconds !== undefined) setOpen(false);
-  }, [thinkingSeconds]);
+  // No auto-collapse needed — panel starts collapsed by default.
+  // User can expand to inspect reasoning at any time.
 
   const hasStatus = (statusLog?.length ?? 0) > 0;
   const hasReasoning = (reasoning?.length ?? 0) > 0;
@@ -70,39 +71,41 @@ export function ThinkingPanel({
     : `Thought for ${thinkingSeconds!.toFixed(1)}s`;
 
   return (
-    <div className="mb-1 max-w-[85%] rounded-xl border border-[#E5E7EB] bg-[#FAFAFA]">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-fit items-center gap-2 px-3 py-1.5 text-left"
-      >
-        <Brain
-          className={cn(
-            "size-3.5 shrink-0",
-            reasoningActive ? "text-[#0d74e7]" : "text-[#6B7280]"
-          )}
-        />
-        <span
-          className={cn(
-            "text-xs font-medium",
-            reasoningActive ? "thinking-shimmer" : "text-[#6B7280]"
-          )}
+    <div className="relative mb-1">
+      <div className="overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#FAFAFA]">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
         >
-          {headerText}
-        </span>
-        <span className="ml-auto text-[#9CA3AF]">
-          {open ? (
-            <ChevronDown className="size-3.5" />
-          ) : (
-            <ChevronRight className="size-3.5" />
-          )}
-        </span>
-      </button>
+          <Brain
+            className={cn(
+              "size-3.5 shrink-0",
+              reasoningActive ? "text-[#0d74e7]" : "text-[#6B7280]"
+            )}
+          />
+          <span
+            className={cn(
+              "text-xs font-medium",
+              reasoningActive ? "thinking-shimmer" : "text-[#6B7280]"
+            )}
+          >
+            {headerText}
+          </span>
+          <span className="ml-auto text-[#9CA3AF]">
+            {open ? (
+              <ChevronDown className="size-3.5" />
+            ) : (
+              <ChevronRight className="size-3.5" />
+            )}
+          </span>
+        </button>
+      </div>
 
       {open && (hasStatus || hasReasoning) && (
         <div
           ref={contentRef}
-          className="max-h-[5rem] space-y-2 overflow-y-auto border-t border-[#E5E7EB] px-3 py-2 text-xs leading-relaxed text-[#4B5563]"
+          className="absolute left-0 right-0 top-full z-10 max-h-[12rem] space-y-2 overflow-y-auto rounded-b-xl border border-t-0 border-[#E5E7EB] bg-[#FAFAFA] px-3 py-2 text-xs leading-relaxed text-[#4B5563] shadow-md"
         >
           {hasStatus && (
             <ul className="space-y-1 font-mono text-[11px] text-[#6B7280]">

@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { PanelRightClose, PanelRightOpen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatThread } from "@/components/chat/chat-thread";
 import { ChatInput } from "@/components/chat/chat-input";
@@ -37,6 +37,7 @@ export default function ChatPage() {
   const { messages, sources, isStreaming, sendMessage, clearChat, loadMessages, updateEvaluation } = useChat();
   const { settings } = useSettings();
   const [sourcesWidth, setSourcesWidth] = useState(DEFAULT_SOURCES_W);
+  const [sourcesOpen, setSourcesOpen] = useState(true);
   const dragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -120,49 +121,69 @@ export default function ChatPage() {
   }, []);
 
   return (
-    <div
-      ref={containerRef}
-      className="grid h-full"
-      style={{ gridTemplateColumns: `1fr 3px ${sourcesWidth}px`, gridTemplateRows: "auto 1fr" }}
-    >
-      {/* Row 1: Headers */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#E5E7EB]">
-        <h1 className="text-lg font-semibold">Chat</h1>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={clearChat}
-          disabled={messages.length === 0}
-        >
-          <Trash2 className="mr-1.5 size-3.5" />
-          Clear
-        </Button>
-      </div>
-
-      {/* Divider header spacer */}
-      <div className="border-b border-[#E5E7EB] bg-[#E5E7EB]" />
-
-      <div className="px-4 py-3 border-b border-[#E5E7EB]">
-        <h2 className="text-lg font-semibold">Sources</h2>
-      </div>
-
-      {/* Row 2: Content */}
-      <div className="flex flex-col overflow-hidden">
+    <div ref={containerRef} className="flex h-full">
+      {/* Chat column — grows to fill */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+        {/* Chat header */}
+        <div className="flex h-[50px] items-center justify-between px-4 border-b border-[#E5E7EB] bg-white">
+          <h1 className="text-lg font-semibold">Chat</h1>
+          <div className="flex items-center gap-1">
+            {messages.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearChat}
+                className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+              >
+                <Trash2 className="mr-1.5 size-3.5" />
+                Clear
+              </Button>
+            )}
+            {!sourcesOpen && (
+              <Button variant="ghost" size="icon-sm" onClick={() => setSourcesOpen(true)} title="Show sources">
+                <PanelRightOpen className="size-4" />
+              </Button>
+            )}
+          </div>
+        </div>
+        {/* Chat content */}
         <ChatThread messages={messages} onEvaluate={handleEvaluate} />
         <ChatInput onSend={handleSend} disabled={isStreaming} />
       </div>
 
-      {/* Draggable divider — full height */}
-      <div
-        className="cursor-col-resize bg-[#E5E7EB] hover:bg-[#0d74e7]/50 active:bg-[#0d74e7] transition-colors"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-      />
+      {/* Draggable divider */}
+      {sourcesOpen && (
+        <div
+          className="w-[3px] cursor-col-resize bg-[#E5E7EB] hover:bg-[#0d74e7]/50 active:bg-[#0d74e7] transition-colors"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+        />
+      )}
 
-      {/* Sources panel — contained, scrolls independently */}
-      <div className="overflow-hidden">
-        <SourcesPanel sources={sources} evaluation={latestEvaluation} />
+      {/* Sources column — animated width */}
+      <div
+        className="flex flex-col overflow-hidden bg-[#24292d] transition-all duration-300 ease-in-out"
+        style={{ width: sourcesOpen ? sourcesWidth : 0, minWidth: sourcesOpen ? sourcesWidth : 0 }}
+      >
+        {/* Sources header */}
+        <div className="flex h-[50px] items-center justify-between px-4 border-b border-[#3a3f44] shrink-0">
+          <h2 className="text-lg font-semibold whitespace-nowrap" style={{ color: "#F3F4F6" }}>Sources</h2>
+          <button
+            onClick={() => setSourcesOpen(false)}
+            className="rounded-md p-1 transition-colors"
+            style={{ color: "#9CA3AF" }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "#F3F4F6"; e.currentTarget.style.backgroundColor = "#3a3f44"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "#9CA3AF"; e.currentTarget.style.backgroundColor = "transparent"; }}
+            title="Close sources"
+          >
+            <PanelRightClose className="size-4" />
+          </button>
+        </div>
+        {/* Sources content */}
+        <div className="flex flex-1 overflow-hidden">
+          <SourcesPanel sources={sources} evaluation={latestEvaluation} />
+        </div>
       </div>
     </div>
   );
