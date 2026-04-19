@@ -122,6 +122,13 @@ async def chat_websocket(websocket: WebSocket) -> None:
             )
             _sentinel = object()
 
+            # Accumulate answer tokens and retrieved contexts so we can run
+            # faithfulness evaluation after the stream completes without
+            # blocking or delaying any part of the answer delivery.
+            full_answer_parts: list[str] = []
+            retrieved_contexts: list[str] = []
+            done_data: dict = {}
+
             try:
                 while True:
                     item = await loop.run_in_executor(
@@ -132,12 +139,17 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     event_type, data = item
 
                     if event_type == "token":
+                        full_answer_parts.append(data)
                         await websocket.send_json({"type": "token", "content": data})
                     elif event_type == "reasoning":
                         await websocket.send_json({"type": "reasoning", "content": data})
                     elif event_type == "status":
                         await websocket.send_json({"type": "status", "content": data})
                     elif event_type == "done":
+                        done_data = data
+                        retrieved_contexts = [
+                            s.get("excerpt", "") for s in data.get("sources", [])
+                        ]
                         await websocket.send_json({
                             "type": "done",
                             "sources": data.get("sources", []),
@@ -151,6 +163,29 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 )
             finally:
                 gen.close()
+
+            # WHY: Real-time faithfulness fires AFTER streaming completes so
+            #      the user sees the answer immediately. The evaluation result
+            #      is sent as a separate WebSocket event that the frontend
+            #      uses to update the inline faithfulness badge.
+            message_id = done_data.get("message_id")
+            full_answer = "".join(full_answer_parts)
+            if message_id and full_answer and retrieved_contexts:
+                try:
+                    loop_ref = asyncio.get_running_loop()
+                    eval_result = await loop_ref.run_in_executor(
+                        None,
+                        backend.evaluate_faithfulness_realtime,
+                        message_id,
+                        full_answer,
+                        retrieved_contexts,
+                    )
+                    await websocket.send_json({
+                        "type": "evaluation",
+                        "content": eval_result,
+                    })
+                except Exception as exc:
+                    logger.warning("Real-time faithfulness evaluation failed: %s", exc)
 
     except WebSocketDisconnect:
         logger.debug("WebSocket client disconnected")
