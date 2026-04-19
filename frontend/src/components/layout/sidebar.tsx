@@ -292,10 +292,11 @@ export function Sidebar() {
             RAG <span className="text-[#2fbb4f]">Q&A</span>
           </span>
         )}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8"
+        <button
+          className="rounded-md p-1.5 transition-colors"
+          style={{ color: "#9CA3AF" }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#F3F4F6"; e.currentTarget.style.backgroundColor = "#3a3f44"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#9CA3AF"; e.currentTarget.style.backgroundColor = "transparent"; }}
           onClick={() => setExpanded((prev) => !prev)}
         >
           {expanded ? (
@@ -303,7 +304,7 @@ export function Sidebar() {
           ) : (
             <PanelLeftOpen className="size-4" />
           )}
-        </Button>
+        </button>
       </div>
 
       {/* New Chat button */}
@@ -324,10 +325,11 @@ export function Sidebar() {
           <Tooltip>
             <TooltipTrigger
               render={
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8"
+                <button
+                  className="rounded-md p-1.5 transition-colors"
+                  style={{ color: "#9CA3AF" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.color = "#F3F4F6"; e.currentTarget.style.backgroundColor = "#3a3f44"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.color = "#9CA3AF"; e.currentTarget.style.backgroundColor = "transparent"; }}
                   onClick={handleNewChat}
                 />
               }

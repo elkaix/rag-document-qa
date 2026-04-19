@@ -140,9 +140,16 @@ export default function ChatPage() {
               </Button>
             )}
             {!sourcesOpen && (
-              <Button variant="ghost" size="icon-sm" onClick={() => setSourcesOpen(true)} title="Show sources">
+              <button
+                className="rounded-md p-1 transition-colors"
+                style={{ color: "#9CA3AF" }}
+                onMouseEnter={(e) => { e.currentTarget.style.color = "#F3F4F6"; e.currentTarget.style.backgroundColor = "#3a3f44"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.color = "#9CA3AF"; e.currentTarget.style.backgroundColor = "transparent"; }}
+                onClick={() => setSourcesOpen(true)}
+                title="Show sources"
+              >
                 <PanelRightOpen className="size-4" />
-              </Button>
+              </button>
             )}
           </div>
         </div>
