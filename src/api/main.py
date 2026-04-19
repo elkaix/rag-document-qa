@@ -36,6 +36,7 @@ from src.database import create_db_and_tables, get_engine
 from src.api.routes import (
     conversations_router,
     documents_router,
+    evaluation_router,
     query_router,
     upload_router,
 )
@@ -107,6 +108,7 @@ app.include_router(upload_router)
 app.include_router(query_router)
 app.include_router(documents_router)
 app.include_router(conversations_router)
+app.include_router(evaluation_router)
 
 
 @app.get("/health")
