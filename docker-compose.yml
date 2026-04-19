@@ -31,11 +31,11 @@ services:
         required: false
     environment:
       - PYTHONUNBUFFERED=1
-      # Pass through LLM API keys if set on host (override .env)
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GLM_API_KEY=${GLM_API_KEY:-}
-      - GLM_BASE_URL=${GLM_BASE_URL:-}
+      # WHY removed per-key overrides: `${OPENAI_API_KEY:-}` evaluates to an
+      # empty string when the host shell has no such var set, which then
+      # OVERRIDES the value loaded from .env (environment: beats env_file:).
+      # Sourcing straight from .env is the simpler, less error-prone default.
+      # To override from the host, export the var then run `docker compose up`.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 5s
