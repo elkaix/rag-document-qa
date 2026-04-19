@@ -1,9 +1,9 @@
 import { useState } from "react";
-import Markdown from "react-markdown";
 import { Check, Copy } from "lucide-react";
 import type { ChatMessage as ChatMessageType } from "@/api/types";
 import { cn } from "@/lib/utils";
 import { ThinkingPanel } from "./thinking-panel";
+import { MarkdownRenderer } from "./markdown-renderer";
 
 // WHY removed TypingIndicator: The bouncing-dots placeholder used to show
 // for the brief window between sending a query and the first server event.
@@ -95,20 +95,23 @@ export function ChatMessage({ message }: ChatMessageProps) {
         <div className="relative max-w-[85%]">
           <div
             className={cn(
-              "rounded-xl px-4 py-3 text-sm leading-relaxed",
+              "rounded-xl px-4 py-3",
               isUser
-                ? "bg-[#0d74e7] text-white rounded-br-sm"
+                ? "bg-[#0d74e7] text-sm leading-relaxed text-white rounded-br-sm"
                 : "bg-white text-[#24292d] border border-[#E5E7EB] rounded-bl-sm shadow-sm"
             )}
           >
             {isUser ? (
               <span className="whitespace-pre-wrap">{message.content}</span>
             ) : (
-              <div className="prose-chat">
-                <Markdown>{message.content}</Markdown>
-              </div>
+              <MarkdownRenderer content={message.content} />
             )}
           </div>
+          {isUser && (
+            <div className="absolute -top-1 -left-9">
+              <CopyButton text={message.content} />
+            </div>
+          )}
           {!isUser && hasAnswer && (
             <div className="absolute -top-1 -right-9">
               <CopyButton text={message.content} />

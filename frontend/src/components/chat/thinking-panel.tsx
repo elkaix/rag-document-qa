@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Brain, ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -44,15 +44,20 @@ export function ThinkingPanel({
 }: ThinkingPanelProps) {
   const reasoningActive = thinkingSeconds === undefined;
   const [open, setOpen] = useState(true);
+  const contentRef = useRef<HTMLDivElement>(null);
 
-  // WHY collapse on streamDone (not on thinkingSeconds): Collapsing as soon
-  //     as the first answer token arrives would hide reasoning the user may
-  //     still be reading. Keeping the panel open through the entire answer
-  //     stream lets reasoning and answer be compared side by side, then
-  //     auto-collapses only once everything has finished.
+  // Auto-scroll the content area to bottom as reasoning tokens stream in.
   useEffect(() => {
-    if (streamDone) setOpen(false);
-  }, [streamDone]);
+    if (open && contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, [reasoning, statusLog, open]);
+
+  // Collapse as soon as the answer starts streaming so the answer bubble
+  // gets full visual focus. User can re-expand to inspect reasoning.
+  useEffect(() => {
+    if (thinkingSeconds !== undefined) setOpen(false);
+  }, [thinkingSeconds]);
 
   const hasStatus = (statusLog?.length ?? 0) > 0;
   const hasReasoning = (reasoning?.length ?? 0) > 0;
@@ -65,11 +70,11 @@ export function ThinkingPanel({
     : `Thought for ${thinkingSeconds!.toFixed(1)}s`;
 
   return (
-    <div className="mb-2 w-full max-w-[85%] rounded-xl border border-[#E5E7EB] bg-[#FAFAFA]">
+    <div className="mb-1 max-w-[85%] rounded-xl border border-[#E5E7EB] bg-[#FAFAFA]">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        className="flex w-fit items-center gap-2 px-3 py-1.5 text-left"
       >
         <Brain
           className={cn(
@@ -95,7 +100,10 @@ export function ThinkingPanel({
       </button>
 
       {open && (hasStatus || hasReasoning) && (
-        <div className="space-y-2 border-t border-[#E5E7EB] px-3 py-2 text-xs leading-relaxed text-[#4B5563]">
+        <div
+          ref={contentRef}
+          className="max-h-[5rem] space-y-2 overflow-y-auto border-t border-[#E5E7EB] px-3 py-2 text-xs leading-relaxed text-[#4B5563]"
+        >
           {hasStatus && (
             <ul className="space-y-1 font-mono text-[11px] text-[#6B7280]">
               {statusLog!.map((line, i) => {
