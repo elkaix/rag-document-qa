@@ -24,8 +24,8 @@ import { NavLink, useLocation, useNavigate } from "react-router";
 import {
   Upload,
   FolderOpen,
-  Menu,
-  X,
+  PanelLeftClose,
+  PanelLeftOpen,
   FileText,
   Database,
   HardDrive,
@@ -42,6 +42,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -162,6 +170,7 @@ export function Sidebar() {
   // WHY: Debounced search — typing fires a search after 300ms of inactivity
   //      instead of on every keystroke. Reduces API calls and avoids UI jank.
   const [searchQuery, setSearchQuery] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
   const [searchResults, setSearchResults] = useState<
     ConversationSummary[] | null
   >(null);
@@ -251,19 +260,21 @@ export function Sidebar() {
   }
 
   function handleDelete(conv: ConversationSummary) {
-    const confirmed = window.confirm(
-      `Delete "${conv.title}"? This cannot be undone.`,
-    );
-    if (!confirmed) return;
-    remove(conv.id);
-    // Navigate away if we deleted the active conversation
-    if (activeConversationId === conv.id) {
+    setDeleteTarget(conv);
+  }
+
+  function confirmDelete() {
+    if (!deleteTarget) return;
+    remove(deleteTarget.id);
+    if (activeConversationId === deleteTarget.id) {
       navigate("/chat");
     }
+    setDeleteTarget(null);
   }
 
   return (
     <aside
+      data-slot="sidebar"
       className={cn(
         "flex h-screen flex-col bg-[#24292d] text-[#F3F4F6] transition-all duration-200",
         expanded ? "w-60" : "w-16",
@@ -272,7 +283,7 @@ export function Sidebar() {
       {/* Hamburger toggle -- always visible at top */}
       <div
         className={cn(
-          "flex items-center px-3 py-3 border-b border-[#3a4149]",
+          "flex h-[50px] items-center px-3 border-b border-[#3a4149]",
           expanded ? "justify-between" : "justify-center",
         )}
       >
@@ -288,9 +299,9 @@ export function Sidebar() {
           onClick={() => setExpanded((prev) => !prev)}
         >
           {expanded ? (
-            <X className="size-4" />
+            <PanelLeftClose className="size-4" />
           ) : (
-            <Menu className="size-4" />
+            <PanelLeftOpen className="size-4" />
           )}
         </Button>
       </div>
@@ -337,7 +348,8 @@ export function Sidebar() {
               placeholder="Search chats..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-7 pl-7 text-xs bg-[#1c2024] border-[#3a4149] text-[#F3F4F6] placeholder:text-[#8b949e]"
+              className="h-7 pl-7 text-xs placeholder:text-[#8b949e]"
+              style={{ color: "#24292d", caretColor: "#24292d", backgroundColor: "#FFFFFF" }}
             />
           </div>
         </div>
@@ -522,6 +534,26 @@ export function Sidebar() {
           </div>
         </div>
       )}
+      <Dialog open={deleteTarget !== null} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Conversation</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete{" "}
+              <strong>{deleteTarget?.title}</strong>? This will remove all
+              messages and sources. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDelete}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }
