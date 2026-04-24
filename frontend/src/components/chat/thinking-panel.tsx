@@ -45,6 +45,11 @@ export function ThinkingPanel({
   const reasoningActive = thinkingSeconds === undefined;
   const [open, setOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  // WHY rootRef: Needed so the outside-click listener can distinguish
+  //      "clicked inside the panel (stay open)" from "clicked anywhere
+  //      else (collapse)". A single ref wrapping both the header button
+  //      and the dropdown covers both regions.
+  const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (open && contentRef.current) {
@@ -57,8 +62,32 @@ export function ThinkingPanel({
     }
   }, [reasoning, statusLog, open, reasoningActive]);
 
-  // No auto-collapse needed — panel starts collapsed by default.
-  // User can expand to inspect reasoning at any time.
+  // WHY: Collapse the dropdown when the user presses anywhere outside it.
+  //
+  // Capture phase + pointerdown was chosen deliberately:
+  //   - pointerdown covers mouse, touch, and pen in a single event so we
+  //     don't need separate mousedown/touchstart handlers (which also
+  //     risked double-firing on touch-emulating-mouse devices).
+  //   - capture:true fires BEFORE any ancestor or React-synthetic handler
+  //     can stopPropagation, so outside-click always reaches us even if
+  //     the target element (e.g. a button in the answer bubble or in
+  //     another React tree) consumes bubbling events.
+  //
+  // Registered only while `open` is true to avoid listener cost when shut.
+  useEffect(() => {
+    if (!open) return;
+    function handleOutside(event: PointerEvent) {
+      const root = rootRef.current;
+      if (!root) return;
+      if (!root.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", handleOutside, true);
+    return () => {
+      document.removeEventListener("pointerdown", handleOutside, true);
+    };
+  }, [open]);
 
   const hasStatus = (statusLog?.length ?? 0) > 0;
   const hasReasoning = (reasoning?.length ?? 0) > 0;
@@ -71,7 +100,7 @@ export function ThinkingPanel({
     : `Thought for ${thinkingSeconds!.toFixed(1)}s`;
 
   return (
-    <div className="relative mb-1">
+    <div ref={rootRef} className="relative mb-1">
       <div className="overflow-hidden rounded-xl border border-[#E5E7EB] bg-[#FAFAFA]">
         <button
           type="button"

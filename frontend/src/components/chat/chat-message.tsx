@@ -84,7 +84,14 @@ export function ChatMessage({ message, onEvaluate }: ChatMessageProps) {
         <div
           className={cn(
             "relative",
-            isUser ? "max-w-[75%]" : "max-w-[97%]"
+            // BUG FIX: User bubbles hug their content (max-w + implicit shrink).
+            //          Assistant bubbles used the same sizing, which made the
+            //          Thinking header pill — and its absolute dropdown that
+            //          inherits `left-0 right-0` — shrink to the word
+            //          "Thinking". `w-full` stretches the wrapper to its 97%
+            //          cap so the header, dropdown, and streamed answer all
+            //          share the same width and left edge.
+            isUser ? "max-w-[75%]" : "w-full max-w-[97%]"
           )}
         >
           {/* Thinking panel — same width container as the answer bubble */}
