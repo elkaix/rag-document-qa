@@ -60,21 +60,26 @@ export default function ChatPage() {
     clearChat();
   }, [conversationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load conversation messages once when data arrives
-  if (
-    conversationData &&
-    conversationData.id === conversationId &&
-    loadedDataRef.current !== conversationData.id
-  ) {
-    loadedDataRef.current = conversationData.id;
-    const msgs: ChatMessage[] = conversationData.messages.map((m) => ({
-      id: m.id,
-      role: m.role as "user" | "assistant",
-      content: m.content,
-      sources: m.sources,
-    }));
-    loadMessages(msgs);
-  }
+  // BUG FIX: Ref reads/writes used to happen during render, which React 19
+  //          (and the react-hooks/refs lint) flags — refs are effect-only.
+  //          Moving the load into useEffect preserves the same "load once
+  //          per conversation id" semantics via the loadedDataRef gate.
+  useEffect(() => {
+    if (
+      conversationData &&
+      conversationData.id === conversationId &&
+      loadedDataRef.current !== conversationData.id
+    ) {
+      loadedDataRef.current = conversationData.id;
+      const msgs: ChatMessage[] = conversationData.messages.map((m) => ({
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        content: m.content,
+        sources: m.sources,
+      }));
+      loadMessages(msgs);
+    }
+  }, [conversationData, conversationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // PATTERN: Pass conversationId to sendMessage so the backend knows which
   //          conversation to append the new message pair to.

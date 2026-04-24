@@ -64,39 +64,43 @@ function ScoreBar({ score }: { score: EvaluationScore }) {
 // ClaimBreakdown — parses faithfulness `details` JSON and lists claims
 // ---------------------------------------------------------------------------
 
-function ClaimBreakdown({ details }: { details: string }) {
-  // WHY: The judge model returns a JSON string so it can be stored as a
-  //      plain scalar in the DB. We parse it here, closest to render, and
-  //      bail out silently if the format is unexpected to avoid crashes.
+interface ParsedClaim {
+  claim: string;
+  supported: boolean;
+}
+
+// WHY: The judge model returns a JSON string so it can be stored as a
+//      plain scalar in the DB. Parsing happens OUTSIDE render to keep the
+//      try/catch away from JSX (lint: react-hooks/error-boundaries).
+function parseClaims(details: string): ParsedClaim[] | null {
   try {
     const parsed = JSON.parse(details) as { claims?: unknown };
-    const claims = parsed.claims;
-    if (!Array.isArray(claims)) return null;
-
-    return (
-      <div className="mt-2 space-y-1">
-        {claims.map(
-          (
-            claim: { claim: string; supported: boolean },
-            i: number
-          ) => (
-            <div key={i} className="flex items-start gap-2 text-xs">
-              {/* Green dot = supported by retrieved context; red = hallucinated */}
-              <span
-                className={`mt-1 size-2 rounded-full shrink-0 ${
-                  claim.supported ? "bg-emerald-500" : "bg-red-500"
-                }`}
-              />
-              <span className="text-muted-foreground">{claim.claim}</span>
-            </div>
-          )
-        )}
-      </div>
-    );
+    if (!Array.isArray(parsed.claims)) return null;
+    return parsed.claims as ParsedClaim[];
   } catch {
-    // Malformed JSON — render nothing rather than crashing the panel
     return null;
   }
+}
+
+function ClaimBreakdown({ details }: { details: string }) {
+  const claims = parseClaims(details);
+  if (!claims) return null;
+
+  return (
+    <div className="mt-2 space-y-1">
+      {claims.map((claim, i) => (
+        <div key={i} className="flex items-start gap-2 text-xs">
+          {/* Green dot = supported by retrieved context; red = hallucinated */}
+          <span
+            className={`mt-1 size-2 rounded-full shrink-0 ${
+              claim.supported ? "bg-emerald-500" : "bg-red-500"
+            }`}
+          />
+          <span className="text-muted-foreground">{claim.claim}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------

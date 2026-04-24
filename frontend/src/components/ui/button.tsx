@@ -56,4 +56,6 @@ function Button({
   )
 }
 
-export { Button, buttonVariants }
+// WHY only Button is exported: see badge.tsx — exporting the cva helper
+//      alongside the component breaks Fast Refresh.
+export { Button }

@@ -49,4 +49,7 @@ function Badge({
   })
 }
 
-export { Badge, badgeVariants }
+// WHY only Badge is exported: `badgeVariants` has no external consumers,
+//      and exporting non-component values from a component module breaks
+//      Vite's React Fast Refresh boundary detection.
+export { Badge }

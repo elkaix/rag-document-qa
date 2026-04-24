@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
 import type { ChatMessage as ChatMessageType, EvaluationScore } from "@/api/types";
 import { cn } from "@/lib/utils";
@@ -21,7 +21,11 @@ interface ChatMessageProps {
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   const [hovered, setHovered] = useState(false);
-  const timerRef = useState<ReturnType<typeof setTimeout> | null>(null);
+  // BUG FIX: Previously held the timeout handle in a useState tuple and
+  //          mutated tuple[0] directly, which lint flags as invalid state
+  //          mutation. A ref is the right primitive for "mutable, does
+  //          not trigger render" values like timeout handles.
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function handleCopy() {
     navigator.clipboard.writeText(text);
@@ -30,13 +34,12 @@ function CopyButton({ text }: { text: string }) {
   }
 
   function handleMouseEnter() {
-    if (timerRef[0]) clearTimeout(timerRef[0]);
+    if (timerRef.current) clearTimeout(timerRef.current);
     setHovered(true);
   }
 
   function handleMouseLeave() {
-    const id = setTimeout(() => setHovered(false), 2500);
-    timerRef[0] = id;
+    timerRef.current = setTimeout(() => setHovered(false), 2500);
   }
 
   return (

@@ -175,11 +175,13 @@ export function Sidebar() {
     ConversationSummary[] | null
   >(null);
 
+  // BUG FIX: Previously called `setSearchResults(null)` synchronously when
+  //          the query was empty, which triggers the react-hooks/set-state-
+  //          in-effect cascade warning. Instead we derive "should we show
+  //          search results?" at render time (see `displayConversations`
+  //          below) and only run the fetch when the query is non-empty.
   useEffect(() => {
-    if (!searchQuery.trim()) {
-      setSearchResults(null);
-      return;
-    }
+    if (!searchQuery.trim()) return;
     const timer = setTimeout(async () => {
       try {
         const results = await api.searchConversations(searchQuery);
@@ -200,7 +202,11 @@ export function Sidebar() {
     : undefined;
 
   // --- Conversation list data ---
-  const displayConversations = searchResults ?? conversations;
+  // WHY: Show search results only while the query is active. Clearing
+  //      searchResults on empty-query would require a setState-in-effect,
+  //      which lint (rightly) flags as a cascading render.
+  const displayConversations =
+    searchQuery.trim() && searchResults ? searchResults : conversations;
   const groups = groupByDate(displayConversations);
 
   // --- Collection stats ---
