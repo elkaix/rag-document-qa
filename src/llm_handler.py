@@ -21,6 +21,16 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
+# BUG FIX: `generate()` and `stream_response()` used to swallow every exception
+# and return a dummy response. That turned auth failures, quota exhaustion,
+# and network outages into HTTP 200 "Your prompt was N characters" answers —
+# dangerous in production. The fallback now fires *only* when the provider is
+# genuinely unconfigured (module missing, api key missing). Real API errors
+# propagate to the caller so the API returns 5xx.
+class _ProviderUnavailableError(RuntimeError):
+    """Raised when a provider module is not installed or has no API key."""
+
 # --------------------------------------------------------------------------- #
 # Provider detection at import time (no hard dependency)                      #
 # --------------------------------------------------------------------------- #
@@ -136,15 +146,19 @@ class LLMHandler:
             Model response string.
         """
         try:
-            if self._provider == "openai":
+            if self._provider in ("openai", "glm"):
                 return self._openai_generate(prompt, system_prompt)
             if self._provider == "anthropic":
                 return self._anthropic_generate(prompt, system_prompt)
             if self._provider == "ollama":
                 return self._ollama_generate(prompt, system_prompt)
-        except Exception as exc:
-            logger.error("LLM generation failed (%s): %s", self._provider, exc)
-
+        except _ProviderUnavailableError as exc:
+            # Genuinely unconfigured — silent fallback keeps the demo usable
+            # without any API keys (the TF-IDF path still returns sources).
+            logger.warning("Provider unavailable, using dummy: %s", exc)
+            return self._dummy_response(prompt)
+        # Real errors (auth, quota, network) re-raise so the API returns 5xx
+        # instead of a fake success.
         return self._dummy_response(prompt)
 
     def generate_with_context(self, query: str, context: str) -> str:
@@ -179,7 +193,7 @@ class LLMHandler:
             Text chunks as they arrive.
         """
         try:
-            if self._provider == "openai":
+            if self._provider in ("openai", "glm"):
                 yield from self._openai_stream(prompt, system_prompt)
                 return
             if self._provider == "anthropic":
@@ -188,12 +202,13 @@ class LLMHandler:
             if self._provider == "ollama":
                 yield from self._ollama_stream(prompt, system_prompt)
                 return
-        except Exception as exc:
-            logger.error("Streaming failed (%s): %s", self._provider, exc)
-
-        # Fallback: yield dummy response word by word
-        for word in self._dummy_response(prompt).split():
-            yield word + " "
+        except _ProviderUnavailableError as exc:
+            logger.warning("Provider unavailable, using dummy stream: %s", exc)
+            for word in self._dummy_response(prompt).split():
+                yield word + " "
+            return
+        # Any other provider error (auth/quota/network) re-raises so the
+        # WebSocket handler can surface it as a structured error event.
 
     def generate_messages(self, messages: List[dict]) -> str:
         """Generate a response given a full conversation messages list.
@@ -222,15 +237,16 @@ class LLMHandler:
             Model response string, or dummy fallback if provider fails.
         """
         try:
-            if self._provider == "openai":
+            if self._provider in ("openai", "glm"):
                 return self._openai_generate_messages(messages)
             if self._provider == "anthropic":
                 return self._anthropic_generate_messages(messages)
             if self._provider == "ollama":
                 return self._ollama_generate_messages(messages)
-        except Exception as exc:
-            logger.error("generate_messages failed (%s): %s", self._provider, exc)
-
+        except _ProviderUnavailableError as exc:
+            logger.warning("Provider unavailable, using dummy: %s", exc)
+            return self._dummy_messages_response(messages)
+        # Real provider errors propagate so the API can return a proper 5xx.
         return self._dummy_messages_response(messages)
 
     def stream_messages(
@@ -251,7 +267,7 @@ class LLMHandler:
             provider fails.
         """
         try:
-            if self._provider == "openai":
+            if self._provider in ("openai", "glm"):
                 yield from self._openai_stream_messages(messages)
                 return
             if self._provider == "anthropic":
@@ -260,13 +276,13 @@ class LLMHandler:
             if self._provider == "ollama":
                 yield from self._ollama_stream_messages(messages)
                 return
-        except Exception as exc:
-            logger.error("stream_messages failed (%s): %s", self._provider, exc)
-
-        # Fallback: yield dummy response word by word so the caller gets a
-        # valid generator even when every provider is unreachable.
-        for word in self._dummy_messages_response(messages).split():
-            yield word + " "
+        except _ProviderUnavailableError as exc:
+            logger.warning("Provider unavailable, using dummy stream: %s", exc)
+            for word in self._dummy_messages_response(messages).split():
+                yield word + " "
+            return
+        # Real provider errors propagate — the WebSocket handler turns them
+        # into a structured {"type": "error"} event for the client.
 
     def list_models(self) -> List[str]:
         """Return a list of available models for the current provider.
@@ -320,12 +336,7 @@ class LLMHandler:
         return kwargs
 
     def _openai_generate(self, prompt: str, system_prompt: Optional[str]) -> str:
-        if not _OPENAI_AVAILABLE:
-            raise RuntimeError("openai package not installed")
-
-        client = _openai_module.OpenAI(  # type: ignore[union-attr]
-            api_key=self.api_key or os.getenv("OPENAI_API_KEY")
-        )
+        client = self._openai_client_for_provider()
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -339,12 +350,7 @@ class LLMHandler:
     def _openai_stream(
         self, prompt: str, system_prompt: Optional[str]
     ) -> Generator[str, None, None]:
-        if not _OPENAI_AVAILABLE:
-            raise RuntimeError("openai package not installed")
-
-        client = _openai_module.OpenAI(  # type: ignore[union-attr]
-            api_key=self.api_key or os.getenv("OPENAI_API_KEY")
-        )
+        client = self._openai_client_for_provider()
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -377,7 +383,7 @@ class LLMHandler:
 
     def _anthropic_generate(self, prompt: str, system_prompt: Optional[str]) -> str:
         if not _ANTHROPIC_AVAILABLE:
-            raise RuntimeError("anthropic package not installed")
+            raise _ProviderUnavailableError("anthropic package not installed")
 
         client = _anthropic_module.Anthropic(  # type: ignore[union-attr]
             api_key=self.api_key or os.getenv("ANTHROPIC_API_KEY")
@@ -398,7 +404,7 @@ class LLMHandler:
         self, prompt: str, system_prompt: Optional[str]
     ) -> Generator[str, None, None]:
         if not _ANTHROPIC_AVAILABLE:
-            raise RuntimeError("anthropic package not installed")
+            raise _ProviderUnavailableError("anthropic package not installed")
 
         client = _anthropic_module.Anthropic(  # type: ignore[union-attr]
             api_key=self.api_key or os.getenv("ANTHROPIC_API_KEY")
@@ -419,9 +425,22 @@ class LLMHandler:
     # Ollama                                                               #
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _wrap_ollama_errors(exc: Exception) -> _ProviderUnavailableError:
+        """Convert a requests error from a local Ollama into unavailable.
+
+        WHY: A local Ollama that's offline, returns 404 for an unknown model,
+        or refuses connections is functionally "not configured" — same bucket
+        as a missing package or missing API key. Wrapping these as
+        _ProviderUnavailableError lets the top-level dispatch fall back to
+        the dummy response without suppressing real provider auth/quota
+        errors from OpenAI, Anthropic, or GLM.
+        """
+        return _ProviderUnavailableError(f"Ollama unavailable: {exc}")
+
     def _ollama_generate(self, prompt: str, system_prompt: Optional[str]) -> str:
         if not _REQUESTS_AVAILABLE:
-            raise RuntimeError("requests package not installed")
+            raise _ProviderUnavailableError("requests package not installed")
 
         payload: dict = {
             "model": self.model,
@@ -435,19 +454,22 @@ class LLMHandler:
         if system_prompt:
             payload["system"] = system_prompt
 
-        resp = _requests_module.post(  # type: ignore[union-attr]
-            f"{self.ollama_base_url}/api/generate",
-            json=payload,
-            timeout=120,
-        )
-        resp.raise_for_status()
+        try:
+            resp = _requests_module.post(  # type: ignore[union-attr]
+                f"{self.ollama_base_url}/api/generate",
+                json=payload,
+                timeout=120,
+            )
+            resp.raise_for_status()
+        except _requests_module.exceptions.RequestException as exc:  # type: ignore[union-attr]
+            raise self._wrap_ollama_errors(exc) from exc
         return resp.json().get("response", "")
 
     def _ollama_stream(
         self, prompt: str, system_prompt: Optional[str]
     ) -> Generator[str, None, None]:
         if not _REQUESTS_AVAILABLE:
-            raise RuntimeError("requests package not installed")
+            raise _ProviderUnavailableError("requests package not installed")
 
         import json
 
@@ -463,21 +485,24 @@ class LLMHandler:
         if system_prompt:
             payload["system"] = system_prompt
 
-        with _requests_module.post(  # type: ignore[union-attr]
-            f"{self.ollama_base_url}/api/generate",
-            json=payload,
-            stream=True,
-            timeout=120,
-        ) as resp:
-            resp.raise_for_status()
-            for line in resp.iter_lines():
-                if line:
-                    data = json.loads(line)
-                    token = data.get("response", "")
-                    if token:
-                        yield token
-                    if data.get("done"):
-                        break
+        try:
+            with _requests_module.post(  # type: ignore[union-attr]
+                f"{self.ollama_base_url}/api/generate",
+                json=payload,
+                stream=True,
+                timeout=120,
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        token = data.get("response", "")
+                        if token:
+                            yield token
+                        if data.get("done"):
+                            break
+        except _requests_module.exceptions.RequestException as exc:  # type: ignore[union-attr]
+            raise self._wrap_ollama_errors(exc) from exc
 
     # ------------------------------------------------------------------ #
     # OpenAI — messages-list API                                          #
@@ -490,12 +515,7 @@ class LLMHandler:
         from a single prompt, this method receives the already-assembled list
         so the caller controls the full conversation history.
         """
-        if not _OPENAI_AVAILABLE:
-            raise RuntimeError("openai package not installed")
-
-        client = _openai_module.OpenAI(  # type: ignore[union-attr]
-            api_key=self.api_key or os.getenv("OPENAI_API_KEY")
-        )
+        client = self._openai_client_for_provider()
         response = client.chat.completions.create(
             **self._openai_kwargs(messages=messages)  # type: ignore[arg-type]
         )
@@ -505,12 +525,7 @@ class LLMHandler:
         self, messages: List[dict]
     ) -> Generator[str, None, None]:
         """Stream a response from OpenAI given a messages list."""
-        if not _OPENAI_AVAILABLE:
-            raise RuntimeError("openai package not installed")
-
-        client = _openai_module.OpenAI(  # type: ignore[union-attr]
-            api_key=self.api_key or os.getenv("OPENAI_API_KEY")
-        )
+        client = self._openai_client_for_provider()
         stream = client.chat.completions.create(
             **self._openai_kwargs(messages=messages, stream=True)  # type: ignore[arg-type]
         )
@@ -536,7 +551,7 @@ class LLMHandler:
         but defensive handling is safer.
         """
         if not _ANTHROPIC_AVAILABLE:
-            raise RuntimeError("anthropic package not installed")
+            raise _ProviderUnavailableError("anthropic package not installed")
 
         client = _anthropic_module.Anthropic(  # type: ignore[union-attr]
             api_key=self.api_key or os.getenv("ANTHROPIC_API_KEY")
@@ -568,7 +583,7 @@ class LLMHandler:
         rationale — the same split applies here.
         """
         if not _ANTHROPIC_AVAILABLE:
-            raise RuntimeError("anthropic package not installed")
+            raise _ProviderUnavailableError("anthropic package not installed")
 
         client = _anthropic_module.Anthropic(  # type: ignore[union-attr]
             api_key=self.api_key or os.getenv("ANTHROPIC_API_KEY")
@@ -606,7 +621,7 @@ class LLMHandler:
           /api/chat      → {"message": {"role": "assistant", "content": "token"}, "done": false}
         """
         if not _REQUESTS_AVAILABLE:
-            raise RuntimeError("requests package not installed")
+            raise _ProviderUnavailableError("requests package not installed")
 
         payload: dict = {
             "model": self.model,
@@ -618,12 +633,15 @@ class LLMHandler:
             },
         }
 
-        resp = _requests_module.post(  # type: ignore[union-attr]
-            f"{self.ollama_base_url}/api/chat",
-            json=payload,
-            timeout=120,
-        )
-        resp.raise_for_status()
+        try:
+            resp = _requests_module.post(  # type: ignore[union-attr]
+                f"{self.ollama_base_url}/api/chat",
+                json=payload,
+                timeout=120,
+            )
+            resp.raise_for_status()
+        except _requests_module.exceptions.RequestException as exc:  # type: ignore[union-attr]
+            raise self._wrap_ollama_errors(exc) from exc
         # WHY: /api/chat wraps the response inside a "message" object, unlike
         #      /api/generate which puts it at the top-level "response" key.
         return resp.json().get("message", {}).get("content", "")
@@ -636,7 +654,7 @@ class LLMHandler:
         See _ollama_generate_messages() for endpoint and response-format details.
         """
         if not _REQUESTS_AVAILABLE:
-            raise RuntimeError("requests package not installed")
+            raise _ProviderUnavailableError("requests package not installed")
 
         import json
 
@@ -650,23 +668,26 @@ class LLMHandler:
             },
         }
 
-        with _requests_module.post(  # type: ignore[union-attr]
-            f"{self.ollama_base_url}/api/chat",
-            json=payload,
-            stream=True,
-            timeout=120,
-        ) as resp:
-            resp.raise_for_status()
-            for line in resp.iter_lines():
-                if line:
-                    data = json.loads(line)
-                    # WHY: /api/chat nests the token inside data["message"]["content"],
-                    #      not at data["response"] like /api/generate does.
-                    token = data.get("message", {}).get("content", "")
-                    if token:
-                        yield token
-                    if data.get("done"):
-                        break
+        try:
+            with _requests_module.post(  # type: ignore[union-attr]
+                f"{self.ollama_base_url}/api/chat",
+                json=payload,
+                stream=True,
+                timeout=120,
+            ) as resp:
+                resp.raise_for_status()
+                for line in resp.iter_lines():
+                    if line:
+                        data = json.loads(line)
+                        # WHY: /api/chat nests the token inside data["message"]["content"],
+                        #      not at data["response"] like /api/generate does.
+                        token = data.get("message", {}).get("content", "")
+                        if token:
+                            yield token
+                        if data.get("done"):
+                            break
+        except _requests_module.exceptions.RequestException as exc:  # type: ignore[union-attr]
+            raise self._wrap_ollama_errors(exc) from exc
 
     def _ollama_list_models(self) -> List[str]:
         if not _REQUESTS_AVAILABLE:
@@ -687,13 +708,47 @@ class LLMHandler:
 
     @staticmethod
     def _detect_provider(model: str) -> str:
-        """Infer provider from model name."""
+        """Infer provider from model name.
+
+        BUG FIX: `glm*` used to fall through to Ollama, which silently bricked
+        `GLM_API_KEY` configuration in docker-compose.prod.yml. GLM (Zhipu AI)
+        exposes an OpenAI-compatible API, so we route it through the OpenAI
+        SDK with a custom base_url (see `_openai_client_for_provider`).
+        """
         lower = model.lower()
         if lower.startswith("gpt") or lower.startswith("o1") or lower.startswith("o3"):
             return "openai"
         if lower.startswith("claude"):
             return "anthropic"
+        if lower.startswith("glm"):
+            return "glm"
         return "ollama"
+
+    # GLM / Zhipu AI — OpenAI-compatible endpoint. Configurable via env so
+    # the same class works for Zhipu's public API or any self-hosted proxy.
+    GLM_DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+
+    def _openai_client_for_provider(self):
+        """Build an OpenAI-SDK client pointed at the right endpoint.
+
+        WHY: Zhipu's GLM API is wire-compatible with OpenAI's chat completions
+        endpoint, so we reuse the same SDK and just redirect base_url+api_key
+        when the provider is "glm". Keeping this in one place means every
+        chat method (generate, stream, messages) stays a one-liner.
+        """
+        if not _OPENAI_AVAILABLE:
+            raise _ProviderUnavailableError("openai package not installed")
+        if self._provider == "glm":
+            api_key = self.api_key or os.getenv("GLM_API_KEY")
+            if not api_key:
+                raise _ProviderUnavailableError("GLM_API_KEY not set")
+            base_url = os.getenv("GLM_BASE_URL", self.GLM_DEFAULT_BASE_URL)
+            return _openai_module.OpenAI(  # type: ignore[union-attr]
+                api_key=api_key, base_url=base_url,
+            )
+        return _openai_module.OpenAI(  # type: ignore[union-attr]
+            api_key=self.api_key or os.getenv("OPENAI_API_KEY")
+        )
 
     @staticmethod
     def _dummy_response(prompt: str) -> str:
