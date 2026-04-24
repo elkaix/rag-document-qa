@@ -9,7 +9,6 @@ export interface SourceInfo {
 export interface QueryRequest {
   query: string;
   top_k?: number;
-  strategy?: string;
   model?: string;
 }
 

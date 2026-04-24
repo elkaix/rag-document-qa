@@ -38,12 +38,34 @@ async def _process_upload(file: UploadFile, request: Request) -> UploadResponse:
     filename = file.filename or "upload"
     _validate_extension(filename)
 
-    contents = await file.read()
-    if len(contents) > MAX_FILE_SIZE_BYTES:
+    # BUG FIX: previously read the entire upload into memory before checking
+    #          its size. A caller could spool a multi-GB file through disk
+    #          before we rejected it. Now we:
+    #            1) trust the multipart-declared size when it's present, and
+    #            2) read in 1 MiB chunks so an oversize stream is cut short
+    #               the moment it crosses the limit.
+    declared_size = getattr(file, "size", None)
+    if declared_size is not None and declared_size > MAX_FILE_SIZE_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File exceeds maximum size of {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB.",
         )
+
+    chunks: list[bytes] = []
+    total = 0
+    CHUNK = 1024 * 1024
+    while True:
+        piece = await file.read(CHUNK)
+        if not piece:
+            break
+        total += len(piece)
+        if total > MAX_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File exceeds maximum size of {MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB.",
+            )
+        chunks.append(piece)
+    contents = b"".join(chunks)
 
     backend = request.app.state.backend
 

@@ -98,7 +98,28 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 await websocket.send_json({"type": "error", "content": "Empty query."})
                 continue
 
-            top_k = int(payload.get("top_k", 5))
+            # BUG FIX: `int(payload.get("top_k", 5))` sat OUTSIDE the inner
+            #          try/except below, so a bad client value raised
+            #          ValueError up through the outer WebSocketDisconnect
+            #          handler, which silently killed the socket. Validate
+            #          + bounds-check here and emit a structured error event
+            #          so the client can surface it without dropping the
+            #          connection. Matches QueryRequest's le=50 bound.
+            raw_top_k = payload.get("top_k", 5)
+            try:
+                top_k = int(raw_top_k)
+            except (TypeError, ValueError):
+                await websocket.send_json({
+                    "type": "error",
+                    "content": f"Invalid top_k: {raw_top_k!r}",
+                })
+                continue
+            if not (1 <= top_k <= 50):
+                await websocket.send_json({
+                    "type": "error",
+                    "content": "top_k must be between 1 and 50.",
+                })
+                continue
             model = payload.get("model")
 
             # WHY: conversation_id links the WebSocket chat to a persisted

@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
 
 from src.api.dependencies import get_backend
@@ -293,6 +293,7 @@ def export_conversation(
 def create_share_token(
     conversation_id: str,
     backend: BackendDep,
+    request: Request,
 ) -> dict:
     """Generate an opaque, unguessable share token for a conversation.
 
@@ -310,7 +311,16 @@ def create_share_token(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Conversation '{conversation_id}' not found.",
         )
-    return {"conversation_id": conversation_id, "share_token": token}
+    # WHY: The frontend writes share_url straight to the clipboard. Building
+    #      it server-side from the request's scheme+host keeps it correct
+    #      behind proxies/reverse-proxies that rewrite the public origin.
+    base = str(request.base_url).rstrip("/")
+    share_url = f"{base}/shared/{token}"
+    return {
+        "conversation_id": conversation_id,
+        "share_token": token,
+        "share_url": share_url,
+    }
 
 
 # --------------------------------------------------------------------------- #

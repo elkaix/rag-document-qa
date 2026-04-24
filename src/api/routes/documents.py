@@ -102,10 +102,13 @@ async def get_document_chunks(doc_id: str, request: Request) -> Dict[str, Any]:
 
     raw_chunks = backend.get_document_chunks(doc_id)
 
+    # BUG FIX: RAGBackend.get_document_chunks returns dicts with key "content"
+    #          (matching ChromaDB's terminology). An earlier version of this
+    #          route read c["text"] which raised KeyError -> HTTP 500.
     chunks = [
         {
             "chunk_id": c["chunk_id"],
-            "excerpt": c["text"][:300],
+            "excerpt": c["content"][:300],
             "metadata": c["metadata"],
         }
         for c in raw_chunks

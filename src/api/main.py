@@ -24,6 +24,7 @@ Where it fits in the RAG pipeline:
   Everything beneath (RAGBackend, routes, models) is imported and wired here.
 """
 
+import os
 from contextlib import asynccontextmanager
 
 import chromadb
@@ -91,12 +92,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# WHY: CORS middleware allows the React frontend (running on a different port)
-#      to make API requests. allow_origins=["*"] is fine for development;
-#      production would restrict to specific origins.
+# BUG FIX: CORS used to allow all origins in the same app baked into the
+#          production Docker image. In dev we still want to hit the API from
+#          a Vite dev server on a different port, but production should
+#          restrict. ALLOWED_ORIGINS is a comma-separated env var; an
+#          empty/unset value stays open for dev ergonomics. Set it to your
+#          actual frontend origin in docker-compose.prod.yml.
+_origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
+_allowed_origins = (
+    [o.strip() for o in _origins_env.split(",") if o.strip()]
+    if _origins_env
+    else ["*"]
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )

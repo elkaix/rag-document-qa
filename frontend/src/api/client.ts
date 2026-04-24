@@ -82,8 +82,18 @@ export const api = {
   searchConversations: (q: string) =>
     request<ConversationSummary[]>(`/api/conversations/search?q=${encodeURIComponent(q)}`),
 
-  exportConversation: (id: string) =>
-    fetch(`${BASE_URL}/api/conversations/${id}/export`).then((r) => r.text()),
+  // BUG FIX: previously returned r.text() unconditionally, so a 404 or 500
+  //          would be silently downloaded as the "exported" body. Now we
+  //          mirror `request()`'s error contract and throw on !ok, so the
+  //          caller's catch branch shows the real error toast.
+  exportConversation: async (id: string): Promise<string> => {
+    const res = await fetch(`${BASE_URL}/api/conversations/${id}/export`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail ?? `Export failed: ${res.status}`);
+    }
+    return res.text();
+  },
 
   shareConversation: (id: string) =>
     request<{ share_token: string; share_url: string }>(

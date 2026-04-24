@@ -9,22 +9,34 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from src.config import DEFAULT_MODEL
+
 
 class QueryRequest(BaseModel):
-    """Request body for the query endpoint."""
+    """Request body for the query endpoint.
+
+    BUG FIX: The `model` default used to be a hard-coded "gpt-4" which
+    drifted from the app-wide DEFAULT_MODEL ("gpt-5-mini") in src/config.py,
+    so /api/query and the WebSocket path answered with different models
+    for the same user. Now both read from the same constant.
+
+    BUG FIX: Removed the `strategy` field — it was declared but never read
+    anywhere in the routes or backend, so accepting it was a lie about API
+    capabilities. Add it back once hybrid/rerank is actually wired up.
+    """
 
     query: str = Field(..., min_length=1, max_length=4096, description="The user question.")
     top_k: int = Field(default=5, ge=1, le=50, description="Number of chunks to retrieve.")
-    strategy: str = Field(
-        default="dense",
-        description="Retrieval strategy: 'dense', 'hybrid', or 'rerank'.",
-    )
     model: str = Field(
-        default="gpt-4",
+        default=DEFAULT_MODEL,
         description="LLM model name to use for answer generation.",
     )
 
-    model_config = {"json_schema_extra": {"examples": [{"query": "What is RAG?", "top_k": 5, "strategy": "dense", "model": "gpt-4"}]}}
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{"query": "What is RAG?", "top_k": 5, "model": DEFAULT_MODEL}]
+        }
+    }
 
 
 class SourceInfo(BaseModel):
