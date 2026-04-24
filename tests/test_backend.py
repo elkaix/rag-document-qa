@@ -147,13 +147,19 @@ class TestDocumentOperations:
         assert len(result["sources"]) > 0
 
     def test_delete_document(self, backend: RAGBackend, txt_file: Path):
-        """Deleting a document removes it from both stores."""
+        """Deleting a document removes it from both stores.
+
+        Contract: delete_document now returns the number of chunks removed
+        (an int >= 1 on success, 0 on miss) so the REST route can report
+        an honest chunks_deleted count. Old contract returned bool.
+        """
         ingest_result = backend.ingest_file(txt_file)
         doc_id = ingest_result["doc_id"]
 
-        deleted = backend.delete_document(doc_id)
+        chunks_deleted = backend.delete_document(doc_id)
 
-        assert deleted is True
+        assert isinstance(chunks_deleted, int)
+        assert chunks_deleted >= 1
         assert backend.list_documents() == []
 
     def test_reingest_same_file_is_idempotent(

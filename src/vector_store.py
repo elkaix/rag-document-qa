@@ -241,7 +241,7 @@ class ChromaVectorStore:
     # Delete operations                                                       #
     # ---------------------------------------------------------------------- #
 
-    def delete_by_doc_id(self, doc_id: str) -> None:
+    def delete_by_doc_id(self, doc_id: str) -> int:
         """
         Delete all chunks that belong to the given document.
 
@@ -256,9 +256,21 @@ class ChromaVectorStore:
 
         Args:
             doc_id: The document identifier. All chunks with this doc_id are removed.
+
+        Returns:
+            Number of chunks removed — useful for the delete endpoint's
+            response body, which advertises `chunks_deleted` as a count.
         """
+        # WHY count-then-delete: Chroma's delete() does not return a count, so
+        # we look the matching IDs up first to report an accurate number.
+        matching = self._collection.get(where={"doc_id": doc_id}, include=[])
+        count = len(matching.get("ids", []))
         self._collection.delete(where={"doc_id": doc_id})
-        logger.debug("Deleted chunks for doc_id='%s' from '%s'", doc_id, self._collection.name)
+        logger.debug(
+            "Deleted %d chunks for doc_id='%s' from '%s'",
+            count, doc_id, self._collection.name,
+        )
+        return count
 
     # ---------------------------------------------------------------------- #
     # Stats                                                                   #

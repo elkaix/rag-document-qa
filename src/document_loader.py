@@ -23,8 +23,14 @@ SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".html", ".htm", ".csv",
 
 
 def _hash_text(text: str) -> str:
-    """Return a short SHA-256 hex digest of text."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    """Return a full SHA-256 hex digest of text.
+
+    BUG FIX: Previously truncated to 16 hex chars (64 bits), which is too
+    short for a content-addressed document id — collision risk grows with
+    corpus size, and the DocumentRecord docstring explicitly promises a
+    full SHA-256. Chunk ids derive from this too; a longer id is harmless.
+    """
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 @dataclass

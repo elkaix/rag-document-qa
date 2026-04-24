@@ -29,6 +29,7 @@ Where it fits in the RAG pipeline:
   ChromaVectorStore (embedding + search), and LLMHandler (generation).
 """
 
+import hashlib
 import logging
 import tempfile
 import uuid
@@ -185,6 +186,17 @@ class RAGBackend:
         document = self.loader.load(path)
         if original_filename:
             document.metadata["filename"] = original_filename
+
+        # BUG FIX: DocumentRecord.id is documented as SHA-256 of the raw file
+        #          bytes, giving idempotent re-uploads. The loader used to
+        #          derive a truncated 16-char hash of the *extracted text*,
+        #          which (a) collides two different files with identical
+        #          extracted text into one document and (b) truncates to
+        #          64 bits — raising real collision risk at scale.
+        # WHY compute here (not in the loader): the loader does not carry
+        #          raw bytes around (it parses PDFs/DOCX into text), so the
+        #          hash must be computed from `path` before chunking.
+        document.doc_id = hashlib.sha256(path.read_bytes()).hexdigest()
 
         chunks = self.chunker.chunk(document)
 
@@ -430,28 +442,28 @@ class RAGBackend:
         # answer model — so premium answers stay cheap to "think" about.
         yield ("status", f"Analyzing retrieved context ({self.reasoning_llm.model})...")
 
-        # WHY a detailed prompt: This is Step 1 of the UI's two-step visible
-        #      flow. A rich thinking stream makes the reasoning phase feel
-        #      substantive — the user watches the model deliberate before
-        #      Step 2 (the actual answer) begins. Prompt is tuned to produce
-        #      6-10 sentences of plain-text analysis at a relaxed pace.
+        # WHY a RESEARCH-PLAN style prompt (not raw CoT): exposing raw generated
+        #      chain-of-thought is a documented product risk — the model may
+        #      verbalise uncertain or incorrect intermediate beliefs that users
+        #      mistake for confident answers. Instead we ask for a concise,
+        #      outcome-oriented *reasoning summary* that describes the plan
+        #      without asserting factual conclusions. Still streams live so
+        #      the UI's two-step feel (plan → answer) is preserved.
         reasoning_system = (
-            "You are a reasoning assistant for a retrieval-augmented Q&A system. "
-            "Given the user's question and the retrieved document excerpts, think "
-            "out loud in 6-10 plain sentences about how you will construct the "
-            "answer. Walk through, in order:\n"
-            "1) What the user is really asking and any ambiguity to resolve.\n"
-            "2) Which retrieved excerpts look most relevant and why.\n"
-            "3) Any gaps, conflicts, or caveats in the retrieved context.\n"
-            "4) The outline or structure of the answer you will give next.\n"
-            "Write in the first person ('I'll start by...', 'I notice that...'). "
-            "No bullet lists. No markdown headings. No preamble. Do NOT give the "
-            "final answer — a later step handles that. Keep a natural, deliberate "
-            "pace — the user is watching this stream in real time."
+            "You are the planning step of a retrieval-augmented Q&A system. "
+            "In 3-5 concise sentences, summarise how you will construct the "
+            "answer using the retrieved excerpts. Cover:\n"
+            "1) What the user is asking, resolving any ambiguity explicitly.\n"
+            "2) Which excerpts are most relevant and the gist of their support.\n"
+            "3) Any gaps or conflicts the reader should be aware of.\n"
+            "4) The shape of the answer you will give next.\n"
+            "Stay factual and outcome-oriented — describe the plan, do not "
+            "verbalise stream-of-consciousness reasoning. No markdown headings, "
+            "no bullet lists, no preamble. Do NOT produce the final answer."
         )
         reasoning_user = (
             f"Context:\n{context}\n\nQuestion: {question}\n\n"
-            "Reasoning (think out loud, do not answer):"
+            "Reasoning plan (summary only, do not answer):"
         )
 
         try:
@@ -538,7 +550,7 @@ class RAGBackend:
     # Document management                                                  #
     # ------------------------------------------------------------------ #
 
-    def delete_document(self, doc_id: str) -> bool:
+    def delete_document(self, doc_id: str) -> int:
         """Remove a document from both ChromaDB and SQLite.
 
         Cross-store order: ChromaDB first, then SQLite.
@@ -551,21 +563,23 @@ class RAGBackend:
             doc_id: The document's content-hash ID.
 
         Returns:
-            True if the document was found and deleted, False otherwise.
+            Number of chunks removed (0 if the document was not found). The
+            REST layer's response advertises `chunks_deleted` as a count —
+            this is the value that populates it.
         """
         # STEP 1: Delete chunks from ChromaDB
-        self.vector_store.delete_by_doc_id(doc_id)
+        chunks_deleted = self.vector_store.delete_by_doc_id(doc_id)
 
         # STEP 2: Delete metadata from SQLite
         with self._session() as session:
             record = session.get(DocumentRecord, doc_id)
             if record is None:
-                return False
+                return 0
             session.delete(record)
             session.commit()
 
-        logger.info("Deleted document doc_id=%s", doc_id)
-        return True
+        logger.info("Deleted document doc_id=%s (%d chunks)", doc_id, chunks_deleted)
+        return chunks_deleted
 
     def list_documents(self) -> list[dict[str, Any]]:
         """Return metadata for all ingested documents.
@@ -1038,6 +1052,9 @@ class RAGBackend:
         results: list[dict] = []
 
         # ---- Faithfulness (skip if already scored) ----------------------------
+        # BUG FIX: Both branches now emit `details` so the frontend's claim
+        #          breakdown renders identically whether faithfulness was
+        #          scored in this call or cached from the realtime path.
         if existing_faith is None and contexts:
             score, reasoning, details = evaluate_faithfulness(
                 answer, contexts, self.eval_llm
@@ -1053,12 +1070,18 @@ class RAGBackend:
             with self._session() as session:
                 session.add(eval_row)
                 session.commit()
-            results.append({"metric": "faithfulness", "score": score, "reasoning": reasoning})
+            results.append({
+                "metric": "faithfulness",
+                "score": score,
+                "reasoning": reasoning,
+                "details": details,
+            })
         elif existing_faith is not None:
             results.append({
                 "metric": "faithfulness",
                 "score": existing_faith.score,
                 "reasoning": existing_faith.reasoning,
+                "details": existing_faith.details,
             })
 
         # ---- Answer relevancy (skip if already scored) -------------------------
