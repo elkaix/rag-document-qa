@@ -64,16 +64,18 @@ jobs:
           restore-keys: |
             hf-${{ runner.os }}-
 
-      # WHY dummy API keys: openai.OpenAI() raises at construction time when
-      # OPENAI_API_KEY is unset, which breaks tests that instantiate LLMHandler
-      # (the dummy-response fallback only kicks in for actual generate() calls).
-      # Any non-empty string lets the client construct; real network calls would
-      # fail at request time but tests use stubs/mocks past the constructor.
+      # WHY dummy API keys + CI_LLM_MOCK: openai.OpenAI() raises at construction
+      # when OPENAI_API_KEY is unset; any non-empty string lets the client construct.
+      # CI_LLM_MOCK=true triggers the conftest fixture that monkeypatches
+      # openai.OpenAI to an in-process stub, so tests that exercise the real
+      # backend.query path don't actually hit the OpenAI API. Local dev is
+      # unaffected since CI_LLM_MOCK is unset there.
       # OTLP traces still try to flush to localhost:6006 and log connection-refused
-      # warnings; that's expected and harmless.
+      # warnings — expected and harmless in CI.
       - name: Run pytest
         env:
           PYTHONDONTWRITEBYTECODE: "1"
+          CI_LLM_MOCK: "true"
           OPENAI_API_KEY: dummy_for_ci
           ANTHROPIC_API_KEY: dummy_for_ci
           GLM_API_KEY: dummy_for_ci
