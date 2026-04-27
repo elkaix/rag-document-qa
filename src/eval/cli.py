@@ -214,6 +214,49 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_archive(args: argparse.Namespace) -> int:
+    """Copy small artifacts of a run from eval_runs/ to a tracked location.
+
+    Files copied: metrics.json, cost.json, metadata.json, config.yaml.
+    NOT copied: questions.jsonl (large). Its SHA-256 is recorded in metadata.json
+    under `questions_jsonl_sha256` so reviewers can verify against a re-run.
+
+    Args:
+        args: Namespace with run_id, to (destination directory), runs_root.
+
+    Returns:
+        0 on success, 1 if the run directory is not found.
+    """
+    import hashlib
+    import json
+    import shutil
+
+    runs_root = Path(getattr(args, "runs_root", None) or "eval_runs")
+    src = runs_root / args.run_id
+    if not src.exists():
+        print(f"Run not found: {src}")
+        return 1
+
+    dst = Path(args.to)
+    dst.mkdir(parents=True, exist_ok=True)
+
+    for name in ("metrics.json", "cost.json", "config.yaml"):
+        if (src / name).exists():
+            shutil.copy2(src / name, dst / name)
+
+    # Record questions.jsonl SHA in metadata.json before copying it.
+    metadata = json.loads((src / "metadata.json").read_text())
+    questions_path = src / "questions.jsonl"
+    if questions_path.exists():
+        h = hashlib.sha256()
+        h.update(questions_path.read_bytes())
+        metadata["questions_jsonl_sha256"] = h.hexdigest()
+    (dst / "metadata.json").write_text(json.dumps(metadata, indent=2))
+
+    print(f"Archived run {args.run_id} → {dst}")
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # Entry point                                                                  #
 # --------------------------------------------------------------------------- #
@@ -236,12 +279,24 @@ def main(argv: list[str] | None = None) -> int:
     p_compare.add_argument("id_b")
     p_compare.add_argument("--html", action="store_true")
 
+    p_archive = sub.add_parser(
+        "archive",
+        help="Copy small run artifacts (metrics/cost/metadata/config) to a tracked path.",
+    )
+    p_archive.add_argument("run_id", help="Run id to archive (must exist under runs_root).")
+    p_archive.add_argument("--to", required=True, help="Destination directory.")
+    p_archive.add_argument(
+        "--runs-root", default="eval_runs", dest="runs_root",
+        help="Root directory holding run subdirectories (default: eval_runs).",
+    )
+
     args = parser.parse_args(argv)
     return {
         "run": _cmd_run,
         "list": _cmd_list,
         "show": _cmd_show,
         "compare": _cmd_compare,
+        "archive": _cmd_archive,
     }[args.cmd](args)
 
 
