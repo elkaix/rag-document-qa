@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Eval Run: {{ metadata.run_id }}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 1100px; margin: 2em auto; padding: 0 1em; color: #222; }
+  h1 { border-bottom: 2px solid #ccc; padding-bottom: .3em; }
+  h2 { color: #444; margin-top: 2em; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .92em; }
+  th, td { border: 1px solid #ddd; padding: .4em .6em; text-align: left; }
+  th { background: #f5f5f5; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .meta-grid { display: grid; grid-template-columns: 200px 1fr; gap: .25em 1em;
+               margin-bottom: 1.5em; }
+  .meta-grid dt { font-weight: 600; color: #555; }
+  .ci-bar-bg { background: #e0e0e0; height: 8px; position: relative;
+               border-radius: 4px; overflow: hidden; min-width: 100px; }
+  .ci-bar-fill { background: #4a90e2; height: 100%; }
+  .warning { background: #fff8dc; border-left: 4px solid #d4a200;
+             padding: .5em 1em; margin: 1em 0; }
+</style>
+</head>
+<body>
+<h1>Eval Run <code>{{ metadata.run_id }}</code></h1>
+
+<dl class="meta-grid">
+  <dt>Config</dt>          <dd>{{ metadata.config_name }}</dd>
+  <dt>Git SHA</dt>         <dd><code>{{ metadata.git_sha }}</code></dd>
+  <dt>Started</dt>         <dd>{{ metadata.started_at }}</dd>
+  <dt>Finished</dt>        <dd>{{ metadata.finished_at }}</dd>
+  <dt>Questions</dt>       <dd>{{ metadata.n_questions }}</dd>
+  <dt>Errors</dt>          <dd>{{ metadata.n_errors }}</dd>
+  <dt>Datasets</dt>        <dd>{{ metadata.eval_set_versions|map('string')|join(', ') }}</dd>
+</dl>
+
+{% if metadata.warnings %}
+<div class="warning">
+  <strong>Warnings:</strong>
+  <ul>{% for w in metadata.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<h2>Aggregated Metrics</h2>
+<table>
+  <thead><tr>
+    <th>Metric</th><th>Dataset</th>
+    <th class="num">Mean</th><th class="num">95% CI</th><th class="num">n</th>
+  </tr></thead>
+  <tbody>
+    {% for m in aggregated %}
+    <tr>
+      <td><code>{{ m.metric_name }}</code></td>
+      <td>{{ m.dataset or "<all>" }}</td>
+      <td class="num">{{ "%.4f"|format(m.mean) }}</td>
+      <td class="num">[{{ "%.4f"|format(m.ci_low) }}, {{ "%.4f"|format(m.ci_high) }}]</td>
+      <td class="num">{{ m.n }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Cost Summary</h2>
+<dl class="meta-grid">
+  <dt>Total USD</dt>           <dd>${{ "%.4f"|format(cost.total_usd|default(0.0)) }}</dd>
+  <dt>Mean USD per query</dt>  <dd>${{ "%.4f"|format(cost.mean_usd_per_query|default(0.0)) }}</dd>
+  <dt>Total prompt tokens</dt> <dd>{{ cost.total_prompt|default(0) }}</dd>
+  <dt>Total completion tokens</dt> <dd>{{ cost.total_completion|default(0) }}</dd>
+</dl>
+
+<h2>Per-Question Results ({{ results|length }})</h2>
+<table>
+  <thead><tr>
+    <th>Question ID</th><th>Dataset</th>
+    <th class="num">Cost USD</th><th>Error</th>
+  </tr></thead>
+  <tbody>
+    {% for r in results[:200] %}
+    <tr>
+      <td><code>{{ r.question_id }}</code></td>
+      <td>{{ r.dataset }}</td>
+      <td class="num">${{ "%.4f"|format(r.cost_usd) }}</td>
+      <td>{{ r.error or "" }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if results|length > 200 %}<p><em>(showing first 200 of {{ results|length }} results)</em></p>{% endif %}
+
+</body>
+</html>
