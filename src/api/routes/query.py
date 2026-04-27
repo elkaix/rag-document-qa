@@ -37,7 +37,10 @@ async def query(request_body: QueryRequest, request: Request) -> QueryResponse:
     start = time.perf_counter()
 
     backend = request.app.state.backend
-    result = backend.query(
+    # WHY query_with_telemetry: replaces the plain query() call so we get
+    #     per-stage timing and token-cost numbers in the response. The
+    #     result_dict has the same shape as before — only telemetry is new.
+    result, telemetry = backend.query_with_telemetry(
         request_body.query,
         top_k=request_body.top_k,
         model=request_body.model,
@@ -61,6 +64,8 @@ async def query(request_body: QueryRequest, request: Request) -> QueryResponse:
         sources=sources,
         confidence=result.get("confidence", 0.0),
         latency_ms=latency_ms,
+        # ADDITIVE: telemetry field added in Task 5 (Sub-plan 1D).
+        telemetry=telemetry,
     )
 
 
@@ -177,6 +182,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
                             "message_id": data.get("message_id"),
                             "conversation_id": data.get("conversation_id"),
                         })
+                    elif event_type == "telemetry":
+                        # WHY: stream_query yields ("telemetry", StageTelemetry.model_dump())
+                        #      after the done event. Forward it verbatim so the frontend
+                        #      can render per-stage timing and cost without polling.
+                        await websocket.send_json({"type": "telemetry", "content": data})
             except Exception as exc:
                 logger.error("Streaming error: %s", exc)
                 await websocket.send_json(
