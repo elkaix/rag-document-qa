@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChunkerCfg(BaseModel):
@@ -58,16 +58,92 @@ class GeneratorCfg(BaseModel):
     reasoning_model: str | None = "gpt-4.1-nano"
 
 
+class EmbedderCfg(BaseModel):
+    """Embedder selection. None/default = ChromaDB built-in ONNX (current behavior).
+
+    Phase 2 lever 2b: swap ChromaDB's default MiniLM (384-dim) for BAAI/bge-small-en-v1.5
+    (also 384-dim) which is domain-tuned for retrieval. The factory wires this as a
+    Chroma EmbeddingFunction at collection-creation time, so ChromaVectorStore.upsert/query
+    auto-embed without per-call code changes.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    name: Literal["chroma_default", "bge_small_en_v1_5"] = "chroma_default"
+
+
+class HybridCfg(BaseModel):
+    """BM25 + dense retrieval with Reciprocal Rank Fusion.
+
+    Phase 2 lever 2c: combine sparse (BM25) and dense (vector) signal. Disabled by default;
+    when enabled, the retriever fetches top-N candidates from each side and fuses them
+    with RRF: score(d) = sum over r in {dense, sparse} of 1 / (rrf_k + rank_r(d)).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    bm25_top_k: int = 20
+    dense_top_k: int = 20
+    rrf_k: int = 60
+
+
+class RerankerCfg(BaseModel):
+    """Cross-encoder rerank top-N → final-K. None = no rerank (current behavior).
+
+    Phase 2 lever 2d: improve precision by re-scoring the top-N retrieved candidates
+    with a dedicated relevance model (ms-marco-MiniLM-L-6-v2). Adds latency but no
+    LLM cost.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    model: Literal["ms_marco_minilm_l6_v2"] | None = None
+    rerank_top_n: int = 20
+    final_top_k: int = 5
+
+
+class QueryRewriterCfg(BaseModel):
+    """LLM-based query expansion. None = no rewrite (current behavior).
+
+    Phase 2 lever 2e: ask an LLM to produce up to N alternative phrasings of the user
+    query, retrieve against each, then deduplicate. Costs one LLM call per question;
+    captured in the cost ledger under the 'rewriter' bucket.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    model: str | None = None
+    max_expansions: int = 3
+
+
+class RefusalHandlerCfg(BaseModel):
+    """Answerability gate. enabled=False = current behavior.
+
+    Phase 2 lever 2g: when the top-1 retrieval similarity falls below `similarity_threshold`,
+    short-circuit to `no_answer_text` instead of calling the generator. This trades
+    answer_correctness on borderline-answerable questions for refusal_correctness on
+    truly unanswerable ones — exactly the trade-off the SQuAD v2 dev set surfaces.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    similarity_threshold: float = 0.35
+    no_answer_text: str = "I don't have enough information to answer that."
+
+
 class PipelineCfg(BaseModel):
     """Aggregates all pipeline-level sub-configs into one validated structure.
 
-    Pattern: nested Pydantic models — each sub-config validates independently,
-    and the parent catches any cross-field issues at one boundary.
+    Phase 2 additions are all default-off so existing baseline configs keep validating
+    unchanged. Each new block is a documented lever; see configs/eval/phase2/*.yaml
+    for tier-by-tier toggles.
     """
 
     chunker: ChunkerCfg
+    embedder: EmbedderCfg = Field(default_factory=EmbedderCfg)
     retriever: RetrieverCfg
+    hybrid: HybridCfg = Field(default_factory=HybridCfg)
+    reranker: RerankerCfg = Field(default_factory=RerankerCfg)
+    query_rewriter: QueryRewriterCfg = Field(default_factory=QueryRewriterCfg)
     generator: GeneratorCfg
+    refusal_handler: RefusalHandlerCfg = Field(default_factory=RefusalHandlerCfg)
 
 
 class EvalCfg(BaseModel):
@@ -83,6 +159,9 @@ class EvalCfg(BaseModel):
     bootstrap_n: int = 1000
     permutation_n: int = 10000
     seed: int = 42
+    # Phase 2: hard per-run spend ceiling. EvalRunner aborts when the cumulative
+    # generator + judge + rewriter cost crosses this. None disables the guard.
+    spend_ceiling_usd: float | None = None
 
 
 class EvalConfig(BaseModel):

@@ -71,6 +71,12 @@ class EvalPipeline:
     config: EvalConfig
     dataset_name: str
 
+    # Phase 2 additions — None when the corresponding lever is off.
+    hybrid_retriever: object | None = None       # BM25HybridRetriever or None
+    reranker: object | None = None               # CrossEncoderReranker or None
+    rewriter: object | None = None               # QueryRewriter or None
+    refusal_handler: object | None = None        # RefusalHandler or None
+
     # Private: needed for teardown() — ChromaVectorStore doesn't own the client.
     # WHY not reach into vector_store._collection._client: that would couple us
     # to ChromaDB internals that could change. Own the client reference here.
@@ -130,6 +136,15 @@ class EvalPipeline:
             self.vector_store.upsert(ids=ids, documents=documents, metadatas=metadatas)
             logger.info("Ingested %d SQuAD contexts into '%s'.", len(ids), self._collection_name)
 
+            # Phase 2: build the hybrid retriever now that chunks are upserted.
+            # WHY here (lazy): BM25HybridRetriever needs the full chunk corpus at
+            # construction time. build_pipeline() runs before ingest, so we defer.
+            if self.config.pipeline.hybrid.enabled:
+                documents_map = dict(zip(ids, documents))
+                self.hybrid_retriever = _build_hybrid_retriever(
+                    self.config.pipeline.hybrid, self.vector_store, documents_map,
+                )
+
     def _ingest_ml_papers(self) -> None:
         """Load, chunk, and upsert PDFs listed in corpus_manifest.json.
 
@@ -178,67 +193,123 @@ class EvalPipeline:
                 "Ingested paper %s: %d chunks.", paper.get("id"), len(chunks)
             )
 
+        # Phase 2: build hybrid retriever over all upserted chunks.
+        # WHY after the loop: we need the complete corpus before building BM25.
+        if self.config.pipeline.hybrid.enabled:
+            all_ids = self.vector_store._collection.get()["ids"]
+            all_docs = self.vector_store._collection.get()["documents"]
+            if all_ids:
+                documents_map = dict(zip(all_ids, all_docs))
+                self.hybrid_retriever = _build_hybrid_retriever(
+                    self.config.pipeline.hybrid, self.vector_store, documents_map,
+                )
+
     def query(self, question: str) -> tuple[list[SearchResult], str, dict]:
         """Retrieve relevant chunks and generate an answer with timing + cost telemetry.
 
-        Pipeline step: QUERYING — embed question → cosine search → build
-        context → generate answer → measure tokens + cost.
+        Phase 2 pipeline steps: rewrite → retrieve (hybrid or dense) → rerank →
+        refusal gate → generate. Each step is a no-op when the corresponding
+        config lever is off, preserving backward compatibility with Phase 1 callers.
 
         Args:
             question: Natural language question from the eval set.
 
         Returns:
-            Tuple of:
-              - list[SearchResult]: Retrieved chunks ordered by descending similarity.
-              - str: Generated answer.
-              - dict: Telemetry with keys:
-                  timings_ms: {"retrieve": float, "generate": float}
-                  tokens:     {"prompt": int, "completion": int}
-                  cost_usd:   float
+            Tuple of (chunks, answer, telemetry). telemetry keys:
+                timings_ms: dict of stage→ms for rewrite, retrieve, rerank,
+                            refusal_check, generate
+                tokens: {"prompt": int, "completion": int}
+                cost_usd: float (generator side)
+                rewriter_cost_usd: float (rewriter side, 0.0 when disabled)
         """
         from src.eval import pricing
 
-        top_k = self.config.pipeline.retriever.top_k
+        timings: dict[str, float] = {}
+        rewriter_cost = 0.0
 
-        # ---- RETRIEVAL ---------------------------------------------------------
-        t0 = time.perf_counter()
-        results = self.vector_store.query(query_text=question, top_k=top_k)
-        t1 = time.perf_counter()
-        retrieve_ms = (t1 - t0) * 1000.0
+        # ---- Rewrite (lever 2e) -----------------------------------------------
+        t = time.perf_counter()
+        if self.rewriter is not None:
+            queries, rewriter_cost, _, _ = self.rewriter.expand(question)
+        else:
+            queries = [question]
+        timings["rewrite"] = (time.perf_counter() - t) * 1000.0
 
-        # ---- CONTEXT ASSEMBLY --------------------------------------------------
+        # ---- Retrieve ---------------------------------------------------------
+        # WHY use rerank_top_n for initial fetch when a reranker is active:
+        # the reranker needs a wider candidate pool to re-score before final_top_k.
+        top_k_initial = (
+            self.config.pipeline.reranker.rerank_top_n
+            if self.reranker is not None else self.config.pipeline.retriever.top_k
+        )
+        t = time.perf_counter()
+        if self.hybrid_retriever is not None:
+            seen: dict[str, SearchResult] = {}
+            for q in queries:
+                for r in self.hybrid_retriever.retrieve(q, top_k=top_k_initial):
+                    if r.chunk_id not in seen:
+                        seen[r.chunk_id] = r
+            results = list(seen.values())
+        else:
+            seen = {}
+            for q in queries:
+                for r in self.vector_store.query(query_text=q, top_k=top_k_initial):
+                    if r.chunk_id not in seen:
+                        seen[r.chunk_id] = r
+            results = list(seen.values())
+        timings["retrieve"] = (time.perf_counter() - t) * 1000.0
+
+        # ---- Rerank (lever 2d) ------------------------------------------------
+        t = time.perf_counter()
+        if self.reranker is not None:
+            results = self.reranker.rerank(
+                question, results,
+                final_top_k=self.config.pipeline.reranker.final_top_k,
+            )
+        else:
+            results = results[: self.config.pipeline.retriever.top_k]
+        timings["rerank"] = (time.perf_counter() - t) * 1000.0
+
+        # ---- Refusal gate (lever 2g) ------------------------------------------
+        t = time.perf_counter()
+        if self.refusal_handler is not None and self.refusal_handler.should_refuse(results):
+            chunks, answer = self.refusal_handler.refuse_response()
+            timings["refusal_check"] = (time.perf_counter() - t) * 1000.0
+            return chunks, answer, {
+                "timings_ms": timings,
+                "tokens": {"prompt": 0, "completion": 0},
+                "cost_usd": 0.0,
+                "rewriter_cost_usd": rewriter_cost,
+            }
+        timings["refusal_check"] = (time.perf_counter() - t) * 1000.0
+
+        # ---- Generate ---------------------------------------------------------
         context = "\n\n".join(r.content for r in results)
-
         system_prompt = (
             "You are a helpful assistant. Answer the question based solely on the "
             "provided context. If the context does not contain enough information, "
             "say so clearly."
         )
         user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-
         # WHY count both: the LLM sees system_prompt + user_prompt as prompt tokens.
-        full_prompt_text = (system_prompt + "\n" + user_prompt) if system_prompt else user_prompt
+        full_prompt_text = system_prompt + "\n" + user_prompt
         model = self.config.pipeline.generator.model
 
-        # ---- GENERATION --------------------------------------------------------
-        t2 = time.perf_counter()
+        t = time.perf_counter()
         answer = self.llm.generate(user_prompt, system_prompt=system_prompt)
-        t3 = time.perf_counter()
-        generate_ms = (t3 - t2) * 1000.0
+        timings["generate"] = (time.perf_counter() - t) * 1000.0
 
-        # ---- TOKEN COUNTING ----------------------------------------------------
+        # ---- Token counting + cost estimation ---------------------------------
         prompt_tokens = count_tokens(full_prompt_text, model)
         completion_tokens = count_tokens(answer, model)
-
-        # ---- COST ESTIMATION ---------------------------------------------------
         cost = pricing.cost_usd(model, prompt_tokens, completion_tokens)
 
-        telemetry = {
-            "timings_ms": {"retrieve": retrieve_ms, "generate": generate_ms},
+        return results, answer, {
+            "timings_ms": timings,
             "tokens": {"prompt": prompt_tokens, "completion": completion_tokens},
             "cost_usd": cost,
+            "rewriter_cost_usd": rewriter_cost,
         }
-        return results, answer, telemetry
 
     def teardown(self) -> None:
         """Delete the ephemeral Chroma collection and release the client reference.
@@ -298,6 +369,12 @@ def build_pipeline(
         strategy=chunker_cfg.strategy,
     )
 
+    # ---- Embedder (lever 2b) ---------------------------------------------------
+    # WHY build before the collection: Chroma binds an EmbeddingFunction to the
+    # collection at creation time and uses it for all subsequent upserts/queries.
+    embedder_cfg = config.pipeline.embedder
+    embedding_function = _build_embedding_function(embedder_cfg)
+
     # ---- Chroma collection (ephemeral — lives only for this pipeline) ----------
     # WHY EphemeralClient: no disk I/O, no port, no cleanup needed beyond
     # client.delete_collection(). Perfectly isolated per build_pipeline() call.
@@ -308,6 +385,7 @@ def build_pipeline(
     client = chromadb.EphemeralClient()
     collection = client.get_or_create_collection(
         name=collection_name,
+        embedding_function=embedding_function,
         # WHY cosine: ChromaVectorStore converts distance→similarity via
         # score = max(0, 1 - distance). This only makes sense in cosine space
         # where distance ∈ [0, 2] and identical vectors have distance 0.
@@ -329,6 +407,105 @@ def build_pipeline(
         judge_llm=judge_llm,
         config=config,
         dataset_name=dataset_name,
+        hybrid_retriever=None,  # built lazily in _ingest_squad / _ingest_ml_papers
+        reranker=_build_reranker(config.pipeline.reranker),
+        rewriter=_build_rewriter(config.pipeline.query_rewriter, llm=llm),
+        refusal_handler=_build_refusal(config.pipeline.refusal_handler),
         _client=client,
         _collection_name=collection_name,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Phase 2 component builders                                                   #
+# --------------------------------------------------------------------------- #
+
+def _build_embedding_function(cfg) -> object:
+    """Build the Chroma EmbeddingFunction for the given embedder config.
+
+    Args:
+        cfg: EmbedderCfg with a `name` field identifying the embedder variant.
+
+    Returns:
+        A Chroma-compatible EmbeddingFunction instance.
+
+    Raises:
+        ValueError: If cfg.name is not a known embedder key.
+    """
+    if cfg.name == "chroma_default":
+        from chromadb.utils import embedding_functions
+        return embedding_functions.DefaultEmbeddingFunction()
+    if cfg.name == "bge_small_en_v1_5":
+        from src.eval.embedders import BgeEmbedder
+        return BgeEmbedder()
+    raise ValueError(f"Unknown embedder name: {cfg.name}")
+
+
+def _build_hybrid_retriever(cfg, vector_store, documents: dict[str, str]):
+    """Build BM25HybridRetriever if hybrid is enabled, else return None.
+
+    Args:
+        cfg: HybridCfg specifying enabled flag and RRF/top-k parameters.
+        vector_store: Dense retriever (Chroma collection wrapper).
+        documents: Mapping of chunk_id → raw document text for BM25 indexing.
+
+    Returns:
+        BM25HybridRetriever when cfg.enabled, else None.
+    """
+    if not cfg.enabled:
+        return None
+    from src.eval.retrievers import BM25HybridRetriever
+    return BM25HybridRetriever(
+        vector_store=vector_store, documents=documents,
+        bm25_top_k=cfg.bm25_top_k, dense_top_k=cfg.dense_top_k, rrf_k=cfg.rrf_k,
+    )
+
+
+def _build_reranker(cfg):
+    """Build CrossEncoderReranker if a reranker model is configured, else None.
+
+    Args:
+        cfg: RerankerCfg. model=None means reranking is disabled.
+
+    Returns:
+        CrossEncoderReranker when cfg.model is set, else None.
+    """
+    if cfg.model is None:
+        return None
+    from src.eval.retrievers import CrossEncoderReranker
+    return CrossEncoderReranker()
+
+
+def _build_rewriter(cfg, llm):
+    """Build QueryRewriter if a rewriter model is configured, else None.
+
+    Args:
+        cfg: QueryRewriterCfg. model=None disables query expansion.
+        llm: LLM handler (same object as the pipeline answer LLM). QueryRewriter
+             will call llm.generate_with_usage() to produce expansions.
+
+    Returns:
+        QueryRewriter when cfg.model is set, else None.
+    """
+    if cfg.model is None:
+        return None
+    from src.eval.transforms import QueryRewriter
+    return QueryRewriter(model=cfg.model, max_expansions=cfg.max_expansions, llm=llm)
+
+
+def _build_refusal(cfg):
+    """Build RefusalHandler if enabled, else None.
+
+    Args:
+        cfg: RefusalHandlerCfg. enabled=False means the gate is disabled.
+
+    Returns:
+        RefusalHandler when cfg.enabled, else None.
+    """
+    if not cfg.enabled:
+        return None
+    from src.eval.transforms import RefusalHandler
+    return RefusalHandler(
+        enabled=True, similarity_threshold=cfg.similarity_threshold,
+        no_answer_text=cfg.no_answer_text,
     )

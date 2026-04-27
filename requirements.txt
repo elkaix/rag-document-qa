@@ -20,3 +20,4 @@ sqlmodel>=0.0.24
 arize-phoenix>=4.0
 opentelemetry-exporter-otlp-proto-http>=1.25
 opentelemetry-sdk>=1.25
+rank-bm25==0.2.2

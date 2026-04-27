@@ -238,6 +238,15 @@ class EvalRunner:
                     all_results.append(result)
                     if self._on_progress is not None:
                         self._on_progress(len(all_results), total_questions)
+                    # Phase 2: abort if spend ceiling is exceeded.
+                    ceiling = config.eval.spend_ceiling_usd
+                    if ceiling is not None:
+                        cumulative = sum(r.cost_usd for r in all_results)
+                        if cumulative > ceiling:
+                            raise RuntimeError(
+                                f"Spend ceiling exceeded: ${cumulative:.4f} > ${ceiling:.4f} "
+                                f"after {len(all_results)} questions. Aborting run."
+                            )
             finally:
                 # WHY finally: ensures teardown even if a question raises
                 # an unhandled exception outside the per-question try block.

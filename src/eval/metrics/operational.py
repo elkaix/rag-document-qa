@@ -69,23 +69,39 @@ def aggregate_timings(results: Iterable[EvalResult]) -> dict[str, dict[str, floa
 
 
 def aggregate_costs(results: Iterable[EvalResult]) -> dict[str, float]:
-    """Compute total and mean cost in USD across healthy results.
+    """Compute total and mean cost in USD across healthy results, with per-bucket breakdown.
 
     Args:
         results: Iterable of EvalResult instances from a run.
 
     Returns:
-        Dict with keys "total_usd" and "mean_usd_per_query". Both are
-        0.0 when there are no healthy results.
+        Dict with keys "total_usd", "mean_usd_per_query", "generator_total_usd",
+        "judge_total_usd", "rewriter_total_usd". All are 0.0 when there are no
+        healthy results.
     """
     healthy = _healthy(results)
     if not healthy:
-        return {"total_usd": 0.0, "mean_usd_per_query": 0.0}
+        return {
+            "total_usd": 0.0,
+            "mean_usd_per_query": 0.0,
+            "generator_total_usd": 0.0,
+            "judge_total_usd": 0.0,
+            "rewriter_total_usd": 0.0,
+        }
 
     costs = [r.cost_usd for r in healthy]
     total = float(sum(costs))
     mean = total / len(costs)
-    return {"total_usd": total, "mean_usd_per_query": mean}
+    generator_total = sum(r.cost_breakdown.get("generator", 0.0) for r in healthy)
+    judge_total = sum(r.cost_breakdown.get("judge", 0.0) for r in healthy)
+    rewriter_total = sum(r.cost_breakdown.get("rewriter", 0.0) for r in healthy)
+    return {
+        "total_usd": total,
+        "mean_usd_per_query": mean,
+        "generator_total_usd": generator_total,
+        "judge_total_usd": judge_total,
+        "rewriter_total_usd": rewriter_total,
+    }
 
 
 def aggregate_tokens(results: Iterable[EvalResult]) -> dict[str, float | int]:

@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class EvalQuestion(BaseModel):
@@ -65,7 +65,20 @@ class EvalResult(BaseModel):
     timings_ms: dict[str, float]
     tokens: dict[str, int]
     cost_usd: float
+    # Phase 2: per-bucket breakdown. Defaults to generator-only when absent so
+    # Phase 1 records continue to round-trip through model_validate.
+    cost_breakdown: dict[str, float] = Field(default_factory=dict)
     error: str | None = None
+
+    @model_validator(mode="after")
+    def _backfill_cost_breakdown(self) -> "EvalResult":
+        if not self.cost_breakdown:
+            self.cost_breakdown = {
+                "generator": self.cost_usd,
+                "judge": 0.0,
+                "rewriter": 0.0,
+            }
+        return self
 
 
 class AggregatedMetric(BaseModel):

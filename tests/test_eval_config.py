@@ -96,3 +96,80 @@ class TestLoadConfig:
         cfg = load_config(Path("configs/eval/baseline.yaml"))
         assert cfg.name == "baseline"
         assert "squad_v2_dev_200" in cfg.eval.datasets
+
+
+# --- Phase 2 schema additions ----------------------------------------------
+
+
+def test_phase2_subconfigs_default_to_off(tmp_path):
+    """Loading an existing baseline-shape YAML must produce all-default Phase 2 blocks."""
+    yaml_text = """
+name: legacy_baseline
+description: existing config without phase 2 blocks
+pipeline:
+  chunker: {strategy: recursive, chunk_size: 512, chunk_overlap: 64}
+  retriever: {top_k: 5}
+  generator: {model: gpt-5-mini, reasoning_model: gpt-4.1-nano}
+eval:
+  datasets: [squad_v2_dev_200]
+"""
+    p = tmp_path / "legacy.yaml"
+    p.write_text(yaml_text)
+    from src.eval.config import load_config
+    cfg = load_config(p)
+    assert cfg.pipeline.embedder.name == "chroma_default"
+    assert cfg.pipeline.hybrid.enabled is False
+    assert cfg.pipeline.reranker.model is None
+    assert cfg.pipeline.query_rewriter.model is None
+    assert cfg.pipeline.refusal_handler.enabled is False
+    assert cfg.eval.spend_ceiling_usd is None
+
+
+def test_phase2_subconfig_typed_values(tmp_path):
+    """Phase 2 fields validate to the right types."""
+    yaml_text = """
+name: phase2g
+description: refusal handler enabled
+pipeline:
+  chunker: {strategy: recursive, chunk_size: 512, chunk_overlap: 64}
+  retriever: {top_k: 5}
+  embedder: {name: bge_small_en_v1_5}
+  hybrid: {enabled: true, bm25_top_k: 20, dense_top_k: 20, rrf_k: 60}
+  reranker: {model: ms_marco_minilm_l6_v2, rerank_top_n: 20, final_top_k: 5}
+  query_rewriter: {model: gpt-4.1-nano, max_expansions: 3}
+  generator: {model: gpt-5-mini, reasoning_model: gpt-4.1-nano}
+  refusal_handler: {enabled: true, similarity_threshold: 0.35}
+eval:
+  datasets: [squad_v2_dev_200]
+  spend_ceiling_usd: 1.5
+"""
+    p = tmp_path / "phase2g.yaml"
+    p.write_text(yaml_text)
+    from src.eval.config import load_config
+    cfg = load_config(p)
+    assert cfg.pipeline.embedder.name == "bge_small_en_v1_5"
+    assert cfg.pipeline.hybrid.enabled is True
+    assert cfg.pipeline.reranker.model == "ms_marco_minilm_l6_v2"
+    assert cfg.pipeline.query_rewriter.model == "gpt-4.1-nano"
+    assert cfg.pipeline.refusal_handler.similarity_threshold == 0.35
+    assert cfg.eval.spend_ceiling_usd == 1.5
+
+
+def test_phase2_unknown_field_rejected(tmp_path):
+    """extra='forbid' must reject unknown keys at load time."""
+    yaml_text = """
+name: bad
+description: typo in field name
+pipeline:
+  chunker: {strategy: recursive, chunk_size: 512, chunk_overlap: 64}
+  retriever: {top_k: 5}
+  hybrid: {enabld: true}
+  generator: {model: gpt-5-mini, reasoning_model: gpt-4.1-nano}
+eval:
+  datasets: [squad_v2_dev_200]
+"""
+    p = tmp_path / "bad.yaml"
+    p.write_text(yaml_text)
+    from src.eval.config import load_config
+    with pytest.raises(ValidationError):
+        load_config(p)
