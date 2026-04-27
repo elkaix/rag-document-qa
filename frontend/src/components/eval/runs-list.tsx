@@ -437,7 +437,12 @@ export function RunsList() {
 
   return (
     <>
-      {body}
+      {/*
+       * WHY p-6 wrapper: matches CompareView/RunDetail's outer padding so the
+       * eval routes share consistent breathing room and the toolbar doesn't
+       * sit flush against the top of <main>.
+       */}
+      <div className="p-6">{body}</div>
       {/*
        * PATTERN: Dialog rendered at a stable position in the JSX tree —
        *   outside the conditional `body` branches — so React never unmounts
