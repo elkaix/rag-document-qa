@@ -176,6 +176,17 @@ docker compose up --build
 | API | [localhost:8001](http://localhost:8001) |
 | Swagger Docs | [localhost:8001/docs](http://localhost:8001/docs) |
 
+### Running with traces (Phoenix)
+
+```bash
+docker compose --profile observability up
+```
+
+Phoenix UI is available at http://localhost:6006. The FastAPI backend
+will export per-stage spans (`rag.retrieve`, `rag.generate`) with token
+counts and cost as span attributes. If Phoenix isn't running, the app
+works normally — span export silently fails.
+
 ### Manual Setup
 
 ```bash

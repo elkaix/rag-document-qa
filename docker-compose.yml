@@ -67,5 +67,20 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+  # PATTERN: Profile-gating — Phoenix only starts when explicitly requested
+  #          with `docker compose --profile observability up`. A bare
+  #          `docker compose up` starts only api + frontend, keeping the dev
+  #          experience lightweight.
+  # WHY Phoenix: Arize Phoenix is an open-source, zero-cloud LLM observability
+  #              UI that accepts OTLP spans and renders per-stage trace timelines
+  #              with token counts and cost breakdowns.
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+    profiles: ["observability"]
+    restart: unless-stopped
+
 volumes:
   chroma-model-cache:

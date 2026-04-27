@@ -43,6 +43,7 @@ from src.api.routes import (
 )
 from src.api.routes.eval import router as eval_router
 from src.api.services.eval_runs import RunRegistry
+from src.observability import init_observability
 
 
 @asynccontextmanager
@@ -87,6 +88,15 @@ async def lifespan(app: FastAPI):
     # be a singleton on app.state so POST /api/eval/run and GET /api/eval/runs/{id}/status
     # share the same instance — otherwise status polls would see an empty registry.
     app.state.run_registry = RunRegistry()
+
+    # STEP 5: Initialise OpenTelemetry tracing toward Phoenix (optional).
+    # WHY: Called here — after core resources are ready — so span export never
+    #      blocks startup. init_observability is fail-quiet: if Phoenix is
+    #      unreachable it logs a warning and traces become no-ops. Passing None
+    #      (env var absent) uses the function's built-in default endpoint.
+    # TRADE-OFF: We don't gate on env var presence. The function handles None
+    #            correctly and doing the check here would duplicate its logic.
+    init_observability(otlp_endpoint=os.getenv("OTLP_ENDPOINT"))
 
     yield
 
