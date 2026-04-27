@@ -22,6 +22,11 @@ services:
       - ./tests:/app/tests
       - ./data:/app/data
       - ./books:/app/books
+      # WHY: The eval harness reads YAML configs from configs/eval/ and writes
+      #      run directories to eval_runs/. Mounting both lets the dev loop
+      #      (host CLI runs ↔ in-container API) share artifacts with no copy.
+      - ./configs:/app/configs
+      - ./eval_runs:/app/eval_runs
       # WHY: Cache the ChromaDB ONNX embedding model (79MB) so it doesn't
       #      re-download on every container restart. First startup is slow,
       #      subsequent starts are instant.
