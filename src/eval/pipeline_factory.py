@@ -38,54 +38,13 @@ from typing import Any
 import chromadb
 
 from src.document_loader import TextChunker
+from src.eval._telemetry import count_tokens
 from src.eval.config import EvalConfig
 from src.eval.schemas import EvalQuestion
 from src.llm_handler import LLMHandler
 from src.vector_store import ChromaVectorStore, SearchResult
 
 logger = logging.getLogger(__name__)
-
-# WHY: one-time warning flag for tiktoken fallback — we don't want the
-#      warning to spam on every token-count call throughout an eval run.
-_tiktoken_warned = False
-
-try:
-    import tiktoken as _tiktoken  # type: ignore
-except ImportError:
-    _tiktoken = None  # type: ignore
-
-
-def _count_tokens(text: str, model: str) -> int:
-    """Count tokens in text, falling back to word-count * 1.3 if tiktoken fails.
-
-    WHY the fallback: tiktoken doesn't know every model (new OpenAI releases
-    ship before tiktoken is updated). Eval should not hard-fail on a missing
-    tokenizer — a ±30% estimate is fine for cost/latency tracking.
-
-    Args:
-        text: The text to count tokens for.
-        model: Model name used to select the tiktoken encoding.
-
-    Returns:
-        Estimated token count (int).
-    """
-    global _tiktoken_warned
-    if _tiktoken is not None:
-        try:
-            enc = _tiktoken.encoding_for_model(model)
-            return len(enc.encode(text))
-        except Exception:
-            # Unknown model for tiktoken — fall through to word estimate
-            pass
-
-    if not _tiktoken_warned:
-        logger.warning(
-            "tiktoken not installed or model %r unknown — "
-            "using word-count × 1.3 for token estimates.",
-            model,
-        )
-        _tiktoken_warned = True
-    return int(len(text.split()) * 1.3)
 
 
 # --------------------------------------------------------------------------- #
@@ -268,8 +227,8 @@ class EvalPipeline:
         generate_ms = (t3 - t2) * 1000.0
 
         # ---- TOKEN COUNTING ----------------------------------------------------
-        prompt_tokens = _count_tokens(full_prompt_text, model)
-        completion_tokens = _count_tokens(answer, model)
+        prompt_tokens = count_tokens(full_prompt_text, model)
+        completion_tokens = count_tokens(answer, model)
 
         # ---- COST ESTIMATION ---------------------------------------------------
         cost = pricing.cost_usd(model, prompt_tokens, completion_tokens)
