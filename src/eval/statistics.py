@@ -88,3 +88,62 @@ def bootstrap_ci(
     ci_high = float(np.percentile(resampled_means, 97.5))
 
     return (mean, ci_low, ci_high)
+
+
+def paired_permutation_test(
+    a: list[float],
+    b: list[float],
+    n_resamples: int = 10000,
+    seed: int = 12345,
+) -> tuple[float, float]:
+    """Two-sided paired permutation test on the mean difference.
+
+    The null hypothesis is that the labels "a" and "b" are exchangeable
+    on a per-pair basis (i.e. swapping ``a[i]`` and ``b[i]`` for any
+    subset of indices doesn't change the joint distribution). We
+    estimate the p-value by randomly sign-flipping each paired
+    difference and counting how often the resampled mean difference
+    is at least as extreme as the observed one.
+
+    Args:
+        a: First sample (e.g. per-question metric for run A).
+        b: Second sample, paired one-to-one with ``a``.
+        n_resamples: Number of permutation draws.
+        seed: PRNG seed for reproducibility.
+
+    Returns:
+        ``(observed_delta, p_value)`` where ``observed_delta`` is the
+        mean of ``b[i] - a[i]`` over surviving pairs and ``p_value``
+        is two-sided.
+
+    Raises:
+        ValueError: If ``a`` and ``b`` have different lengths or no
+            pairs survive NaN-drop.
+    """
+    if len(a) != len(b):
+        raise ValueError(
+            f"Paired samples must have equal length: len(a)={len(a)}, len(b)={len(b)}"
+        )
+    arr_a = np.asarray(a, dtype=float)
+    arr_b = np.asarray(b, dtype=float)
+    # Drop pairs where either side is NaN.
+    mask = ~(np.isnan(arr_a) | np.isnan(arr_b))
+    diffs = arr_b[mask] - arr_a[mask]
+    if diffs.size == 0:
+        raise ValueError("No surviving pairs after NaN-drop")
+
+    observed = float(diffs.mean())
+
+    # WHY sign-flips: under the exchangeability null, swapping a[i] and
+    #     b[i] negates the i-th difference. Random sign-flips draw from
+    #     the exact null distribution of the mean difference.
+    rng = np.random.default_rng(seed)
+    signs = rng.choice([-1.0, 1.0], size=(n_resamples, diffs.size))
+    resampled_means = (signs * diffs).mean(axis=1)
+
+    # Two-sided p-value with Phipson & Smyth (2010) correction (+1/+1)
+    # to prevent meaningless p == 0.0.
+    extreme = np.sum(np.abs(resampled_means) >= abs(observed))
+    p_value = float((extreme + 1) / (n_resamples + 1))
+
+    return observed, p_value
