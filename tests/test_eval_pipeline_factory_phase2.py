@@ -18,7 +18,7 @@ from src.eval.config import load_config
 from src.eval.pipeline_factory import build_pipeline
 
 
-PHASE2_DIR = Path("tests/fixtures/phase2_configs")
+PHASE2_DIR = Path("configs/eval/phase2")
 
 
 @pytest.fixture
@@ -74,3 +74,10 @@ def test_phase2_query_with_refusal_short_circuits(stub_llm):
         assert "refusal_check" in telemetry["timings_ms"]
     finally:
         pipeline.teardown()
+
+
+def test_every_phase2_yaml_loads():
+    """Every YAML under configs/eval/phase2/ must validate against EvalConfig."""
+    for path in sorted(PHASE2_DIR.glob("*.yaml")):
+        cfg = load_config(path)
+        assert cfg.name == path.stem, f"{path.name}: cfg.name={cfg.name!r} != {path.stem!r}"
