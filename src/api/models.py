@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from src.api.schemas.telemetry import StageTelemetry
 from src.config import DEFAULT_MODEL
 
 
@@ -50,7 +51,11 @@ class SourceInfo(BaseModel):
 
 
 class QueryResponse(BaseModel):
-    """Response body for the query endpoint."""
+    """Response body for the query endpoint.
+
+    ADDITIVE: `telemetry` was added in Task 5 (Sub-plan 1D). All other fields
+    are unchanged. Clients that ignore unknown fields are unaffected.
+    """
 
     answer: str = Field(description="Generated answer.")
     sources: List[SourceInfo] = Field(default_factory=list, description="Retrieved source chunks.")
@@ -58,6 +63,13 @@ class QueryResponse(BaseModel):
         ge=0.0, le=1.0, description="Estimated answer confidence (0–1)."
     )
     latency_ms: float = Field(description="Total request latency in milliseconds.")
+    # WHY: StageTelemetry carries per-stage timing and token-cost numbers.
+    #      Optional with None default so existing callers that construct
+    #      QueryResponse without telemetry (e.g., older tests) still validate.
+    telemetry: Optional[StageTelemetry] = Field(
+        default=None,
+        description="Per-stage timing, token counts, and cost for this request.",
+    )
 
 
 class UploadResponse(BaseModel):

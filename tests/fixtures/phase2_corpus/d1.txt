@@ -1,0 +1,1 @@
+Reciprocal rank fusion combines two ranked lists by summing 1/(k+rank) for each item.

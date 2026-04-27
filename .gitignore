@@ -10,3 +10,6 @@ books/
 .worktrees/
 data/rag.db
 data/chroma/
+
+# Eval harness run outputs
+eval_runs/

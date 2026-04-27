@@ -32,6 +32,7 @@ Where it fits in the RAG pipeline:
 import hashlib
 import logging
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,6 +41,7 @@ from typing import Any
 from sqlalchemy import Engine
 from sqlmodel import Session, select
 
+from .api.schemas.telemetry import StageTelemetry
 from .config import (
     DEFAULT_MODEL,
     EVAL_MODEL,
@@ -49,6 +51,8 @@ from .config import (
     TOP_K_RESULTS,
 )
 from .document_loader import DocumentLoader, TextChunker
+from .eval._telemetry import count_tokens
+from .eval.pricing import cost_usd
 from .evaluation import (
     evaluate_answer_relevancy,
     evaluate_context_precision,
@@ -59,6 +63,7 @@ from .models.conversation import Conversation
 from .models.document import DocumentRecord
 from .models.evaluation import MessageEvaluation
 from .models.message import Message, MessageSource
+from .observability import get_tracer
 from .vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
@@ -298,6 +303,9 @@ class RAGBackend:
     ) -> dict[str, Any]:
         """Run a full RAG query: retrieve chunks -> build context -> generate answer.
 
+        Thin wrapper over query_with_telemetry() that discards the StageTelemetry
+        so existing callers (tests, route layer) see no behaviour change.
+
         Args:
             question: Natural language question from the user.
             top_k: Number of chunks to retrieve (default from config).
@@ -306,19 +314,71 @@ class RAGBackend:
         Returns:
             Dict with answer (str), sources (list[dict]), confidence (float).
         """
-        k = top_k or TOP_K_RESULTS
+        result, _ = self.query_with_telemetry(question, top_k=top_k, model=model)
+        return result
 
-        # WHY query_text: ChromaDB auto-embeds the question using the same
-        #      embedding function that was used to embed the chunks. This
-        #      ensures query and document embeddings live in the same space.
-        results = self.vector_store.query(query_text=question, top_k=k)
+    def query_with_telemetry(
+        self,
+        question: str,
+        top_k: int | None = None,
+        model: str | None = None,
+    ) -> tuple[dict[str, Any], StageTelemetry]:
+        """Run a full RAG query and return per-stage observability data.
+
+        Identical to query() in output, but also returns a StageTelemetry
+        object with retrieve_ms, generate_ms, prompt_tokens, completion_tokens,
+        and cost_usd. The route layer (Task 5) calls this method so the REST
+        response can include telemetry without changing the query() contract.
+
+        WHY a sibling instead of modifying query():
+          Existing tests assert on result["answer"] and result["sources"] from
+          query(). Changing query() to return a tuple would break them silently
+          at dict-access time. The sibling keeps the tested contract intact.
+
+        RAG Pipeline Position:
+          Question -> [RETRIEVE (traced)] -> [GENERATE (traced)] -> (answer + telemetry)
+
+        Args:
+            question: Natural language question from the user.
+            top_k: Number of chunks to retrieve (default from config).
+            model: LLM model override (creates a new handler if different).
+
+        Returns:
+            Tuple of (result_dict, StageTelemetry). result_dict has the same
+            shape as query(): {answer, sources, confidence}.
+        """
+        k = top_k or TOP_K_RESULTS
+        tracer = get_tracer()
+
+        # ---- PHASE 1: Retrieval (timed + traced) ----------------------------
+        # WHY: We open a span here rather than using @traced_stage because the
+        #      retrieval call is a one-liner on self.vector_store — refactoring
+        #      it to return (payload, attrs) would require an indirection wrapper
+        #      that adds more lines than the inline approach.
+        t_retrieve_start = time.perf_counter()
+        with tracer.start_as_current_span("rag.retrieve") as retrieve_span:
+            retrieve_span.set_attribute("top_k", k)
+            retrieve_span.set_attribute("question_len", len(question))
+            results = self.vector_store.query(query_text=question, top_k=k)
+            retrieve_span.set_attribute("results_count", len(results))
+        retrieve_ms = (time.perf_counter() - t_retrieve_start) * 1000
 
         if not results:
-            return {
-                "answer": "No documents indexed yet. Please upload documents first.",
-                "sources": [],
-                "confidence": 0.0,
-            }
+            # PATTERN: Early return with zero telemetry — no LLM call was made.
+            return (
+                {
+                    "answer": "No documents indexed yet. Please upload documents first.",
+                    "sources": [],
+                    "confidence": 0.0,
+                },
+                StageTelemetry(
+                    retrieve_ms=round(retrieve_ms, 2),
+                    generate_ms=0.0,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    cost_usd=0.0,
+                ),
+            )
 
         # Build context string from retrieved chunks
         context = "\n\n".join(
@@ -331,7 +391,22 @@ class RAGBackend:
         if model and model != self.llm.model:
             handler = LLMHandler(model=model)
 
-        answer = handler.generate_with_context(question, context)
+        # WHY reconstruct prompt strings here: generate_with_context() builds
+        # these internally before calling self.generate(). We reproduce them to
+        # count exactly the tokens that were billed, not a proxy string.
+        answer_system_prompt = (
+            "You are a helpful assistant. Answer the user's question based solely on the "
+            "provided context. If the context does not contain enough information, say so."
+        )
+        answer_user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
+
+        # ---- PHASE 2: Generation (timed + traced) ---------------------------
+        t_generate_start = time.perf_counter()
+        with tracer.start_as_current_span("rag.generate") as generate_span:
+            generate_span.set_attribute("model", handler.model)
+            answer = handler.generate_with_context(question, context)
+            generate_span.set_attribute("answer_len", len(answer))
+        generate_ms = (time.perf_counter() - t_generate_start) * 1000
 
         sources = [
             {
@@ -346,16 +421,33 @@ class RAGBackend:
         ]
 
         # PATTERN: Confidence = clamped average of top-3 similarity scores.
-        #          This gives a rough signal of retrieval quality without
-        #          requiring a separate calibration model.
         top_scores = [r.score for r in results[: min(3, len(results))]]
         confidence = max(0.0, min(1.0, sum(top_scores) / len(top_scores)))
 
-        return {
-            "answer": answer,
-            "sources": sources,
-            "confidence": round(confidence, 4),
-        }
+        # ---- Telemetry assembly ---------------------------------------------
+        # WHY count system_prompt + user_prompt together: together they form
+        # the full input that the provider billed as prompt tokens.
+        prompt_text = answer_system_prompt + "\n" + answer_user_prompt
+        prompt_tokens = count_tokens(prompt_text, handler.model)
+        completion_tokens = count_tokens(answer, handler.model)
+        total_cost = cost_usd(handler.model, prompt_tokens, completion_tokens)
+
+        telemetry = StageTelemetry(
+            retrieve_ms=round(retrieve_ms, 2),
+            generate_ms=round(generate_ms, 2),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=total_cost,
+        )
+
+        return (
+            {
+                "answer": answer,
+                "sources": sources,
+                "confidence": round(confidence, 4),
+            },
+            telemetry,
+        )
 
     def stream_query(
         self,
@@ -367,10 +459,15 @@ class RAGBackend:
         """Retrieve context and stream reasoning + answer with chain-of-thought events.
 
         Event stream shape (in order):
-          ("status", str)       — programmatic retrieval milestones
-          ("reasoning", str)    — LLM chain-of-thought tokens (brief pre-answer pass)
-          ("token", str)        — final answer tokens
-          ("done", dict)        — sources + persistence metadata
+          ("status", str)         — programmatic retrieval milestones
+          ("reasoning", str)      — LLM chain-of-thought tokens (brief pre-answer pass)
+          ("token", str)          — final answer tokens
+          ("done", dict)          — sources + persistence metadata  [UNCHANGED SHAPE]
+          ("telemetry", dict)     — StageTelemetry dict (NEW — additive, after done)
+
+        WHY telemetry is last: Old consumers that handle status/reasoning/token/done
+        and ignore unknown event types continue to work. The ("telemetry", ...) event
+        is purely additive — no existing event shape is modified.
 
         WHY two LLM calls: The reasoning pass uses a focused prompt that asks
         the model to think out loud about the retrieved context BEFORE giving
@@ -381,19 +478,41 @@ class RAGBackend:
         for UX, not a durable artifact of the conversation. Persisting it
         would double storage and confuse the sliding-window context.
 
+        WHY telemetry covers the answer pass only (not reasoning):
+        The reasoning pass uses a separate model (REASONING_MODEL) with its own
+        cost. Telemetry here tracks the user-visible answer generation; mixing
+        two model costs into one StageTelemetry would confuse the "per-query
+        cost" display. Reasoning cost is a separate concern.
+
         Yields:
             Tuples as described above.
         """
         k = top_k or TOP_K_RESULTS
+        tracer = get_tracer()
 
-        # ---- PHASE 0: Retrieval ------------------------------------------------
+        # ---- PHASE 0: Retrieval (timed + traced) --------------------------------
         yield ("status", "Searching indexed documents...")
-        results = self.vector_store.query(query_text=question, top_k=k)
+        t_retrieve_start = time.perf_counter()
+        with tracer.start_as_current_span("rag.retrieve") as retrieve_span:
+            retrieve_span.set_attribute("top_k", k)
+            retrieve_span.set_attribute("question_len", len(question))
+            results = self.vector_store.query(query_text=question, top_k=k)
+            retrieve_span.set_attribute("results_count", len(results))
+        retrieve_ms = (time.perf_counter() - t_retrieve_start) * 1000
 
         if not results:
             yield ("status", "No indexed documents — nothing to retrieve.")
             yield ("token", "No documents indexed yet. Please upload documents first.")
             yield ("done", {"sources": []})
+            # PATTERN: Emit zero telemetry even on early return so the route
+            #          layer always gets a telemetry event it can forward.
+            yield ("telemetry", StageTelemetry(
+                retrieve_ms=round(retrieve_ms, 2),
+                generate_ms=0.0,
+                prompt_tokens=0,
+                completion_tokens=0,
+                cost_usd=0.0,
+            ).model_dump())
             return
 
         # WHY: Summarise retrieval in one status line so the user can see which
@@ -477,7 +596,7 @@ class RAGBackend:
             logger.warning("Reasoning pass failed: %s", exc)
             yield ("status", "Reasoning unavailable — skipping to answer.")
 
-        # ---- PHASE 2: Answer pass ----------------------------------------------
+        # ---- PHASE 2: Answer pass (timed + traced) -----------------------------
         yield ("status", "Composing answer...")
 
         system_prompt = (
@@ -497,8 +616,10 @@ class RAGBackend:
         )
         user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
 
-        # Accumulate full response for persistence
-        full_response = []
+        # Accumulate full response for persistence and token counting
+        full_response: list[str] = []
+
+        t_generate_start = time.perf_counter()
 
         if conversation_id:
             # PHASE 1: Save user message BEFORE streaming
@@ -515,9 +636,15 @@ class RAGBackend:
             messages.append({"role": "user", "content": user_prompt})
 
             # PHASE 4: Stream via messages API (multi-turn aware)
-            for token in handler.stream_messages(messages):
-                full_response.append(token)
-                yield ("token", token)
+            with tracer.start_as_current_span("rag.generate") as generate_span:
+                generate_span.set_attribute("model", handler.model)
+                generate_span.set_attribute("has_conversation", True)
+                for token in handler.stream_messages(messages):
+                    full_response.append(token)
+                    yield ("token", token)
+                generate_span.set_attribute("answer_len", sum(len(t) for t in full_response))
+
+            generate_ms = (time.perf_counter() - t_generate_start) * 1000
 
             # PHASE 5: Save assistant message + sources
             assistant_content = "".join(full_response)
@@ -538,13 +665,43 @@ class RAGBackend:
                 "conversation_id": conversation_id,
             })
 
+            # WHY count full messages list for prompt: the multi-turn path sends
+            # the sliding window + system prompt + user turn as one request.
+            # We join all message content to estimate the billed input tokens.
+            prompt_text = "\n".join(m["content"] for m in messages)
+
         else:
             # No conversation — simple single-turn streaming
-            for token in handler.stream_response(user_prompt, system_prompt=system_prompt):
-                full_response.append(token)
-                yield ("token", token)
+            with tracer.start_as_current_span("rag.generate") as generate_span:
+                generate_span.set_attribute("model", handler.model)
+                generate_span.set_attribute("has_conversation", False)
+                for token in handler.stream_response(user_prompt, system_prompt=system_prompt):
+                    full_response.append(token)
+                    yield ("token", token)
+                generate_span.set_attribute("answer_len", sum(len(t) for t in full_response))
+
+            generate_ms = (time.perf_counter() - t_generate_start) * 1000
 
             yield ("done", {"sources": sources})
+
+            prompt_text = system_prompt + "\n" + user_prompt
+
+        # ---- Telemetry assembly (after done, additive) -----------------------
+        # WHY after done: the done event is what the client waits for to show
+        # sources. Telemetry is a secondary signal — emit it last so done's
+        # latency is not affected by token-counting arithmetic.
+        answer_text = "".join(full_response)
+        prompt_tokens = count_tokens(prompt_text, handler.model)
+        completion_tokens = count_tokens(answer_text, handler.model)
+        total_cost = cost_usd(handler.model, prompt_tokens, completion_tokens)
+
+        yield ("telemetry", StageTelemetry(
+            retrieve_ms=round(retrieve_ms, 2),
+            generate_ms=round(generate_ms, 2),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=total_cost,
+        ).model_dump())
 
     # ------------------------------------------------------------------ #
     # Document management                                                  #

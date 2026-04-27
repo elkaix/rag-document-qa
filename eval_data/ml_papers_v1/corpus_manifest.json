@@ -1,0 +1,6 @@
+{
+  "version": "v1",
+  "description": "ML/AI literature corpus for the ml_papers_v1 dev set.",
+  "papers": [],
+  "comment_for_labelers": "Populate `papers` during corpus assembly. Each entry: {\"id\": \"slug\", \"title\": \"...\", \"source_url\": \"...\", \"local_path\": \"books/<file>.pdf\", \"sha256\": \"<hex>\"}."
+}

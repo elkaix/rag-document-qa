@@ -76,6 +76,26 @@ export interface WsErrorMessage {
   content: string;
 }
 
+/**
+ * Per-request timing and token-cost summary emitted by the backend after
+ * the "done" event. Mirrors the backend `StageTelemetry` dataclass.
+ *
+ * WHY a dedicated interface: keeps the telemetry shape self-documenting and
+ * lets the UI consume it without casting or runtime duck-typing.
+ */
+export interface TelemetryPayload {
+  retrieve_ms: number;
+  generate_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost_usd: number;
+}
+
+export interface WsTelemetryMessage {
+  type: "telemetry";
+  content: TelemetryPayload;
+}
+
 export interface EvaluationScore {
   metric: string;
   score: number;
@@ -96,7 +116,8 @@ export type WsMessage =
   | WsStatusMessage
   | WsDoneMessage
   | WsErrorMessage
-  | WsEvaluationMessage;
+  | WsEvaluationMessage
+  | WsTelemetryMessage;
 
 export interface ChatMessage {
   id: string;
@@ -115,6 +136,8 @@ export interface ChatMessage {
   streamDone?: boolean;
   /** LLM-as-judge evaluation scores (faithfulness, relevancy, precision). */
   evaluation?: EvaluationScore[];
+  /** Per-request timing and cost from the backend telemetry event. */
+  telemetry?: TelemetryPayload;
 }
 
 export interface ConversationSummary {

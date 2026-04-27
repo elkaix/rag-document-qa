@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { ThinkingPanel } from "./thinking-panel";
 import { MarkdownRenderer } from "./markdown-renderer";
 import { EvaluationBadge } from "./evaluation-badge";
+import { TelemetryFooter } from "./telemetry-footer";
 
 // WHY removed TypingIndicator: The bouncing-dots placeholder used to show
 // for the brief window between sending a query and the first server event.
@@ -133,6 +134,14 @@ export function ChatMessage({ message, onEvaluate }: ChatMessageProps) {
           )}
         </div>
       )}
+
+      {/* TelemetryFooter — muted one-liner: Retrieve · Generate · Tokens · Cost.
+          Only renders once telemetry arrives (after the "done" WebSocket event)
+          and only on assistant messages. Purely additive; does not affect layout
+          of surrounding elements. */}
+      {!isUser && message.telemetry ? (
+        <TelemetryFooter telemetry={message.telemetry} />
+      ) : null}
 
       {/* PATTERN: EvaluationBadge is shown only after streaming completes
           (streamDone=true) so it doesn't flash up mid-response. The badge

@@ -41,6 +41,9 @@ from src.api.routes import (
     query_router,
     upload_router,
 )
+from src.api.routes.eval import router as eval_router
+from src.api.services.eval_runs import RunRegistry
+from src.observability import init_observability
 
 
 @asynccontextmanager
@@ -79,6 +82,21 @@ async def lifespan(app: FastAPI):
     # STEP 3: Wire everything into the backend facade
     app.state.engine = engine
     app.state.backend = RAGBackend(engine=engine, collection=collection)
+
+    # STEP 4: Create the eval run registry (in-memory, thread-safe).
+    # WHY: The registry tracks in-flight eval runs across requests. It must
+    # be a singleton on app.state so POST /api/eval/run and GET /api/eval/runs/{id}/status
+    # share the same instance — otherwise status polls would see an empty registry.
+    app.state.run_registry = RunRegistry()
+
+    # STEP 5: Initialise OpenTelemetry tracing toward Phoenix (optional).
+    # WHY: Called here — after core resources are ready — so span export never
+    #      blocks startup. init_observability is fail-quiet: if Phoenix is
+    #      unreachable it logs a warning and traces become no-ops. Passing None
+    #      (env var absent) uses the function's built-in default endpoint.
+    # TRADE-OFF: We don't gate on env var presence. The function handles None
+    #            correctly and doing the check here would duplicate its logic.
+    init_observability(otlp_endpoint=os.getenv("OTLP_ENDPOINT"))
 
     yield
 
@@ -119,6 +137,9 @@ app.include_router(query_router)
 app.include_router(documents_router)
 app.include_router(conversations_router)
 app.include_router(evaluation_router)
+# PATTERN: eval router is separate from the existing evaluation_router (which handles
+# per-message evaluation). This router manages the full eval harness (runs, configs, compare).
+app.include_router(eval_router)
 
 
 @app.get("/health")

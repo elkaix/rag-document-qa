@@ -1,0 +1,18 @@
+name: "baseline"
+description: "Current production defaults: recursive chunker, gpt-5-mini answer model, gpt-4.1-nano reasoning model."
+pipeline:
+  chunker:
+    strategy: "recursive"
+    chunk_size: 512
+    chunk_overlap: 64
+  retriever:
+    top_k: 5
+  generator:
+    model: "gpt-5-mini"
+    reasoning_model: "gpt-4.1-nano"
+eval:
+  datasets: ["squad_v2_dev_200", "ml_papers_v1"]
+  judge_model: "gpt-4.1-mini"
+  bootstrap_n: 1000
+  permutation_n: 10000
+  seed: 42

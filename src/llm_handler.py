@@ -178,6 +178,33 @@ class LLMHandler:
         user_prompt = f"Context:\n{context}\n\nQuestion: {query}\n\nAnswer:"
         return self.generate(user_prompt, system_prompt=system_prompt)
 
+    def generate_with_usage(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+    ) -> tuple[str, int, int]:
+        """Generate a response and return text plus prompt/completion token counts.
+
+        WHY a separate method: the existing `generate()` returns only `str` and is
+        called in many places that don't need usage. Phase 2's cost ledger needs
+        token counts on every LLM call; rather than break callers, we add a parallel
+        method that uses the existing tokenizer to estimate counts client-side.
+
+        Args:
+            prompt: User message.
+            system_prompt: Optional system instructions.
+
+        Returns:
+            (response_text, prompt_tokens, completion_tokens).
+        """
+        from src.eval._telemetry import count_tokens
+
+        text = self.generate(prompt, system_prompt=system_prompt)
+        full_prompt = (system_prompt + "\n" + prompt) if system_prompt else prompt
+        prompt_tokens = count_tokens(full_prompt, self.model)
+        completion_tokens = count_tokens(text, self.model)
+        return text, prompt_tokens, completion_tokens
+
     def stream_response(
         self,
         prompt: str,

@@ -1,0 +1,16 @@
+name: "phase2d_rerank"
+description: "Phase 2 tier 2d — add cross-encoder rerank on top of hybrid."
+pipeline:
+  chunker: {strategy: recursive, chunk_size: 512, chunk_overlap: 64}
+  embedder: {name: bge_small_en_v1_5}
+  retriever: {top_k: 5}
+  hybrid: {enabled: true, bm25_top_k: 20, dense_top_k: 20, rrf_k: 60}
+  reranker: {model: ms_marco_minilm_l6_v2, rerank_top_n: 20, final_top_k: 5}
+  generator: {model: gpt-5-mini, reasoning_model: gpt-4.1-nano}
+eval:
+  datasets: [squad_v2_dev_200]
+  judge_model: gpt-4.1-mini
+  bootstrap_n: 1000
+  permutation_n: 10000
+  seed: 42
+  spend_ceiling_usd: 1.5

@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { wsUrl } from "@/api/client";
-import type { ChatMessage, EvaluationScore, SourceInfo, WsMessage } from "@/api/types";
+import type { ChatMessage, EvaluationScore, SourceInfo, TelemetryPayload, WsMessage } from "@/api/types";
 
 let msgCounter = 0;
 function nextId() {
@@ -127,6 +127,27 @@ export function useChat() {
           setTimeout(() => {
             if (ws.readyState === WebSocket.OPEN) ws.close();
           }, 30_000);
+        } else if (data.type === "telemetry") {
+          // WHY: The backend emits a "telemetry" event immediately after "done"
+          //      (before evaluation) with per-request timing and token cost.
+          //      We attach it to the assistant message so the UI can render a
+          //      TelemetryFooter without polling or a separate API call.
+          //
+          // PATTERN: Same setMessages updater as the other event handlers —
+          //          merge the payload into the target message by ID.
+          //
+          // TEST TODO: A React Testing Library test should feed the sequence
+          //   status → reasoning → token → done → telemetry → evaluation
+          //   and assert that the last assistant message has both a non-empty
+          //   `content` string and a `telemetry` object with numeric fields
+          //   (retrieve_ms, generate_ms, prompt_tokens, completion_tokens, cost_usd).
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantIdRef.current
+                ? { ...m, telemetry: data.content as TelemetryPayload }
+                : m
+            )
+          );
         } else if (data.type === "evaluation") {
           // WHY: The backend fires a separate WebSocket event after the "done"
           //      event with real-time faithfulness scores. We attach it to the

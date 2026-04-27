@@ -7,6 +7,7 @@ import ChatPage from "@/pages/chat";
 import UploadPage from "@/pages/upload";
 import DocumentsPage from "@/pages/documents";
 import SharedPage from "@/pages/shared";
+import { EvalPage } from "@/pages/eval-page";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,6 +23,7 @@ const router = createBrowserRouter([
       { path: "chat/:conversationId?", Component: ChatPage },
       { path: "upload", Component: UploadPage },
       { path: "documents", Component: DocumentsPage },
+      { path: "eval/*", element: <EvalPage /> },
     ],
   },
   { path: "shared/:token", Component: SharedPage },

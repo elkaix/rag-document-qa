@@ -443,6 +443,106 @@ Run: `python -m pytest tests/ -v`
 
 ---
 
+## Evaluation Harness
+
+The `src/eval/` package provides a reproducible evaluation system over labeled gold sets, separate from the user-facing chat path.
+
+### Layers
+
+| Module | Responsibility |
+|--------|----------------|
+| `src/eval/schemas.py` | Pydantic contracts: `EvalQuestion`, `EvalResult`, `AggregatedMetric`, `RunMetadata`, `MetricDelta`, `CompareResult`. |
+| `src/eval/pricing.py` | Hard-coded model price table + `cost_usd()` helper. |
+| `src/eval/statistics.py` | `bootstrap_ci()` and `paired_permutation_test()` for run-level confidence intervals and two-run significance testing. |
+| `src/eval/metrics/retrieval.py` | Recall@k, MRR@k, nDCG@k over `(gold_chunk_ids, retrieved_chunk_ids)`. |
+| `src/eval/metrics/operational.py` | Per-stage latency p50/p95/p99, cost, token aggregation. |
+| `src/eval/metrics/refusal.py` | Regex + LLM-judge refusal correctness for unanswerable questions. |
+| `src/eval/metrics/generation.py` | Wraps existing `src/evaluation.py` LLM-as-judge functions; adds `answer_correctness` (cosine + judge mean) and `context_recall`. |
+| `src/eval/datasets/squad_v2.py` | Seeded sample + frozen 200-row JSONL artifact from HuggingFace `squad_v2`. |
+| `src/eval/datasets/ml_papers.py` | Hand-labeled dev set loader + manifest SHA-256 verification. |
+| `src/eval/config.py` | YAML-loaded `EvalConfig`. |
+| `src/eval/storage.py` | Run-directory CRUD over `eval_runs/<run_id>/`. |
+| `src/eval/pipeline_factory.py` + `src/eval/_telemetry.py` | Builds an isolated RAG pipeline per (config, dataset) using ephemeral Chroma. |
+| `src/eval/aggregator.py` | Per-dataset + combined `AggregatedMetric` rows from per-question results. |
+| `src/eval/runner.py` | Orchestrates `git_sha`, ingest, query+score loop, aggregation, persistence. |
+| `src/eval/compare.py` | Two-run diff with paired permutation tests + per-question regressions/wins. |
+| `src/eval/report.py` + `templates/eval/*.html.j2` | Standalone jinja2 HTML reports. |
+| `src/eval/cli.py` | `run`/`list`/`show`/`compare` argparse subcommands. |
+
+### API + UI
+
+`src/api/routes/eval.py` exposes:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/eval/configs` | List available eval configs |
+| `POST` | `/api/eval/run` | Start a new eval run (dispatched via `BackgroundTasks`) |
+| `GET` | `/api/eval/runs` | List all eval runs |
+| `GET` | `/api/eval/runs/{id}` | Get run metadata |
+| `GET` | `/api/eval/runs/{id}/results` | Per-question results |
+| `GET` | `/api/eval/runs/{id}/status` | Live status for in-progress runs |
+| `GET` | `/api/eval/compare` | Two-run diff with significance tests |
+
+Long-running runs dispatch via FastAPI `BackgroundTasks` and report progress through an in-process `RunRegistry` (`src/api/services/eval_runs.py`).
+
+React route `/eval/*` mounts three views:
+- **`RunsList`** — sortable/filterable table with multi-select compare
+- **`RunDetail`** — metric chart + per-question table with lazy expand
+- **`CompareView`** — side-by-side bars + Top Wins / Top Regressions cards
+
+Charts use `recharts` with CI whiskers.
+
+### Eval Run Directory
+
+Each run produces `eval_runs/<run_id>/` with:
+- `metadata.json` — run ID, git SHA, config name, timestamps
+- `questions.jsonl` — per-question scores and retrieved chunks
+- `metrics.json` — aggregated metric values with bootstrap CIs
+- `cost.json` — token counts and USD costs per model
+- `config.yaml` — snapshot of the config used
+
+The `eval_runs/` directory is gitignored; the labeled dev sets in `eval_data/` are checked in.
+
+---
+
+## Observability
+
+The system exports per-stage spans for every chat query via OpenTelemetry to [Arize Phoenix](https://github.com/Arize-ai/phoenix) on `localhost:6006`.
+
+### Spans
+
+`RAGBackend.query_with_telemetry` and `RAGBackend.stream_query` open spans:
+
+| Span | Attributes |
+|------|------------|
+| `rag.retrieve` | `top_k`, `chunk_count` |
+| `rag.generate` | `model`, `prompt_tokens`, `completion_tokens`, `cost_usd` |
+
+### Telemetry Payload
+
+The same numbers are returned to the client as a `StageTelemetry` Pydantic model (`src/api/schemas/telemetry.py`):
+
+- REST `POST /api/query` — includes a `telemetry` field in the response JSON.
+- WebSocket `/api/chat` — emits a final `{"type": "telemetry", "content": {...}}` event after the existing `done` event.
+
+The frontend renders these as a muted footer line under each assistant chat bubble:
+
+> *Retrieve 142ms · Generate 2.1s · 4,217 tok · $0.0083*
+
+with a hover tooltip showing the prompt/completion token split.
+
+### Running with Traces
+
+Phoenix is profile-gated in `docker-compose.yml`; bare `docker compose up` does not start it.
+
+```bash
+docker compose --profile observability up
+```
+
+`init_observability()` (`src/observability.py`) is called during the FastAPI lifespan startup. It is idempotent and fail-quiet — if Phoenix is unreachable, spans become no-ops and the chat continues to work normally.
+
+---
+
 ## Key Design Decisions
 
 | Decision | Choice | Rationale |
