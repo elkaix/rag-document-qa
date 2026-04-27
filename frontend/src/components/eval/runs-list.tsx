@@ -16,7 +16,7 @@
  *   unrelated parent re-renders.
  */
 
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { useDebounce } from "@/hooks/use-debounce";
 import { useRunsList } from "@/api/eval";
@@ -32,6 +32,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { NewEvalRunDialog } from "@/components/eval/new-eval-run-dialog";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -209,10 +210,21 @@ function RunsListSkeleton() {
  *   the selection — selected IDs that scroll off the visible (filtered) list
  *   remain selected and still count toward the "Compare Selected" threshold.
  *   This avoids surprising selection resets while the user is typing a filter.
+ *
+ * PATTERN: <NewEvalRunDialog> is rendered OUTSIDE the conditional body branches
+ *   so React never unmounts it when the list transitions from "empty" to
+ *   "loaded" after the first run is submitted. If the dialog were inside a
+ *   conditional early-return, its `activeRunId` state (and therefore the
+ *   in-progress toast) would be lost the moment the list refreshes.
  */
 export function RunsList() {
   const navigate = useNavigate();
   const { data, isLoading, isError, error } = useRunsList();
+
+  // Dialog open state lives here so the dialog is rendered at a stable
+  // JSX position (the fragment root below) regardless of which body branch
+  // is currently active.
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   // Search input (raw) and debounced query fed into useMemo.
   const [searchRaw, setSearchRaw] = useState("");
@@ -281,33 +293,29 @@ export function RunsList() {
   }
 
   // -------------------------------------------------------------------------
-  // Render: loading
+  // Body: choose the appropriate inner content for the current data state.
+  // Using a variable (not early returns) keeps <NewEvalRunDialog> at a
+  // stable position in the returned JSX tree.
   // -------------------------------------------------------------------------
 
-  if (isLoading) return <RunsListSkeleton />;
+  let body: React.JSX.Element;
 
-  // -------------------------------------------------------------------------
-  // Render: error
-  // -------------------------------------------------------------------------
-
-  if (isError) {
-    return (
+  if (isLoading) {
+    body = <RunsListSkeleton />;
+  } else if (isError) {
+    body = (
       <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
         Failed to load eval runs:{" "}
         {error instanceof Error ? error.message : "Unknown error"}
       </div>
     );
-  }
-
-  // -------------------------------------------------------------------------
-  // Render: empty (no runs at all, not just filtered out)
-  // -------------------------------------------------------------------------
-
-  if (!data || data.length === 0) {
-    return (
+  } else if (!data || data.length === 0) {
+    body = (
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-end">
-          <NewRunButton />
+          <Button size="sm" onClick={() => setDialogOpen(true)}>
+            New Run
+          </Button>
         </div>
         <div className="rounded-md border border-dashed px-6 py-12 text-center text-muted-foreground">
           <p className="text-sm">No eval runs yet.</p>
@@ -317,108 +325,128 @@ export function RunsList() {
         </div>
       </div>
     );
+  } else {
+    const sortHeadProps = {
+      currentKey: sortKey,
+      currentDir: sortDir,
+      onSort: handleSortClick,
+    };
+
+    body = (
+      <div className="flex flex-col gap-4">
+        {/* Toolbar: search left, action buttons right */}
+        <div className="flex items-center gap-2">
+          <Input
+            placeholder="Filter by config name…"
+            value={searchRaw}
+            onChange={(e) => setSearchRaw(e.target.value)}
+            className="max-w-xs"
+          />
+
+          <div className="ml-auto flex gap-2">
+            {/*
+             * WHY exactly-2 gate: comparing 1 or 3+ runs has no defined meaning
+             * in the current CompareView (it accepts exactly two run IDs).
+             */}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={selected.size !== 2}
+              onClick={handleCompare}
+            >
+              Compare Selected
+            </Button>
+
+            <Button size="sm" onClick={() => setDialogOpen(true)}>
+              New Run
+            </Button>
+          </div>
+        </div>
+
+        <Table>
+          <TableHeader>
+            <TableRow>
+              {/* Checkbox header — no sort, just labels the column */}
+              <TableHead className="w-8" />
+
+              {/* Run ID — not sortable; truncated for display only */}
+              <TableHead className="w-28 font-medium">Run ID</TableHead>
+
+              <SortHead
+                label="Config"
+                sortKey="config_name"
+                {...sortHeadProps}
+              />
+              <SortHead
+                label="Started"
+                sortKey="started_at"
+                {...sortHeadProps}
+              />
+              <SortHead
+                label="Questions"
+                sortKey="n_questions"
+                {...sortHeadProps}
+                className="text-right"
+              />
+              <SortHead
+                label="Errors"
+                sortKey="n_errors"
+                {...sortHeadProps}
+                className="text-right"
+              />
+              <SortHead
+                label="Recall@5"
+                sortKey="headline_metric"
+                {...sortHeadProps}
+                className="text-right"
+              />
+            </TableRow>
+          </TableHeader>
+
+          <TableBody>
+            {sorted.map((run) => (
+              <RunRow
+                key={run.run_id}
+                run={run}
+                isSelected={selected.has(run.run_id)}
+                onToggle={() => toggleSelect(run.run_id)}
+                onRowClick={() => handleRowClick(run.run_id)}
+              />
+            ))}
+
+            {/* Filter produced no results, but runs exist */}
+            {sorted.length === 0 && (
+              <TableRow>
+                <TableCell
+                  colSpan={7}
+                  className="py-8 text-center text-muted-foreground"
+                >
+                  No runs match your filter.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    );
   }
 
   // -------------------------------------------------------------------------
-  // Render: table
+  // Render
   // -------------------------------------------------------------------------
 
-  const sortHeadProps = { currentKey: sortKey, currentDir: sortDir, onSort: handleSortClick };
-
   return (
-    <div className="flex flex-col gap-4">
-      {/* Toolbar: search left, action buttons right */}
-      <div className="flex items-center gap-2">
-        <Input
-          placeholder="Filter by config name…"
-          value={searchRaw}
-          onChange={(e) => setSearchRaw(e.target.value)}
-          className="max-w-xs"
-        />
-
-        <div className="ml-auto flex gap-2">
-          {/*
-           * WHY exactly-2 gate: comparing 1 or 3+ runs has no defined meaning
-           * in the current CompareView (it accepts exactly two run IDs).
-           */}
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={selected.size !== 2}
-            onClick={handleCompare}
-          >
-            Compare Selected
-          </Button>
-
-          <NewRunButton />
-        </div>
-      </div>
-
-      <Table>
-        <TableHeader>
-          <TableRow>
-            {/* Checkbox header — no sort, just labels the column */}
-            <TableHead className="w-8" />
-
-            {/* Run ID — not sortable; truncated for display only */}
-            <TableHead className="w-28 font-medium">Run ID</TableHead>
-
-            <SortHead
-              label="Config"
-              sortKey="config_name"
-              {...sortHeadProps}
-            />
-            <SortHead
-              label="Started"
-              sortKey="started_at"
-              {...sortHeadProps}
-            />
-            <SortHead
-              label="Questions"
-              sortKey="n_questions"
-              {...sortHeadProps}
-              className="text-right"
-            />
-            <SortHead
-              label="Errors"
-              sortKey="n_errors"
-              {...sortHeadProps}
-              className="text-right"
-            />
-            <SortHead
-              label="Recall@5"
-              sortKey="headline_metric"
-              {...sortHeadProps}
-              className="text-right"
-            />
-          </TableRow>
-        </TableHeader>
-
-        <TableBody>
-          {sorted.map((run) => (
-            <RunRow
-              key={run.run_id}
-              run={run}
-              isSelected={selected.has(run.run_id)}
-              onToggle={() => toggleSelect(run.run_id)}
-              onRowClick={() => handleRowClick(run.run_id)}
-            />
-          ))}
-
-          {/* Filter produced no results, but runs exist */}
-          {sorted.length === 0 && (
-            <TableRow>
-              <TableCell
-                colSpan={7}
-                className="py-8 text-center text-muted-foreground"
-              >
-                No runs match your filter.
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
-    </div>
+    <>
+      {body}
+      {/*
+       * PATTERN: Dialog rendered at a stable position in the JSX tree —
+       *   outside the conditional `body` branches — so React never unmounts
+       *   it when data state changes. This preserves the toast's `activeRunId`
+       *   state across the empty→loaded transition that happens right after
+       *   the first run is submitted.
+       */}
+      <NewEvalRunDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+    </>
   );
 }
 
@@ -492,27 +520,3 @@ function RunRow({
   );
 }
 
-// ---------------------------------------------------------------------------
-// New Run button — placeholder until Task 10 (NewEvalRunDialog)
-// ---------------------------------------------------------------------------
-
-/**
- * NewRunButton — triggers the new-eval-run flow.
- *
- * TODO (Task 10): Replace the alert with <NewEvalRunDialog /> once that
- *   component is implemented. Options:
- *     1. Lift `open` state to RunsList and render <NewEvalRunDialog open={open} onOpenChange={setOpen} />
- *     2. Dispatch CustomEvent("eval:new-run") and let a top-level listener open the dialog.
- *   Option 1 is simpler and preferred for a single-page feature.
- */
-function NewRunButton() {
-  return (
-    <Button
-      size="sm"
-      // TODO (Task 10): replace with dialog open handler once NewEvalRunDialog lands.
-      onClick={() => alert("TODO: open NewEvalRunDialog (Task 10)")}
-    >
-      New Run
-    </Button>
-  );
-}
