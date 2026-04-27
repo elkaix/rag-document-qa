@@ -24,6 +24,7 @@ import { NavLink, useLocation, useNavigate } from "react-router";
 import {
   Upload,
   FolderOpen,
+  BarChart3,
   PanelLeftClose,
   PanelLeftOpen,
   FileText,
@@ -79,6 +80,7 @@ import type { ConversationSummary } from "@/api/types";
 const NAV_ITEMS = [
   { to: "/upload", label: "Upload", icon: Upload },
   { to: "/documents", label: "Documents", icon: FolderOpen },
+  { to: "/eval", label: "Evaluation", icon: BarChart3 },
 ] as const;
 
 // --- Date grouping helper ---
