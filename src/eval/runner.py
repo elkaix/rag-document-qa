@@ -149,12 +149,17 @@ class EvalRunner:
         llm_override: object | None = None,
         judge_llm_override: object | None = None,
         on_progress: Callable[[int, int], None] | None = None,
+        run_id_override: str | None = None,
     ) -> None:
         self._config = config
         self._config_path = str(config_path) if config_path else f"<inline:{config.name}>"
         self._llm_override = llm_override
         self._judge_llm_override = judge_llm_override
         self._on_progress = on_progress
+        # WHY run_id_override: the API pre-computes the run_id so it can register
+        # the run in RunRegistry BEFORE the runner starts (enabling status polling).
+        # When set, we use this id instead of computing one from timestamp+sha.
+        self._run_id_override = run_id_override
 
     def run(self) -> RunMetadata:
         """Execute the full eval lifecycle and return run provenance.
@@ -179,7 +184,9 @@ class EvalRunner:
         env_hash = _sha256_of_file(Path("requirements.txt"))[:16]
 
         # --- Run ID and directory ---
-        run_id = compute_run_id(config.name, started_at, git_sha)
+        # WHY: If run_id_override is set (from the API route), use it directly.
+        # This ensures the registered registry run_id matches the saved directory.
+        run_id = self._run_id_override or compute_run_id(config.name, started_at, git_sha)
         # WHY _storage.EVAL_RUNS_DIR at call time: the fixture reloads storage
         # after setting EVAL_RUNS_DIR env var, but runner's top-level import
         # already bound the old value. Reading from the live module attribute

@@ -41,6 +41,8 @@ from src.api.routes import (
     query_router,
     upload_router,
 )
+from src.api.routes.eval import router as eval_router
+from src.api.services.eval_runs import RunRegistry
 
 
 @asynccontextmanager
@@ -79,6 +81,12 @@ async def lifespan(app: FastAPI):
     # STEP 3: Wire everything into the backend facade
     app.state.engine = engine
     app.state.backend = RAGBackend(engine=engine, collection=collection)
+
+    # STEP 4: Create the eval run registry (in-memory, thread-safe).
+    # WHY: The registry tracks in-flight eval runs across requests. It must
+    # be a singleton on app.state so POST /api/eval/run and GET /api/eval/runs/{id}/status
+    # share the same instance — otherwise status polls would see an empty registry.
+    app.state.run_registry = RunRegistry()
 
     yield
 
@@ -119,6 +127,9 @@ app.include_router(query_router)
 app.include_router(documents_router)
 app.include_router(conversations_router)
 app.include_router(evaluation_router)
+# PATTERN: eval router is separate from the existing evaluation_router (which handles
+# per-message evaluation). This router manages the full eval harness (runs, configs, compare).
+app.include_router(eval_router)
 
 
 @app.get("/health")
