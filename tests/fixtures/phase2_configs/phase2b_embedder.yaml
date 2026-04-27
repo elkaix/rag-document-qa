@@ -1,0 +1,14 @@
+name: "phase2b_embedder"
+description: "Phase 2 tier 2b — swap default embedder for BAAI/bge-small-en-v1.5."
+pipeline:
+  chunker: {strategy: recursive, chunk_size: 512, chunk_overlap: 64}
+  embedder: {name: bge_small_en_v1_5}
+  retriever: {top_k: 5}
+  generator: {model: gpt-5-mini, reasoning_model: gpt-4.1-nano}
+eval:
+  datasets: [squad_v2_dev_200]
+  judge_model: gpt-4.1-mini
+  bootstrap_n: 1000
+  permutation_n: 10000
+  seed: 42
+  spend_ceiling_usd: 1.5

@@ -1,0 +1,13 @@
+name: "phase2_baseline"
+description: "Baseline anchor for the Phase 2 matrix — identical to baseline_squad_only."
+pipeline:
+  chunker: {strategy: recursive, chunk_size: 512, chunk_overlap: 64}
+  retriever: {top_k: 5}
+  generator: {model: gpt-5-mini, reasoning_model: gpt-4.1-nano}
+eval:
+  datasets: [squad_v2_dev_200]
+  judge_model: gpt-4.1-mini
+  bootstrap_n: 1000
+  permutation_n: 10000
+  seed: 42
+  spend_ceiling_usd: 1.5

@@ -1,0 +1,1 @@
+Cross-encoders score query-document pairs jointly and improve retrieval precision.
