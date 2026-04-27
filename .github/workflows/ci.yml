@@ -64,13 +64,19 @@ jobs:
           restore-keys: |
             hf-${{ runner.os }}-
 
-      # No API keys are set in CI — every LLM call routes to the dummy fallback,
-      # so providers raise _ProviderUnavailableError and tests don't depend on
-      # real network calls. OTLP traces still try to flush to localhost:6006 and
-      # log connection-refused warnings; that's expected and harmless.
+      # WHY dummy API keys: openai.OpenAI() raises at construction time when
+      # OPENAI_API_KEY is unset, which breaks tests that instantiate LLMHandler
+      # (the dummy-response fallback only kicks in for actual generate() calls).
+      # Any non-empty string lets the client construct; real network calls would
+      # fail at request time but tests use stubs/mocks past the constructor.
+      # OTLP traces still try to flush to localhost:6006 and log connection-refused
+      # warnings; that's expected and harmless.
       - name: Run pytest
         env:
           PYTHONDONTWRITEBYTECODE: "1"
+          OPENAI_API_KEY: dummy_for_ci
+          ANTHROPIC_API_KEY: dummy_for_ci
+          GLM_API_KEY: dummy_for_ci
         run: |
           python -m pytest tests/ -q \
             --cov=src --cov-report=term-missing --cov-report=xml \
