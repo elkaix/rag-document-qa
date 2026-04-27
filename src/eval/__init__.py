@@ -7,3 +7,28 @@ sub-plans.
 """
 
 from __future__ import annotations
+
+from src.eval.pricing import MODEL_PRICES, ModelPrice, cost_usd
+from src.eval.schemas import (
+    AggregatedMetric,
+    CompareResult,
+    EvalQuestion,
+    EvalResult,
+    MetricDelta,
+    RunMetadata,
+)
+from src.eval.statistics import bootstrap_ci, paired_permutation_test
+
+__all__ = [
+    "AggregatedMetric",
+    "CompareResult",
+    "EvalQuestion",
+    "EvalResult",
+    "MetricDelta",
+    "MODEL_PRICES",
+    "ModelPrice",
+    "RunMetadata",
+    "bootstrap_ci",
+    "cost_usd",
+    "paired_permutation_test",
+]
