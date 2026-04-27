@@ -21,6 +21,8 @@
  *   cluttering the message layout.
  */
 
+import { Fragment } from "react";
+
 import type { TelemetryPayload } from "@/api/types";
 import {
   Tooltip,
@@ -108,12 +110,12 @@ function TooltipBreakdown({ telemetry }: { telemetry: TelemetryPayload }) {
   return (
     <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 tabular-nums">
       {rows.map(([label, value]) => (
-        <>
-          <span key={`label-${label}`} className="text-right opacity-70">
-            {label}:
-          </span>
-          <span key={`value-${label}`}>{value}</span>
-        </>
+        // WHY Fragment with key: short-form <>...</> can't carry a key, and
+        //     React warns about missing keys on array children.
+        <Fragment key={label}>
+          <span className="text-right opacity-70">{label}:</span>
+          <span>{value}</span>
+        </Fragment>
       ))}
     </div>
   );
@@ -173,11 +175,12 @@ export function TelemetryFooter({
         }
       >
         {segments.map((seg, i) => (
-          <>
-            {/* Dot before every segment except the first */}
-            {i > 0 && <Dot key={`dot-${i}`} />}
-            <span key={seg}>{seg}</span>
-          </>
+          // WHY Fragment with key: the per-iteration wrapper needs a stable
+          //     identity to satisfy React's array-children key requirement.
+          <Fragment key={seg}>
+            {i > 0 && <Dot />}
+            <span>{seg}</span>
+          </Fragment>
         ))}
       </TooltipTrigger>
 
