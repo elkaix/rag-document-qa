@@ -124,7 +124,7 @@ export function NewEvalRunDialog({
             {configsLoading ? (
               /* Loading skeleton — shown while /api/eval/configs is in flight */
               <Skeleton className="h-9 w-full" />
-            ) : (
+            ) : configs && configs.length > 0 ? (
               /*
                * WHY native <select> over a custom Select primitive:
                *   No shadcn Select component exists in this repo. Adding one
@@ -139,16 +139,29 @@ export function NewEvalRunDialog({
                 className="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
               >
                 <option value="" disabled>
-                  {configs && configs.length > 0
-                    ? "Select a config…"
-                    : "No configs available"}
+                  Select a config…
                 </option>
-                {configs?.map((name) => (
+                {configs.map((name) => (
                   <option key={name} value={name}>
                     {name}
                   </option>
                 ))}
               </select>
+            ) : (
+              /*
+               * Empty-state hint — no configs to choose from. We render plain
+               * text (not a disabled <select>) because a single-option native
+               * dropdown ghosts its own placeholder beneath the trigger when
+               * opened on macOS, which looks like a rendering bug.
+               */
+              <div
+                id="eval-config-select"
+                role="status"
+                className="flex h-9 w-full items-center rounded-lg border border-dashed border-border bg-muted/30 px-3 text-sm text-muted-foreground"
+              >
+                No configs found in{" "}
+                <code className="mx-1 font-mono text-xs">configs/eval/</code>
+              </div>
             )}
 
             {/* Mutation error — shown if the submit POST fails */}
