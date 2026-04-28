@@ -27,6 +27,86 @@ from src.vector_store import ChromaVectorStore
 
 
 # --------------------------------------------------------------------------- #
+# CI mode: stub LLM provider calls                                             #
+# --------------------------------------------------------------------------- #
+#
+# WHY: A handful of tests (test_query_after_ingest, test_*telemetry) construct
+# a real RAGBackend whose query path hits openai's HTTP API. Locally that
+# works because the developer has OPENAI_API_KEY set. In CI no real API key
+# is available, so we stub openai.OpenAI() to avoid the AuthenticationError
+# that would otherwise abort these tests.
+#
+# Activated by the CI_LLM_MOCK env var so local dev behavior is unchanged.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _stub_openai_in_ci():
+    """Replace openai.OpenAI() with an in-process stub when CI_LLM_MOCK is truthy.
+
+    The stub mimics the chat.completions.create() shape used by LLMHandler,
+    returning a canned response with a content attribute and an id. No network
+    call is made.
+    """
+    if os.getenv("CI_LLM_MOCK", "").lower() not in ("1", "true", "yes"):
+        yield
+        return
+
+    try:
+        import openai
+    except ImportError:
+        yield
+        return
+
+    from types import SimpleNamespace
+
+    STUB_TEXT = "Stubbed answer for CI."
+
+    def _make_stub_response():
+        choice = SimpleNamespace(
+            message=SimpleNamespace(content=STUB_TEXT, role="assistant"),
+            finish_reason="stop",
+            index=0,
+        )
+        usage = SimpleNamespace(prompt_tokens=10, completion_tokens=8, total_tokens=18)
+        return SimpleNamespace(
+            id="chatcmpl-stub", choices=[choice], usage=usage,
+            model="stub", created=0, object="chat.completion",
+        )
+
+    def _make_stub_stream_chunks():
+        # Two-token stream so consumers see at least one yield then a finish.
+        for piece in (STUB_TEXT, ""):
+            delta = SimpleNamespace(content=piece, role="assistant")
+            choice = SimpleNamespace(delta=delta, finish_reason=None, index=0)
+            yield SimpleNamespace(
+                id="chatcmpl-stub", choices=[choice], model="stub",
+                created=0, object="chat.completion.chunk",
+            )
+
+    class _StubCompletions:
+        def create(self, **kwargs):
+            if kwargs.get("stream"):
+                return _make_stub_stream_chunks()
+            return _make_stub_response()
+
+    class _StubChat:
+        def __init__(self):
+            self.completions = _StubCompletions()
+
+    class _StubOpenAIClient:
+        def __init__(self, *args, **kwargs):
+            self.chat = _StubChat()
+
+    original = openai.OpenAI
+    openai.OpenAI = _StubOpenAIClient
+    try:
+        yield
+    finally:
+        openai.OpenAI = original
+
+
+# --------------------------------------------------------------------------- #
 # Constants                                                                    #
 # --------------------------------------------------------------------------- #
 
