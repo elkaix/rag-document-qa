@@ -242,3 +242,47 @@ class TestQueryEmptyStore:
         """
         results = store.query(query_embedding=VEC_A, top_k=5)
         assert results == [], f"Expected empty list, got {results}"
+
+
+class TestGetByDocId:
+    """Verify metadata-filtered chunk lookup by doc_id."""
+
+    def test_get_by_doc_id_returns_only_matching_chunks(self, store: ChromaVectorStore):
+        """
+        Upsert chunks from 2 docs; get_by_doc_id returns only the requested doc's chunks.
+
+        WHY: This is a metadata lookup, not a similarity search — it must
+             return every chunk for a doc_id, unordered by relevance, so
+             callers building a "view this document" page see the whole
+             document rather than a top-k slice.
+        """
+        store.upsert(
+            ids=["chunk_a", "chunk_b", "chunk_c"],
+            documents=["Doc1 chunk1", "Doc1 chunk2", "Doc2 chunk1"],
+            metadatas=[
+                {"doc_id": "doc1", "chunk_index": 0},
+                {"doc_id": "doc1", "chunk_index": 1},
+                {"doc_id": "doc2", "chunk_index": 0},
+            ],
+            embeddings=[VEC_A, VEC_B, VEC_C],
+        )
+
+        chunks = store.get_by_doc_id("doc1")
+
+        assert len(chunks) == 2
+        assert {c["chunk_id"] for c in chunks} == {"chunk_a", "chunk_b"}
+        contents = {c["content"] for c in chunks}
+        assert contents == {"Doc1 chunk1", "Doc1 chunk2"}
+        for c in chunks:
+            assert c["metadata"]["doc_id"] == "doc1"
+
+    def test_get_by_doc_id_unknown_doc_returns_empty(self, store: ChromaVectorStore):
+        """A doc_id with no chunks returns an empty list, not an error."""
+        store.upsert(
+            ids=["chunk_a"],
+            documents=["Doc1 chunk1"],
+            metadatas=[{"doc_id": "doc1"}],
+            embeddings=[VEC_A],
+        )
+
+        assert store.get_by_doc_id("nonexistent") == []

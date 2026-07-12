@@ -237,6 +237,43 @@ class ChromaVectorStore:
 
         return results
 
+    def get_by_doc_id(self, doc_id: str) -> list[dict[str, Any]]:
+        """
+        Fetch every chunk belonging to one document, unranked.
+
+        WHY a dict shape rather than SearchResult: this is a metadata filter,
+        not a similarity search — there is no meaningful score to attach.
+        Reusing SearchResult would force a fake score field onto results
+        that were never ranked, which is worse than a smaller, honest shape.
+
+        WHY this method exists: callers that need "every chunk of doc X"
+        (e.g. a document detail view) previously reached into
+        ``self._collection`` directly to run this ChromaDB get() query.
+        Wrapping it here keeps ChromaDB's raw batch-response shape internal
+        to this module.
+
+        Args:
+            doc_id: The document identifier. All chunks with this doc_id
+                    are returned.
+
+        Returns:
+            List of dicts with keys chunk_id, content, metadata — one per
+            chunk, in ChromaDB's storage order (not similarity-ranked).
+            Returns an empty list if no chunks match.
+        """
+        raw = self._collection.get(
+            where={"doc_id": doc_id},
+            include=["documents", "metadatas"],
+        )
+        return [
+            {
+                "chunk_id": chunk_id,
+                "content": raw["documents"][i] if raw["documents"] else "",
+                "metadata": raw["metadatas"][i] if raw["metadatas"] else {},
+            }
+            for i, chunk_id in enumerate(raw["ids"])
+        ]
+
     # ---------------------------------------------------------------------- #
     # Delete operations                                                       #
     # ---------------------------------------------------------------------- #
