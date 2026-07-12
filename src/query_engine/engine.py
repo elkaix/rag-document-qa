@@ -11,23 +11,20 @@ What concept it teaches:
     improvement in the shipped system — there is no second retrieve->generate
     implementation to drift from.
 
-Design Decisions:
-    - The `Retriever` is injected (constructor injection, defaulting to dense at
-      the call site), so hybrid / reranked / multi-query retrieval are swapped by
-      configuration, not code (ADR 0004).
+Design Decisions (full rationale in ADR 0004):
+    - The `Retriever` is injected (constructor injection), so dense / hybrid /
+      reranked / multi-query retrieval are swapped by configuration, not code.
     - `ask` (sync) and `ask_stream` (streaming) are two methods sharing the same
-      prompt / context / telemetry helpers, NOT one body: only the streaming path
-      runs the extra planning pass, so the sync path keeps its single LLM call.
-    - The refusal gate is optional and off by default, preserving today's
-      production behaviour (which has no gate).
+      prompt / context / telemetry helpers, NOT one body: only streaming runs the
+      extra planning pass, so the sync path keeps its single LLM call.
+    - The refusal gate is optional and off by default, preserving production.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Iterator
 
 from src.api.schemas.telemetry import StageTelemetry
 from src.llm_handler import LLMHandler, Usage
@@ -41,24 +38,16 @@ from src.query_engine.prompt import (
     build_context,
     build_reasoning_user_prompt,
 )
+from src.query_engine.streaming import (
+    StreamEvent,
+    StreamResult,
+    build_answer_messages,
+    retrieval_summary,
+)
 from src.retrieval import RefusalHandler, Retriever
 from src.vector_store import SearchResult
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class StreamResult:
-    """The terminal payload of `ask_stream`, carried on the ("result", ...) event.
-
-    The engine yields display events (status/reasoning/token) plus this one
-    internal event so the facade can persist the turn and emit its own
-    done/telemetry events without the engine knowing about conversations.
-    """
-
-    results: list[SearchResult]
-    telemetry: StageTelemetry
-    model: str
 
 
 class QueryEngine:
@@ -171,8 +160,8 @@ class QueryEngine:
         question: str,
         top_k: int | None = None,
         model: str | None = None,
-        history: list[dict] | None = None,
-    ) -> Iterator[tuple[str, Any]]:
+        history: list[dict[str, str]] | None = None,
+    ) -> Iterator[StreamEvent]:
         """Stream retrieve -> plan -> answer as typed events.
 
         Yields ("status"|"reasoning"|"token", str) display events, then one
@@ -210,7 +199,7 @@ class QueryEngine:
             yield ("result", StreamResult([], telemetry_asm.zero(retrieve_ms), self._llm.model))
             return
 
-        yield ("status", _retrieval_summary(results))
+        yield ("status", retrieval_summary(results))
         context = build_context(results)
         handler = self._handler_for(model)
 
@@ -223,7 +212,7 @@ class QueryEngine:
             span.set_attribute("model", handler.model)
             span.set_attribute("has_conversation", bool(history))
             stream = (
-                handler.stream_messages(self._answer_messages(history, context, question))
+                handler.stream_messages(build_answer_messages(history, context, question))
                 if history
                 else handler.stream_response(
                     build_answer_user_prompt(context, question),
@@ -244,7 +233,7 @@ class QueryEngine:
         telemetry = telemetry_asm.assemble(retrieve_ms, generate_ms, handler.model, usage)
         yield ("result", StreamResult(results, telemetry, handler.model))
 
-    def _stream_reasoning(self, context: str, question: str) -> Iterator[tuple[str, Any]]:
+    def _stream_reasoning(self, context: str, question: str) -> Iterator[StreamEvent]:
         """Stream the planning pass; a failure here must not block the answer."""
         yield ("status", f"Analyzing retrieved context ({self._reasoning_llm.model})...")
         try:
@@ -258,20 +247,3 @@ class QueryEngine:
         except Exception as exc:  # noqa: BLE001 — best-effort; degrade to answer.
             logger.warning("Reasoning pass failed: %s", exc)
             yield ("status", "Reasoning unavailable — skipping to answer.")
-
-    @staticmethod
-    def _answer_messages(history: list[dict], context: str, question: str) -> list[dict]:
-        """Build the multi-turn messages list: system + history + current user."""
-        messages: list[dict] = [{"role": "system", "content": ANSWER_SYSTEM_PROMPT}]
-        messages.extend(history)
-        messages.append({"role": "user", "content": build_answer_user_prompt(context, question)})
-        return messages
-
-
-def _retrieval_summary(results: list[SearchResult]) -> str:
-    """Human-readable one-liner naming the files that contributed."""
-    unique_files = sorted({r.metadata.get("filename", "unknown") for r in results if r.metadata.get("filename")})
-    summary = ", ".join(unique_files[:3])
-    if len(unique_files) > 3:
-        summary += f" (+{len(unique_files) - 3} more)"
-    return f"Retrieved {len(results)} chunk(s) across {len(unique_files)} file(s): {summary}"

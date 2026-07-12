@@ -42,6 +42,8 @@ from sqlmodel import Session, select
 
 from .api.schemas.telemetry import StageTelemetry
 from .config import (
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
     DEFAULT_MODEL,
     EVAL_MODEL,
     MAX_TITLE_LENGTH,
@@ -62,11 +64,27 @@ from .models.conversation import Conversation
 from .models.document import DocumentRecord
 from .models.evaluation import MessageEvaluation
 from .models.message import Message, MessageSource
-from .query_engine import QueryEngine
+from .query_engine import QueryEngine, StreamResult
 from .retrieval import build_retriever
-from .vector_store import ChromaVectorStore
+from .vector_store import ChromaVectorStore, SearchResult
 
 logger = logging.getLogger(__name__)
+
+
+def _source_dict(result: SearchResult) -> dict[str, Any]:
+    """Shape one retrieved chunk into the source-citation dict the API returns.
+
+    Returns the fields common to both query paths; the synchronous path attaches
+    ``chunk_index`` on top (the streaming path historically omits it). The two
+    shapes unify under a typed SourceInfo in step 7 of issue #16.
+    """
+    return {
+        "doc_id": result.doc_id,
+        "chunk_id": result.chunk_id,
+        "filename": result.metadata.get("filename"),
+        "score": round(result.score, 4),
+        "excerpt": result.content[:300],
+    }
 
 
 class RAGBackend:
@@ -107,10 +125,12 @@ class RAGBackend:
 
         # TRADE-OFF: Recursive chunking gives better retrieval quality than
         #            fixed-size because it respects paragraph/sentence boundaries.
-        #            512-char chunks with 64-char overlap is a balanced default.
+        # SINGLE SOURCE: chunk size/overlap come from config (CHUNK_SIZE/
+        #            CHUNK_OVERLAP) so the eval harness benchmarks production's
+        #            actual chunking, not a drifted copy (issue #16, step 4c).
         self.chunker = TextChunker(
-            chunk_size=512,
-            chunk_overlap=64,
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP,
             strategy="recursive",
         )
 
@@ -361,14 +381,7 @@ class RAGBackend:
         results, answer, telemetry = self.query_engine.ask(question, top_k=top_k, model=model)
 
         sources = [
-            {
-                "doc_id": r.doc_id,
-                "chunk_id": r.chunk_id,
-                "filename": r.metadata.get("filename"),
-                "score": round(r.score, 4),
-                "excerpt": r.content[:300],
-                "chunk_index": r.metadata.get("chunk_index"),
-            }
+            {**_source_dict(r), "chunk_index": r.metadata.get("chunk_index")}
             for r in results
         ]
 
@@ -437,28 +450,22 @@ class RAGBackend:
         history = self._get_sliding_window(conversation_id) if conversation_id else []
 
         answer_parts: list[str] = []
-        result = None
+        result: StreamResult | None = None
         for event_type, data in self.query_engine.ask_stream(
             question, top_k=top_k, model=model, history=history
         ):
-            if event_type == "result":
+            if isinstance(data, StreamResult):
                 result = data  # internal terminal event — consumed, not forwarded
                 continue
             if event_type == "token":
                 answer_parts.append(data)
             yield (event_type, data)
 
+        # The engine always emits exactly one terminal StreamResult (both the
+        # normal and the no-results/refusal paths), so this binds every time.
+        assert result is not None, "QueryEngine.ask_stream emitted no terminal result"
         results = result.results
-        sources = [
-            {
-                "doc_id": r.doc_id,
-                "chunk_id": r.chunk_id,
-                "filename": r.metadata.get("filename"),
-                "score": round(r.score, 4),
-                "excerpt": r.content[:300],
-            }
-            for r in results
-        ]
+        sources = [_source_dict(r) for r in results]
 
         if conversation_id and results:
             self._save_message(conversation_id, "user", question)
@@ -1179,11 +1186,13 @@ class RAGBackend:
         assistant message. A user message with no assistant reply is NOT a
         complete pair and must be excluded.
 
-        WHY exclude unpaired: The current user question is saved BEFORE streaming
-        starts (phase 1 of stream_query). If we included it in the window, the
-        LLM would see the question twice — once in the window and once as the
-        explicit user turn appended by stream_query. This causes the model to
-        repeat itself or get confused.
+        WHY exclude unpaired: the window is built from PRIOR completed pairs and
+        fed to the answer prompt, which appends the current question as its own
+        user turn. A dangling user message — e.g. a prior turn whose generation
+        failed before its assistant reply was persisted — must not leak in, or
+        the LLM would see a question with no answer and may repeat or get
+        confused. (Since step 4c the current turn is persisted only AFTER
+        generation, so the live question is never in the window regardless.)
 
         Args:
             conversation_id: UUID of the conversation.
