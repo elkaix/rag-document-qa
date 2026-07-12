@@ -32,7 +32,6 @@ Where it fits in the RAG pipeline:
 import hashlib
 import logging
 import tempfile
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +46,8 @@ from .config import (
     EVAL_MODEL,
     MAX_TITLE_LENGTH,
     REASONING_MODEL,
+    RERANK_OVER_FETCH_N,
+    RETRIEVER_STRATEGY,
     SLIDING_WINDOW_SIZE,
     TOP_K_RESULTS,
 )
@@ -56,13 +57,13 @@ from .evaluation import (
     evaluate_context_precision,
     evaluate_faithfulness,
 )
-from .llm_handler import LLMHandler, Usage
-from .telemetry.pricing import cost_usd
+from .llm_handler import LLMHandler
 from .models.conversation import Conversation
 from .models.document import DocumentRecord
 from .models.evaluation import MessageEvaluation
 from .models.message import Message, MessageSource
-from .observability import get_tracer
+from .query_engine import QueryEngine
+from .retrieval import build_retriever
 from .vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
@@ -136,9 +137,25 @@ class RAGBackend:
         #      while strong enough to catch factual errors.
         self.eval_llm = LLMHandler(model=EVAL_MODEL, max_tokens=4096)
 
+        # PATTERN: The QueryEngine owns retrieve->generate for both the sync and
+        #          streaming paths. The Retriever is selected from config
+        #          (RETRIEVER_STRATEGY) behind the seam, so a validated eval
+        #          chain is promoted to production by configuration, not a
+        #          rewrite. Default "dense" preserves current behaviour.
+        self.query_engine = QueryEngine(
+            retriever=build_retriever(
+                RETRIEVER_STRATEGY, self.vector_store,
+                rerank_over_fetch_n=RERANK_OVER_FETCH_N,
+            ),
+            llm=self.llm,
+            reasoning_llm=self.reasoning_llm,
+            top_k=TOP_K_RESULTS,
+        )
+
         logger.info(
-            "RAGBackend initialised (engine=%s, answer_model=%s, reasoning_model=%s, eval_model=%s)",
-            engine.url, DEFAULT_MODEL, REASONING_MODEL, EVAL_MODEL,
+            "RAGBackend initialised (engine=%s, answer_model=%s, reasoning_model=%s, "
+            "eval_model=%s, retriever=%s)",
+            engine.url, DEFAULT_MODEL, REASONING_MODEL, EVAL_MODEL, RETRIEVER_STRATEGY,
         )
 
     # ------------------------------------------------------------------ #
@@ -324,86 +341,24 @@ class RAGBackend:
     ) -> tuple[dict[str, Any], StageTelemetry]:
         """Run a full RAG query and return per-stage observability data.
 
-        Identical to query() in output, but also returns a StageTelemetry
-        object with retrieve_ms, generate_ms, prompt_tokens, completion_tokens,
-        and cost_usd. The route layer (Task 5) calls this method so the REST
-        response can include telemetry without changing the query() contract.
-
-        WHY a sibling instead of modifying query():
-          Existing tests assert on result["answer"] and result["sources"] from
-          query(). Changing query() to return a tuple would break them silently
-          at dict-access time. The sibling keeps the tested contract intact.
+        Delegates retrieve->generate to the shared QueryEngine, then shapes the
+        {answer, sources, confidence} dict the API layer expects. Identical
+        output to query(), plus a StageTelemetry (retrieve/generate timing and
+        provider-reported token cost).
 
         RAG Pipeline Position:
-          Question -> [RETRIEVE (traced)] -> [GENERATE (traced)] -> (answer + telemetry)
+          Question -> [QueryEngine: retrieve -> generate -> telemetry] -> (answer + telemetry)
 
         Args:
             question: Natural language question from the user.
             top_k: Number of chunks to retrieve (default from config).
-            model: LLM model override (creates a new handler if different).
+            model: LLM model override.
 
         Returns:
-            Tuple of (result_dict, StageTelemetry). result_dict has the same
-            shape as query(): {answer, sources, confidence}.
+            Tuple of (result_dict, StageTelemetry). result_dict has the shape
+            {answer, sources, confidence}.
         """
-        k = top_k or TOP_K_RESULTS
-        tracer = get_tracer()
-
-        # ---- PHASE 1: Retrieval (timed + traced) ----------------------------
-        t_retrieve_start = time.perf_counter()
-        with tracer.start_as_current_span("rag.retrieve") as retrieve_span:
-            retrieve_span.set_attribute("top_k", k)
-            retrieve_span.set_attribute("question_len", len(question))
-            results = self.vector_store.query(query_text=question, top_k=k)
-            retrieve_span.set_attribute("results_count", len(results))
-        retrieve_ms = (time.perf_counter() - t_retrieve_start) * 1000
-
-        if not results:
-            # PATTERN: Early return with zero telemetry — no LLM call was made.
-            return (
-                {
-                    "answer": "No documents indexed yet. Please upload documents first.",
-                    "sources": [],
-                    "confidence": 0.0,
-                },
-                StageTelemetry(
-                    retrieve_ms=round(retrieve_ms, 2),
-                    generate_ms=0.0,
-                    prompt_tokens=0,
-                    completion_tokens=0,
-                    cost_usd=0.0,
-                ),
-            )
-
-        # Build context string from retrieved chunks
-        context = "\n\n".join(
-            f"[{r.metadata.get('filename', 'unknown')}] {r.content}"
-            for r in results
-        )
-
-        # Generate answer (create a per-query handler if model differs)
-        handler = self.llm
-        if model and model != self.llm.model:
-            handler = LLMHandler(model=model)
-
-        # Build the answer prompt (system + user). Passing it through
-        # generate_with_usage means telemetry counts the exact tokens the
-        # provider billed — no reconstruction of a proxy string.
-        answer_system_prompt = (
-            "You are a helpful assistant. Answer the user's question based solely on the "
-            "provided context. If the context does not contain enough information, say so."
-        )
-        answer_user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-
-        # ---- PHASE 2: Generation (timed + traced) ---------------------------
-        t_generate_start = time.perf_counter()
-        with tracer.start_as_current_span("rag.generate") as generate_span:
-            generate_span.set_attribute("model", handler.model)
-            answer, prompt_tokens, completion_tokens = handler.generate_with_usage(
-                answer_user_prompt, system_prompt=answer_system_prompt
-            )
-            generate_span.set_attribute("answer_len", len(answer))
-        generate_ms = (time.perf_counter() - t_generate_start) * 1000
+        results, answer, telemetry = self.query_engine.ask(question, top_k=top_k, model=model)
 
         sources = [
             {
@@ -417,29 +372,17 @@ class RAGBackend:
             for r in results
         ]
 
-        # PATTERN: Confidence = clamped average of top-3 similarity scores.
+        # PATTERN: Confidence = clamped average of top-3 similarity scores; 0.0
+        #          when there are no results (empty index or a refusal).
         top_scores = [r.score for r in results[: min(3, len(results))]]
-        confidence = max(0.0, min(1.0, sum(top_scores) / len(top_scores)))
-
-        # ---- Telemetry assembly ---------------------------------------------
-        # Token counts come from the provider-reported usage above (or the
-        # adapter's local count fallback) — never a reconstructed prompt.
-        total_cost = cost_usd(handler.model, prompt_tokens, completion_tokens)
-
-        telemetry = StageTelemetry(
-            retrieve_ms=round(retrieve_ms, 2),
-            generate_ms=round(generate_ms, 2),
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cost_usd=total_cost,
+        confidence = (
+            round(max(0.0, min(1.0, sum(top_scores) / len(top_scores))), 4)
+            if top_scores
+            else 0.0
         )
 
         return (
-            {
-                "answer": answer,
-                "sources": sources,
-                "confidence": round(confidence, 4),
-            },
+            {"answer": answer, "sources": sources, "confidence": confidence},
             telemetry,
         )
 
@@ -474,63 +417,38 @@ class RAGBackend:
 
         WHY telemetry covers the answer pass only (not reasoning):
         The reasoning pass uses a separate model (REASONING_MODEL) with its own
-        cost. Telemetry here tracks the user-visible answer generation; mixing
-        two model costs into one StageTelemetry would confuse the "per-query
-        cost" display. Reasoning cost is a separate concern.
+        cost. Telemetry here tracks the user-visible answer generation; the
+        engine drops the reasoning pass's usage so the "per-query cost" display
+        reflects one model's spend.
+
+        WHY persistence is deferred to the terminal event: the QueryEngine owns
+        retrieve->generate and yields a terminal ("result", ...) carrying the
+        chunks + telemetry. This facade owns only conversation persistence — it
+        saves the user and assistant messages together, and only when retrieval
+        produced results, so an empty index leaves nothing persisted (as before)
+        and all conversation writes concentrate at one point.
 
         Yields:
             Tuples as described above.
         """
-        k = top_k or TOP_K_RESULTS
-        tracer = get_tracer()
+        # The sliding window is prior *completed* pairs; the current question is
+        # unpaired, so computing the window before persisting the user message is
+        # behaviour-identical to computing it after (the old ordering).
+        history = self._get_sliding_window(conversation_id) if conversation_id else []
 
-        # ---- PHASE 0: Retrieval (timed + traced) --------------------------------
-        yield ("status", "Searching indexed documents...")
-        t_retrieve_start = time.perf_counter()
-        with tracer.start_as_current_span("rag.retrieve") as retrieve_span:
-            retrieve_span.set_attribute("top_k", k)
-            retrieve_span.set_attribute("question_len", len(question))
-            results = self.vector_store.query(query_text=question, top_k=k)
-            retrieve_span.set_attribute("results_count", len(results))
-        retrieve_ms = (time.perf_counter() - t_retrieve_start) * 1000
+        answer_parts: list[str] = []
+        result = None
+        for event_type, data in self.query_engine.ask_stream(
+            question, top_k=top_k, model=model, history=history
+        ):
+            if event_type == "result":
+                result = data  # internal terminal event — consumed, not forwarded
+                continue
+            if event_type == "token":
+                answer_parts.append(data)
+            yield (event_type, data)
 
-        if not results:
-            yield ("status", "No indexed documents — nothing to retrieve.")
-            yield ("token", "No documents indexed yet. Please upload documents first.")
-            yield ("done", {"sources": []})
-            # PATTERN: Emit zero telemetry even on early return so the route
-            #          layer always gets a telemetry event it can forward.
-            yield ("telemetry", StageTelemetry(
-                retrieve_ms=round(retrieve_ms, 2),
-                generate_ms=0.0,
-                prompt_tokens=0,
-                completion_tokens=0,
-                cost_usd=0.0,
-            ).model_dump())
-            return
-
-        # WHY: Summarise retrieval in one status line so the user can see which
-        #      files contributed without inspecting the sources panel yet.
-        filenames = [r.metadata.get("filename", "unknown") for r in results]
-        unique_files = sorted({f for f in filenames if f})
-        file_summary = ", ".join(unique_files[:3])
-        if len(unique_files) > 3:
-            file_summary += f" (+{len(unique_files) - 3} more)"
-        yield (
-            "status",
-            f"Retrieved {len(results)} chunk(s) across {len(unique_files)} file(s): {file_summary}",
-        )
-
-        # Build context from retrieved chunks (shared by reasoning + answer)
-        context = "\n\n".join(
-            f"[{r.metadata.get('filename', 'unknown')}] {r.content}"
-            for r in results
-        )
-
-        handler = self.llm
-        if model and model != self.llm.model:
-            handler = LLMHandler(model=model)
-
+        results = result.results
         sources = [
             {
                 "doc_id": r.doc_id,
@@ -542,166 +460,27 @@ class RAGBackend:
             for r in results
         ]
 
-        # ---- PHASE 1: Reasoning pass (chain-of-thought) ------------------------
-        # WHY a dedicated reasoning prompt: Asking the model to "think first,
-        # answer later" in a single call is brittle — formatting drifts between
-        # providers. A separate short call with a focused system prompt gives
-        # deterministic reasoning tokens we can stream as their own event type.
-        #
-        # WHY a dedicated reasoning model: The CoT output is short, throwaway
-        # scaffolding. Running it through the user's (potentially premium)
-        # answer model doubles cost for no quality gain. self.reasoning_llm is
-        # cached to REASONING_MODEL (default: gpt-5-nano) independent of the
-        # answer model — so premium answers stay cheap to "think" about.
-        yield ("status", f"Analyzing retrieved context ({self.reasoning_llm.model})...")
-
-        # WHY a RESEARCH-PLAN style prompt (not raw CoT): exposing raw generated
-        #      chain-of-thought is a documented product risk — the model may
-        #      verbalise uncertain or incorrect intermediate beliefs that users
-        #      mistake for confident answers. Instead we ask for a concise,
-        #      outcome-oriented *reasoning summary* that describes the plan
-        #      without asserting factual conclusions. Still streams live so
-        #      the UI's two-step feel (plan → answer) is preserved.
-        reasoning_system = (
-            "You are the planning step of a retrieval-augmented Q&A system. "
-            "In 3-5 concise sentences, summarise how you will construct the "
-            "answer using the retrieved excerpts. Cover:\n"
-            "1) What the user is asking, resolving any ambiguity explicitly.\n"
-            "2) Which excerpts are most relevant and the gist of their support.\n"
-            "3) Any gaps or conflicts the reader should be aware of.\n"
-            "4) The shape of the answer you will give next.\n"
-            "Stay factual and outcome-oriented — describe the plan, do not "
-            "verbalise stream-of-consciousness reasoning. No markdown headings, "
-            "no bullet lists, no preamble. Do NOT produce the final answer."
-        )
-        reasoning_user = (
-            f"Context:\n{context}\n\nQuestion: {question}\n\n"
-            "Reasoning plan (summary only, do not answer):"
-        )
-
-        try:
-            for item in self.reasoning_llm.stream_response(
-                reasoning_user, system_prompt=reasoning_system
-            ):
-                # The reasoning pass reports its own usage, but telemetry covers
-                # the answer pass only — so drop the reasoning terminal Usage.
-                if isinstance(item, Usage):
-                    continue
-                yield ("reasoning", item)
-        except Exception as exc:
-            # PATTERN: Reasoning is best-effort — a failure here must not block
-            # the final answer. Log, emit a terse status, continue to the answer.
-            logger.warning("Reasoning pass failed: %s", exc)
-            yield ("status", "Reasoning unavailable — skipping to answer.")
-
-        # ---- PHASE 2: Answer pass (timed + traced) -----------------------------
-        yield ("status", "Composing answer...")
-
-        system_prompt = (
-            "You are a helpful assistant. Answer the user's question based solely on the "
-            "provided context. If the context does not contain enough information, say so.\n\n"
-            "Format your response using Markdown for readability:\n"
-            "- Use ## for main sections and ### for sub-sections (max 3 levels)\n"
-            "- Use **bold** for key terms and important concepts\n"
-            "- Use bullet points (-) for lists of related items\n"
-            "- Use numbered lists (1.) for sequential steps\n"
-            "- Use `inline code` for technical terms, parameters, or commands\n"
-            "- Use fenced code blocks (```language) for code snippets\n"
-            "- Use > blockquotes for notable quotes from the context\n"
-            "- Keep paragraphs short (2-3 sentences max)\n"
-            "- Add blank lines between sections for visual breathing room\n"
-            "Do NOT use # (h1) headings. Start directly with content or ## sections."
-        )
-        user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-
-        # Accumulate full response for persistence; capture the answer pass's
-        # reported usage (yielded as the stream's terminal event) for telemetry.
-        full_response: list[str] = []
-        answer_usage: Usage | None = None
-
-        t_generate_start = time.perf_counter()
-
-        if conversation_id:
-            # PHASE 1: Save user message BEFORE streaming
+        if conversation_id and results:
             self._save_message(conversation_id, "user", question)
-
-            # PHASE 2: Load sliding window (completed pairs only — excludes
-            #          the just-saved user message because it has no assistant
-            #          reply yet).
-            window = self._get_sliding_window(conversation_id)
-
-            # PHASE 3: Build messages list for multi-turn generation
-            messages = [{"role": "system", "content": system_prompt}]
-            messages.extend(window)
-            messages.append({"role": "user", "content": user_prompt})
-
-            # PHASE 4: Stream via messages API (multi-turn aware)
-            with tracer.start_as_current_span("rag.generate") as generate_span:
-                generate_span.set_attribute("model", handler.model)
-                generate_span.set_attribute("has_conversation", True)
-                for item in handler.stream_messages(messages):
-                    if isinstance(item, Usage):
-                        answer_usage = item
-                        continue
-                    full_response.append(item)
-                    yield ("token", item)
-                generate_span.set_attribute("answer_len", sum(len(t) for t in full_response))
-
-            generate_ms = (time.perf_counter() - t_generate_start) * 1000
-
-            # PHASE 5: Save assistant message + sources
-            assistant_content = "".join(full_response)
             assistant_msg_id = self._save_message(
-                conversation_id, "assistant", assistant_content,
-                model=handler.model, sources=sources,
+                conversation_id, "assistant", "".join(answer_parts),
+                model=result.model, sources=sources,
             )
-
-            # PHASE 6: Auto-title on first message
+            # WHY: Auto-title on the first turn so the sidebar shows something
+            #      meaningful; message_id + conversation_id let the frontend
+            #      update local state without re-fetching.
             self._auto_title(conversation_id, question)
-
-            # WHY: Include message_id and conversation_id in the done event
-            #      so the frontend can update its local state (add the new
-            #      message to the conversation without re-fetching).
             yield ("done", {
                 "sources": sources,
                 "message_id": assistant_msg_id,
                 "conversation_id": conversation_id,
             })
-
         else:
-            # No conversation — simple single-turn streaming
-            with tracer.start_as_current_span("rag.generate") as generate_span:
-                generate_span.set_attribute("model", handler.model)
-                generate_span.set_attribute("has_conversation", False)
-                for item in handler.stream_response(user_prompt, system_prompt=system_prompt):
-                    if isinstance(item, Usage):
-                        answer_usage = item
-                        continue
-                    full_response.append(item)
-                    yield ("token", item)
-                generate_span.set_attribute("answer_len", sum(len(t) for t in full_response))
-
-            generate_ms = (time.perf_counter() - t_generate_start) * 1000
-
             yield ("done", {"sources": sources})
 
-        # ---- Telemetry assembly (after done, additive) -----------------------
-        # WHY after done: the done event is what the client waits for to show
-        # sources. Telemetry is a secondary signal — emit it last.
-        #
-        # Usage is the answer pass's reported figure (provider-reported where the
-        # provider supplies it, adapter-counted otherwise), carried on the
-        # stream's terminal event — no prompt reconstruction.
-        usage = answer_usage or Usage(prompt_tokens=0, completion_tokens=0)
-        total_cost = cost_usd(handler.model, usage.prompt_tokens, usage.completion_tokens)
-
-        yield ("telemetry", StageTelemetry(
-            retrieve_ms=round(retrieve_ms, 2),
-            generate_ms=round(generate_ms, 2),
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-            cost_usd=total_cost,
-        ).model_dump())
+        # Telemetry last (additive): the done event is what the client waits on
+        # for sources; telemetry is a secondary signal.
+        yield ("telemetry", result.telemetry.model_dump())
 
     # ------------------------------------------------------------------ #
     # Document management                                                  #

@@ -62,6 +62,18 @@ CHUNK_OVERLAP: int = 50
 
 TOP_K_RESULTS: int = 5
 
+# WHY a strategy selector: the Retriever seam (ADR 0004) makes dense, reranked,
+#      hybrid, and multi-query retrieval interchangeable. Production picks one
+#      here, so an eval-validated chain is promoted by config, not by a rewrite.
+#      "dense" is the behaviour-preserving default; "reranked" is wired;
+#      "hybrid"/"multi_query" are recognised but deferred (see build_retriever).
+RETRIEVER_STRATEGY: str = "dense"
+
+# WHY 20: the reranked strategy over-fetches this many dense candidates before
+#         the cross-encoder narrows them — wide enough to give the precise
+#         reranker real choice, matching the eval-tuned default.
+RERANK_OVER_FETCH_N: int = 20
+
 # ---------------------------------------------------------------------------
 # API server
 # ---------------------------------------------------------------------------
