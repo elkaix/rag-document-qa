@@ -56,7 +56,8 @@ class OpenAICompatibleAdapter:
         max_tokens: int,
         client_factory: Callable[[], object],
     ) -> None:
-        """
+        """Store generation settings and the injected client factory.
+
         Args:
             model: Model name (also decides the constrained-model quirks).
             temperature: Sampling temperature (dropped for constrained models).
@@ -70,9 +71,9 @@ class OpenAICompatibleAdapter:
         self.max_tokens = max_tokens
         self._client_factory = client_factory
 
-    def _request_kwargs(self, **extra: object) -> dict:
+    def _request_kwargs(self, **extra: object) -> dict[str, object]:
         """Assemble the create() kwargs shared by generate() and stream()."""
-        kwargs: dict = {
+        kwargs: dict[str, object] = {
             "model": self.model,
             "max_completion_tokens": self.max_tokens,
             **extra,

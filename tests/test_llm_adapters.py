@@ -33,10 +33,12 @@ from src.llm_handler.adapters.base import (
 )
 import requests
 
+from src.llm_handler import LLMHandler
 from src.llm_handler.adapters.anthropic import AnthropicAdapter
 from src.llm_handler.adapters.dummy import DummyAdapter
 from src.llm_handler.adapters.ollama import OllamaAdapter
 from src.llm_handler.adapters.openai_compatible import OpenAICompatibleAdapter
+from src.llm_handler.providers import build_adapter, detect_provider
 
 
 # --------------------------------------------------------------------------- #
@@ -418,3 +420,34 @@ class TestOllamaAdapter:
         )
         assert isinstance(items[-1], Usage)
         assert items[-1].completion_tokens > 0
+
+
+# --------------------------------------------------------------------------- #
+# Provider selection — model prefix -> adapter, incl. the GLM branch          #
+# --------------------------------------------------------------------------- #
+
+class TestProviderSelection:
+    """LLMHandler picks one adapter per model; GLM shares the OpenAI adapter."""
+
+    def test_detect_provider_routes_by_prefix(self) -> None:
+        assert detect_provider("gpt-4") == "openai"
+        assert detect_provider("claude-sonnet-4-5") == "anthropic"
+        assert detect_provider("glm-5.1") == "glm"
+        assert detect_provider("llama3") == "ollama"
+
+    def test_glm_model_selects_openai_compatible_adapter(self) -> None:
+        adapter = build_adapter(
+            "glm-5.1", 0.7, 256, api_key="k", ollama_base_url="http://localhost:11434"
+        )
+        assert isinstance(adapter, OpenAICompatibleAdapter)
+
+    def test_glm_without_key_falls_back_to_dummy(self, monkeypatch) -> None:
+        """A GLM model with no GLM_API_KEY is unconfigured -> dummy fallback.
+
+        WHY this branch matters: GLM's key/base-url swap is the one part of the
+        selection logic the OpenAI adapter's own tests don't cover.
+        """
+        monkeypatch.delenv("GLM_API_KEY", raising=False)
+        handler = LLMHandler("glm-5.1")  # api_key=None, so no GLM key available
+
+        assert "[LLM unavailable]" in handler.generate("hi")

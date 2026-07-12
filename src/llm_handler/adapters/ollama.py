@@ -55,7 +55,8 @@ class OllamaAdapter:
         base_url: str,
         client_factory: Callable[[], object],
     ) -> None:
-        """
+        """Store generation settings, the server URL, and the injected factory.
+
         Args:
             model: Ollama model tag (e.g. ``llama3``).
             temperature: Sampling temperature, sent under ``options``.
@@ -70,7 +71,7 @@ class OllamaAdapter:
         self.base_url = base_url
         self._client_factory = client_factory
 
-    def _payload(self, messages: list[dict], *, stream: bool) -> dict:
+    def _payload(self, messages: list[dict], *, stream: bool) -> dict[str, object]:
         """Build the /api/chat request body."""
         return {
             "model": self.model,

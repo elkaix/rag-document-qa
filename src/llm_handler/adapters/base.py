@@ -30,6 +30,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterator, Protocol, runtime_checkable
 
+from src.telemetry.tokens import count_tokens
+
 
 class ProviderUnavailableError(RuntimeError):
     """Raised when a provider is not usable for configuration reasons.
@@ -87,8 +89,6 @@ def counted_usage(input_text: str, output_text: str, model: str) -> Usage:
     uses it, and the real adapters fall back to it only when a provider omits
     usage (e.g. a stream that carries no terminal usage chunk).
     """
-    from src.telemetry.tokens import count_tokens
-
     return Usage(
         prompt_tokens=count_tokens(input_text, model),
         completion_tokens=count_tokens(output_text, model),

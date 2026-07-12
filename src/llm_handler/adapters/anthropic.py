@@ -34,7 +34,8 @@ class AnthropicAdapter:
         max_tokens: int,
         client_factory: Callable[[], object],
     ) -> None:
-        """
+        """Store generation settings and the injected client factory.
+
         Args:
             model: Claude model name.
             max_tokens: Output token cap.
@@ -49,11 +50,11 @@ class AnthropicAdapter:
         self.max_tokens = max_tokens
         self._client_factory = client_factory
 
-    def _request_kwargs(self, messages: list[dict]) -> dict:
+    def _request_kwargs(self, messages: list[dict]) -> dict[str, object]:
         """Split system messages out and build the create()/stream() kwargs."""
         system_parts = [m["content"] for m in messages if m["role"] == "system"]
         non_system = [m for m in messages if m["role"] != "system"]
-        kwargs: dict = {
+        kwargs: dict[str, object] = {
             "model": self.model,
             "max_tokens": self.max_tokens,
             "messages": non_system,
