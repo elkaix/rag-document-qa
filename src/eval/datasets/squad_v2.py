@@ -63,7 +63,10 @@ def sample_and_freeze(
     from datasets import load_dataset
 
     logger.info("Loading squad_v2 validation split (caches in ~/.cache/huggingface)...")
-    ds = load_dataset("squad_v2", split="validation")
+    # WHY the namespaced id: huggingface_hub 1.x rejects bare dataset ids
+    # ("squad_v2"), requiring the canonical "namespace/name" form. Paired with
+    # datasets>=3, this restores loading on current dependency versions (#18).
+    ds = load_dataset("rajpurkar/squad_v2", split="validation")
     shuffled = ds.shuffle(seed=seed)
     sample = shuffled.select(range(sample_size))
 
