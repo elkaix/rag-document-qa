@@ -14,7 +14,7 @@ def _sr(chunk_id: str, content: str, score: float, metadata: dict | None = None)
 
 @pytest.fixture(scope="module")
 def reranker():
-    from src.eval.retrievers.reranker import CrossEncoderReranker
+    from src.retrieval.reranker import CrossEncoderReranker
     return CrossEncoderReranker()
 
 

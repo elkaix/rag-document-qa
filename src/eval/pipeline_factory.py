@@ -454,7 +454,7 @@ def _build_hybrid_retriever(cfg, vector_store, documents: dict[str, str]):
     """
     if not cfg.enabled:
         return None
-    from src.eval.retrievers import BM25HybridRetriever
+    from src.retrieval import BM25HybridRetriever
     return BM25HybridRetriever(
         vector_store=vector_store, documents=documents,
         bm25_top_k=cfg.bm25_top_k, dense_top_k=cfg.dense_top_k, rrf_k=cfg.rrf_k,
@@ -472,7 +472,7 @@ def _build_reranker(cfg):
     """
     if cfg.model is None:
         return None
-    from src.eval.retrievers import CrossEncoderReranker
+    from src.retrieval import CrossEncoderReranker
     return CrossEncoderReranker()
 
 
@@ -489,7 +489,7 @@ def _build_rewriter(cfg, llm):
     """
     if cfg.model is None:
         return None
-    from src.eval.transforms import QueryRewriter
+    from src.retrieval import QueryRewriter
     return QueryRewriter(model=cfg.model, max_expansions=cfg.max_expansions, llm=llm)
 
 
@@ -504,7 +504,7 @@ def _build_refusal(cfg):
     """
     if not cfg.enabled:
         return None
-    from src.eval.transforms import RefusalHandler
+    from src.retrieval import RefusalHandler
     return RefusalHandler(
         enabled=True, similarity_threshold=cfg.similarity_threshold,
         no_answer_text=cfg.no_answer_text,

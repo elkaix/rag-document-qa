@@ -1,13 +1,21 @@
-"""QueryRewriter — LLM-based query expansion with token/cost capture.
+"""Multi-query expansion — the LLM rewriter and the Retriever adapter that composes it.
 
 Pipeline position:
-    user query → [QueryRewriter] → {q, q', q''} → Retriever → ...
+    user query → [MultiQueryRetriever → QueryRewriter] → {q, q', q''} → inner Retriever → union
 
-Phase 2 lever 2e. Expansion gives the retriever multiple lexical/semantic
-formulations of the same intent, which raises recall on questions where the
-original phrasing diverges from the corpus phrasing. We use a tiny model
-(gpt-4.1-nano) because the task is cheap and we don't want this lever to
-dominate the cost ledger.
+Two collaborators live here:
+
+- `QueryRewriter` expands one user query into alternative phrasings via a tiny LLM
+  (gpt-4.1-nano — cheap, so this lever doesn't dominate the cost ledger). Expansion
+  raises recall when the user's phrasing diverges from the corpus phrasing.
+- `MultiQueryRetriever` presents the `Retriever` interface by *composing* an inner
+  Retriever: it fans the expansions out, unions the results, and dedups by
+  chunk_id keeping each chunk's best score. The "compose rather than conform"
+  adapter from ADR 0004.
+
+The rewriter reports its own token cost; that number is dropped at this seam
+(the pure `Retriever` interface has no cost channel). Surfacing multi-query cost
+into telemetry is deferred to the QueryEngine convergence (step 4c).
 """
 
 from __future__ import annotations
@@ -17,7 +25,9 @@ import logging
 import re
 from typing import Protocol
 
+from src.retrieval.base import Retriever
 from src.telemetry import pricing
+from src.vector_store import SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -105,3 +115,50 @@ class QueryRewriter:
         if not isinstance(parsed, list):
             return []
         return [str(item) for item in parsed if isinstance(item, str)]
+
+
+class _Rewriter(Protocol):
+    """Structural type for a query expander (the one collaborator we inject)."""
+
+    def expand(self, query: str) -> tuple[list[str], float, int, int]: ...
+
+
+class MultiQueryRetriever:
+    """Retriever adapter: fan an inner Retriever out over rewritten queries.
+
+    Presents `retrieve(query, top_k)` while delegating expansion to a rewriter and
+    candidate generation to an inner Retriever — so multi-query retrieval is
+    interchangeable with any other strategy behind the same seam.
+    """
+
+    def __init__(self, inner: Retriever, rewriter: _Rewriter) -> None:
+        """Compose an inner Retriever with a query expander.
+
+        Args:
+            inner: The Retriever run once per expanded query.
+            rewriter: Produces the alternative phrasings (original query first).
+        """
+        self._inner = inner
+        self._rewriter = rewriter
+
+    def retrieve(self, query: str, top_k: int = 5) -> list[SearchResult]:
+        """Retrieve for every expansion, union, dedup by chunk_id, rank best-first.
+
+        Args:
+            query: The original user query.
+            top_k: Number of results to return after the union is ranked. Each
+                expansion is itself retrieved at `top_k` before the union.
+
+        Returns:
+            Up to `top_k` SearchResults ordered by descending score. When a chunk
+            surfaces under several expansions, its highest score wins (dense
+            similarities share the embedding space, so they compare directly).
+        """
+        best: dict[str, SearchResult] = {}
+        for expansion in self._rewriter.expand(query)[0]:
+            for result in self._inner.retrieve(expansion, top_k=top_k):
+                current = best.get(result.chunk_id)
+                if current is None or result.score > current.score:
+                    best[result.chunk_id] = result
+        ranked = sorted(best.values(), key=lambda r: r.score, reverse=True)
+        return ranked[:top_k]
