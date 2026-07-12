@@ -12,11 +12,10 @@ Design decisions:
   - Ephemeral Chroma collection per (config, dataset) so two concurrent
     runs cannot pollute each other's vectors. Random suffix on the
     collection name guards against collisions.
-  - Per-stage timings via time.perf_counter() so the runner can record
-    p50/p95/p99 latency at aggregation time.
-  - Token counting: tiktoken if available, word-count×1.3 fallback —
-    eval should not hard-fail because a tokenizer for a new model
-    isn't installed.
+  - retrieve->generate is delegated to the shared QueryEngine (issue #16,
+    step 4c): the levers become a composed Retriever behind the seam, and the
+    prompt / context / telemetry come from production's one module — so eval
+    measures the pipeline that is actually shipped, not a hand-copied twin.
   - Test doubles (DummyLLM) inject via *_override params; production
     uses LLMHandler(model_name).
 
@@ -30,7 +29,6 @@ Return type of query():
 from __future__ import annotations
 
 import logging
-import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -38,10 +36,19 @@ from typing import Any
 import chromadb
 
 from src.document_loader import TextChunker
-from src.telemetry.tokens import count_tokens
 from src.eval.config import EvalConfig
 from src.eval.schemas import EvalQuestion
 from src.llm_handler import LLMHandler
+from src.query_engine import QueryEngine
+from src.retrieval import (
+    CrossEncoderReranker,
+    DenseRetriever,
+    MultiQueryRetriever,
+    QueryRewriter,
+    RefusalHandler,
+    RerankingRetriever,
+    Retriever,
+)
 from src.vector_store import ChromaVectorStore, SearchResult
 
 logger = logging.getLogger(__name__)
@@ -71,17 +78,22 @@ class EvalPipeline:
     config: EvalConfig
     dataset_name: str
 
-    # Phase 2 additions — None when the corresponding lever is off.
-    hybrid_retriever: object | None = None       # BM25HybridRetriever or None
-    reranker: object | None = None               # CrossEncoderReranker or None
-    rewriter: object | None = None               # QueryRewriter or None
-    refusal_handler: object | None = None        # RefusalHandler or None
+    # Phase 2 additions — None when the corresponding lever is off. Composed into
+    # a single Retriever by _get_engine(); the refusal gate is passed to the engine.
+    hybrid_retriever: Retriever | None = None    # BM25HybridRetriever, set during ingest
+    reranker: CrossEncoderReranker | None = None
+    rewriter: QueryRewriter | None = None
+    refusal_handler: RefusalHandler | None = None
 
     # Private: needed for teardown() — ChromaVectorStore doesn't own the client.
     # WHY not reach into vector_store._collection._client: that would couple us
     # to ChromaDB internals that could change. Own the client reference here.
     _client: chromadb.ClientAPI = field(repr=False, default=None)  # type: ignore[assignment]
     _collection_name: str = field(repr=False, default="")
+
+    # Lazily-built QueryEngine, cached after the first query(). Deferred because
+    # the hybrid retriever is only assembled during ingest() (it needs the corpus).
+    _engine: QueryEngine | None = field(repr=False, default=None)
 
     def ingest(self, questions: list[EvalQuestion]) -> None:
         """Upsert question contexts into the vector store.
@@ -205,111 +217,67 @@ class EvalPipeline:
                 )
 
     def query(self, question: str) -> tuple[list[SearchResult], str, dict]:
-        """Retrieve relevant chunks and generate an answer with timing + cost telemetry.
+        """Retrieve chunks and generate an answer via the shared QueryEngine.
 
-        Phase 2 pipeline steps: rewrite → retrieve (hybrid or dense) → rerank →
-        refusal gate → generate. Each step is a no-op when the corresponding
-        config lever is off, preserving backward compatibility with Phase 1 callers.
+        The levers become a composed Retriever behind the seam (hybrid-or-dense,
+        wrapped in multi-query and reranking adapters as configured); the engine
+        applies the refusal gate, builds the shipped prompt + context, and
+        assembles telemetry. This is the convergence that makes eval measure the
+        production pipeline (issue #16, step 4c).
 
         Args:
             question: Natural language question from the eval set.
 
         Returns:
             Tuple of (chunks, answer, telemetry). telemetry keys:
-                timings_ms: dict of stage→ms for rewrite, retrieve, rerank,
-                            refusal_check, generate
+                timings_ms: {"retrieve": float, "generate": float}
                 tokens: {"prompt": int, "completion": int}
-                cost_usd: float (generator side)
-                rewriter_cost_usd: float (rewriter side, 0.0 when disabled)
+                cost_usd: float
         """
-        from src.telemetry import pricing
-
-        timings: dict[str, float] = {}
-        rewriter_cost = 0.0
-
-        # ---- Rewrite (lever 2e) -----------------------------------------------
-        t = time.perf_counter()
-        if self.rewriter is not None:
-            queries, rewriter_cost, _, _ = self.rewriter.expand(question)
-        else:
-            queries = [question]
-        timings["rewrite"] = (time.perf_counter() - t) * 1000.0
-
-        # ---- Retrieve ---------------------------------------------------------
-        # WHY use rerank_top_n for initial fetch when a reranker is active:
-        # the reranker needs a wider candidate pool to re-score before final_top_k.
-        top_k_initial = (
-            self.config.pipeline.reranker.rerank_top_n
-            if self.reranker is not None else self.config.pipeline.retriever.top_k
-        )
-        t = time.perf_counter()
-        if self.hybrid_retriever is not None:
-            seen: dict[str, SearchResult] = {}
-            for q in queries:
-                for r in self.hybrid_retriever.retrieve(q, top_k=top_k_initial):
-                    if r.chunk_id not in seen:
-                        seen[r.chunk_id] = r
-            results = list(seen.values())
-        else:
-            seen = {}
-            for q in queries:
-                for r in self.vector_store.query(query_text=q, top_k=top_k_initial):
-                    if r.chunk_id not in seen:
-                        seen[r.chunk_id] = r
-            results = list(seen.values())
-        timings["retrieve"] = (time.perf_counter() - t) * 1000.0
-
-        # ---- Rerank (lever 2d) ------------------------------------------------
-        t = time.perf_counter()
-        if self.reranker is not None:
-            results = self.reranker.rerank(
-                question, results,
-                final_top_k=self.config.pipeline.reranker.final_top_k,
-            )
-        else:
-            results = results[: self.config.pipeline.retriever.top_k]
-        timings["rerank"] = (time.perf_counter() - t) * 1000.0
-
-        # ---- Refusal gate (lever 2g) ------------------------------------------
-        t = time.perf_counter()
-        if self.refusal_handler is not None and self.refusal_handler.should_refuse(results):
-            chunks, answer = self.refusal_handler.refuse_response()
-            timings["refusal_check"] = (time.perf_counter() - t) * 1000.0
-            return chunks, answer, {
-                "timings_ms": timings,
-                "tokens": {"prompt": 0, "completion": 0},
-                "cost_usd": 0.0,
-                "rewriter_cost_usd": rewriter_cost,
-            }
-        timings["refusal_check"] = (time.perf_counter() - t) * 1000.0
-
-        # ---- Generate ---------------------------------------------------------
-        context = "\n\n".join(r.content for r in results)
-        system_prompt = (
-            "You are a helpful assistant. Answer the question based solely on the "
-            "provided context. If the context does not contain enough information, "
-            "say so clearly."
-        )
-        user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-        # WHY count both: the LLM sees system_prompt + user_prompt as prompt tokens.
-        full_prompt_text = system_prompt + "\n" + user_prompt
-        model = self.config.pipeline.generator.model
-
-        t = time.perf_counter()
-        answer = self.llm.generate(user_prompt, system_prompt=system_prompt)
-        timings["generate"] = (time.perf_counter() - t) * 1000.0
-
-        # ---- Token counting + cost estimation ---------------------------------
-        prompt_tokens = count_tokens(full_prompt_text, model)
-        completion_tokens = count_tokens(answer, model)
-        cost = pricing.cost_usd(model, prompt_tokens, completion_tokens)
-
+        results, answer, stage = self._get_engine().ask(question)
         return results, answer, {
-            "timings_ms": timings,
-            "tokens": {"prompt": prompt_tokens, "completion": completion_tokens},
-            "cost_usd": cost,
-            "rewriter_cost_usd": rewriter_cost,
+            "timings_ms": {"retrieve": stage.retrieve_ms, "generate": stage.generate_ms},
+            "tokens": {"prompt": stage.prompt_tokens, "completion": stage.completion_tokens},
+            "cost_usd": stage.cost_usd,
         }
+
+    def _get_engine(self) -> QueryEngine:
+        """Build (once) and return the QueryEngine composed from the configured levers.
+
+        Built lazily because the hybrid retriever is only available after ingest().
+        The lever composition is the Retriever seam used as designed: multi-query
+        wraps the base retriever, reranking wraps that.
+        """
+        if self._engine is not None:
+            return self._engine
+
+        base = self.hybrid_retriever or DenseRetriever(self.vector_store)
+        retriever = base
+        if self.rewriter is not None:
+            retriever = MultiQueryRetriever(inner=retriever, rewriter=self.rewriter)
+        if self.reranker is not None:
+            retriever = RerankingRetriever(
+                inner=retriever, reranker=self.reranker,
+                over_fetch_n=self.config.pipeline.reranker.rerank_top_n,
+            )
+
+        # When reranking is on, the final count is the reranker's final_top_k
+        # (it over-fetches the wider rerank_top_n first); otherwise it is top_k.
+        top_k = (
+            self.config.pipeline.reranker.final_top_k
+            if self.reranker is not None
+            else self.config.pipeline.retriever.top_k
+        )
+        # reasoning_llm is unused on the sync ask() path (the eval harness never
+        # streams), so the answer LLM stands in for the constructor requirement.
+        self._engine = QueryEngine(
+            retriever=retriever,
+            llm=self.llm,
+            reasoning_llm=self.llm,
+            top_k=top_k,
+            refusal=self.refusal_handler,
+        )
+        return self._engine
 
     def teardown(self) -> None:
         """Delete the ephemeral Chroma collection and release the client reference.
@@ -454,7 +422,7 @@ def _build_hybrid_retriever(cfg, vector_store, documents: dict[str, str]):
     """
     if not cfg.enabled:
         return None
-    from src.eval.retrievers import BM25HybridRetriever
+    from src.retrieval import BM25HybridRetriever
     return BM25HybridRetriever(
         vector_store=vector_store, documents=documents,
         bm25_top_k=cfg.bm25_top_k, dense_top_k=cfg.dense_top_k, rrf_k=cfg.rrf_k,
@@ -472,7 +440,7 @@ def _build_reranker(cfg):
     """
     if cfg.model is None:
         return None
-    from src.eval.retrievers import CrossEncoderReranker
+    from src.retrieval import CrossEncoderReranker
     return CrossEncoderReranker()
 
 
@@ -489,7 +457,7 @@ def _build_rewriter(cfg, llm):
     """
     if cfg.model is None:
         return None
-    from src.eval.transforms import QueryRewriter
+    from src.retrieval import QueryRewriter
     return QueryRewriter(model=cfg.model, max_expansions=cfg.max_expansions, llm=llm)
 
 
@@ -504,7 +472,7 @@ def _build_refusal(cfg):
     """
     if not cfg.enabled:
         return None
-    from src.eval.transforms import RefusalHandler
+    from src.retrieval import RefusalHandler
     return RefusalHandler(
         enabled=True, similarity_threshold=cfg.similarity_threshold,
         no_answer_text=cfg.no_answer_text,

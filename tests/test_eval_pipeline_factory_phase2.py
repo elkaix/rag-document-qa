@@ -24,6 +24,7 @@ PHASE2_DIR = Path("configs/eval/phase2")
 @pytest.fixture
 def stub_llm():
     class _S:
+        model = "gpt-4.1-nano"  # engine reads .model for spans + cost pricing
         def generate(self, prompt, system_prompt=None):
             return "stub answer"
         def generate_with_usage(self, prompt, system_prompt=None):
@@ -67,11 +68,13 @@ def test_phase2_query_with_refusal_short_circuits(stub_llm):
         llm_override=stub_llm, judge_llm_override=stub_llm,
     )
     try:
-        # Empty index → retrieval returns [] → handler refuses.
+        # Empty index → retrieval returns [] → handler refuses. Post-convergence
+        # (step 4c) the engine owns telemetry, so timings_ms is {retrieve, generate}
+        # rather than the old per-lever stages (refusal is applied inside the engine).
         chunks, answer, telemetry = pipeline.query("what is x?")
         assert chunks == []
         assert answer == cfg.pipeline.refusal_handler.no_answer_text
-        assert "refusal_check" in telemetry["timings_ms"]
+        assert "retrieve" in telemetry["timings_ms"]
     finally:
         pipeline.teardown()
 

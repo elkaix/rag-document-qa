@@ -54,13 +54,28 @@ DATA_DIR: Path = BASE_DIR / "data"
 # PATTERN: Seed the PRNG for reproducible TF-IDF splits and test fixtures.
 RANDOM_SEED: int = 42
 
-# TRADE-OFF: 500-char chunks balance context (enough text for meaning) vs.
-#            precision (small enough for specific retrieval).  Overlap of 50
+# TRADE-OFF: 512-char chunks balance context (enough text for meaning) vs.
+#            precision (small enough for specific retrieval).  Overlap of 64
 #            prevents answers that straddle chunk boundaries from being lost.
-CHUNK_SIZE: int = 500
-CHUNK_OVERLAP: int = 50
+# SINGLE SOURCE: production ingestion (RAGBackend) and the eval harness both
+#            read these — so "baseline" eval measures production's chunking
+#            (issue #16, step 4c). These are production's actual shipped values.
+CHUNK_SIZE: int = 512
+CHUNK_OVERLAP: int = 64
 
 TOP_K_RESULTS: int = 5
+
+# WHY a strategy selector: the Retriever seam (ADR 0004) makes dense, reranked,
+#      hybrid, and multi-query retrieval interchangeable. Production picks one
+#      here, so an eval-validated chain is promoted by config, not by a rewrite.
+#      "dense" is the behaviour-preserving default; "reranked" is wired;
+#      "hybrid"/"multi_query" are recognised but deferred (see build_retriever).
+RETRIEVER_STRATEGY: str = "dense"
+
+# WHY 20: the reranked strategy over-fetches this many dense candidates before
+#         the cross-encoder narrows them — wide enough to give the precise
+#         reranker real choice, matching the eval-tuned default.
+RERANK_OVER_FETCH_N: int = 20
 
 # ---------------------------------------------------------------------------
 # API server
