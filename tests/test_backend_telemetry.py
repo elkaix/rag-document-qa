@@ -210,6 +210,37 @@ class TestStreamQueryTelemetry:
         assert last_data["generate_ms"] == 0.0
         assert last_data["prompt_tokens"] == 0
 
+    def test_stream_query_with_conversation_emits_telemetry_and_persists(
+        self, ingested_backend: RAGBackend
+    ):
+        """The conversation branch captures answer usage and still persists.
+
+        WHY: stream_query's multi-turn branch is the one that reads the answer
+        stream's terminal Usage AND saves the assistant message. This drives it
+        with a real conversation_id so both behaviours are exercised together —
+        the non-conversation telemetry tests never take this path.
+        """
+        conv_id = ingested_backend.create_conversation()["id"]
+
+        events = list(
+            ingested_backend.stream_query("What is RAG?", conversation_id=conv_id)
+        )
+
+        # Telemetry still last, with non-negative usage from the captured Usage.
+        last_type, last_data = events[-1]
+        assert last_type == "telemetry"
+        assert last_data["prompt_tokens"] >= 0
+        assert last_data["completion_tokens"] >= 0
+
+        # The done event carries the persisted message + conversation ids.
+        done_data = next(d for t, d in events if t == "done")
+        assert done_data["conversation_id"] == conv_id
+        assert done_data["message_id"]
+
+        # The assistant message was actually saved to the conversation.
+        detail = ingested_backend.get_conversation(conv_id)
+        assert any(m["role"] == "assistant" for m in detail["messages"])
+
     def test_stream_query_existing_events_order_preserved(
         self, ingested_backend: RAGBackend
     ):
