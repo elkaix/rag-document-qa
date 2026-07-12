@@ -67,6 +67,26 @@ def _sha256_of_file(path: Path) -> str:
         return "unknown"
 
 
+def _judge_details(reasoning: str, details_json: str | None) -> dict[str, Any]:
+    """Reshape a judge's (reasoning, details_json) into one details dict.
+
+    Both evaluate_faithfulness and evaluate_context_precision return a raw
+    per-claim/per-chunk JSON blob alongside their one-line reasoning; this
+    merges them into the single dict _score_question stores per metric.
+
+    Args:
+        reasoning: The judge's one-sentence summary.
+        details_json: Raw JSON string from the judge, or None on parse failure.
+
+    Returns:
+        The parsed details dict (empty if details_json is falsy) with
+        "reasoning" set.
+    """
+    details: dict[str, Any] = json.loads(details_json) if details_json else {}
+    details["reasoning"] = reasoning
+    return details
+
+
 def _score_question(
     question: EvalQuestion,
     chunks: list,
@@ -114,17 +134,13 @@ def _score_question(
             answer, retrieved_texts, judge_llm
         )
         metrics["judge_faithfulness"] = faith_score
-        faith_details: dict[str, Any] = json.loads(faith_json) if faith_json else {}
-        faith_details["reasoning"] = faith_reasoning
-        details["judge_faithfulness"] = faith_details
+        details["judge_faithfulness"] = _judge_details(faith_reasoning, faith_json)
 
         cp_score, cp_reasoning, cp_json = evaluate_context_precision(
             question.question, retrieved_texts, judge_llm
         )
         metrics["judge_context_precision"] = cp_score
-        cp_details: dict[str, Any] = json.loads(cp_json) if cp_json else {}
-        cp_details["reasoning"] = cp_reasoning
-        details["judge_context_precision"] = cp_details
+        details["judge_context_precision"] = _judge_details(cp_reasoning, cp_json)
 
         ar_score, ar_reasoning = evaluate_answer_relevancy(
             question.question, answer, judge_llm

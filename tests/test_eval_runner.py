@@ -125,14 +125,13 @@ class TestScoreQuestion:
             self._question(), self._chunks(), "Fact 0.", llm
         )
 
-        for key in (
-            "judge_faithfulness",
-            "judge_context_precision",
-            "judge_answer_relevancy",
-            "answer_correctness",
-        ):
-            assert key in metrics
-            assert metrics[key] == pytest.approx(0.8) or key == "answer_correctness"
+        for key in ("judge_faithfulness", "judge_context_precision", "judge_answer_relevancy"):
+            assert metrics[key] == pytest.approx(0.8)
+
+        # answer_correctness is the mean of embedding cosine (real, unmocked
+        # embedder) and the judge's factual_match (1.0 here). generated ==
+        # gold_answer, so cosine ≈ 1.0 and the mean should be too.
+        assert metrics["answer_correctness"] == pytest.approx(1.0, abs=1e-3)
 
         assert details["judge_faithfulness"]["reasoning"] == "matches"
         assert "claims" in details["judge_faithfulness"]
