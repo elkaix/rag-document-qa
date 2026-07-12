@@ -46,11 +46,15 @@ class TestEvalConfigConstruction:
         assert cfg.eval.datasets == ["squad_v2_dev_200"]
 
     def test_defaults_applied_when_omitted(self):
+        from src.config import CHUNK_SIZE
+
         d = _baseline_dict()
         del d["pipeline"]["chunker"]["chunk_size"]
         del d["eval"]["bootstrap_n"]
         cfg = EvalConfig.model_validate(d)
-        assert cfg.pipeline.chunker.chunk_size == 512  # default
+        # Step 4c: the chunk-size default now derives from production config
+        # (single source of truth), not a hard-coded eval literal.
+        assert cfg.pipeline.chunker.chunk_size == CHUNK_SIZE
         assert cfg.eval.bootstrap_n == 1000  # default
 
     def test_missing_required_field_raises(self):

@@ -21,6 +21,19 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+# WHY import production config: eval "baseline" runs must benchmark the pipeline
+# users actually get, so chunking/top-k/model defaults derive from the single
+# source of truth (src/config.py) rather than drifting as independent literals
+# (issue #16, step 4c). An explicit YAML value still overrides any default.
+from src.config import (
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
+    DEFAULT_MODEL,
+    EVAL_MODEL,
+    REASONING_MODEL,
+    TOP_K_RESULTS,
+)
+
 
 class ChunkerCfg(BaseModel):
     """Chunking strategy configuration.
@@ -31,8 +44,8 @@ class ChunkerCfg(BaseModel):
     """
 
     strategy: Literal["fixed", "recursive", "semantic"] = "recursive"
-    chunk_size: int = 512
-    chunk_overlap: int = 64
+    chunk_size: int = CHUNK_SIZE
+    chunk_overlap: int = CHUNK_OVERLAP
 
 
 class RetrieverCfg(BaseModel):
@@ -42,7 +55,7 @@ class RetrieverCfg(BaseModel):
     Pipeline position: QUERYING step — Embeddings → [Retriever] → Top-K chunks.
     """
 
-    top_k: int = 5
+    top_k: int = TOP_K_RESULTS
 
 
 class GeneratorCfg(BaseModel):
@@ -53,9 +66,9 @@ class GeneratorCfg(BaseModel):
     Pipeline position: QUERYING step — Chunks → [Generator] → Answer.
     """
 
-    model: str = "gpt-5-mini"
+    model: str = DEFAULT_MODEL
     # WHY: reasoning_model is optional — None disables the CoT pre-pass.
-    reasoning_model: str | None = "gpt-4.1-nano"
+    reasoning_model: str | None = REASONING_MODEL
 
 
 class EmbedderCfg(BaseModel):
@@ -155,7 +168,7 @@ class EvalCfg(BaseModel):
     """
 
     datasets: list[Literal["squad_v2_dev_200", "ml_papers_v1"]]
-    judge_model: str = "gpt-4.1-mini"
+    judge_model: str = EVAL_MODEL
     bootstrap_n: int = 1000
     permutation_n: int = 10000
     seed: int = 42

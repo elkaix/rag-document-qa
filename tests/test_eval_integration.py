@@ -18,6 +18,8 @@ from src.eval.schemas import EvalQuestion
 
 class DummyLLM:
     """Returns canned data — JSON for judges, plain for generation."""
+    model = "gpt-4.1-nano"  # engine reads .model for spans + cost pricing
+
     def generate(self, prompt: str, system_prompt: str | None = None) -> str:
         if "JSON" in (system_prompt or "") or '"score"' in prompt or '"is_refusal"' in prompt:
             return json.dumps({
@@ -25,6 +27,12 @@ class DummyLLM:
                 "factual_match": 1.0, "is_refusal": False, "reasoning": "ok",
             })
         return "<dummy answer>"
+
+    def generate_with_usage(
+        self, prompt: str, system_prompt: str | None = None
+    ) -> tuple[str, int, int]:
+        text = self.generate(prompt, system_prompt)
+        return text, max(1, len(prompt.split())), len(text.split())
 
 
 def _make_config(name: str, top_k: int) -> EvalConfig:

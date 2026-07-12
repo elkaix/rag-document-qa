@@ -160,6 +160,20 @@ def test_ask_with_refusal_gate_short_circuits_before_generation():
     assert llm.seen_user == []  # generation skipped
 
 
+def test_ask_refusal_gate_fires_on_empty_index_before_no_documents_notice():
+    """An enabled gate treats an empty retrieval as unanswerable (refuse, not 'no docs')."""
+    from src.retrieval import RefusalHandler
+
+    gate = RefusalHandler(enabled=True, similarity_threshold=0.5, no_answer_text="Cannot answer.")
+    engine = _engine([], refusal=gate)
+
+    results, answer, telemetry = engine.ask("q")
+
+    assert results == []
+    assert answer == "Cannot answer."  # not NO_DOCUMENTS_ANSWER
+    assert telemetry.prompt_tokens == 0
+
+
 # --------------------------------------------------------------------------- #
 # Slice 3 — ask_stream events + sync/stream instruction parity                 #
 # --------------------------------------------------------------------------- #

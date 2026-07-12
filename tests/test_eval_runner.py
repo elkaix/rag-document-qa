@@ -17,6 +17,7 @@ class DummyLLM:
     """Returns canned answers / canned JSON for any prompt."""
     def __init__(self, answer: str = "<dummy>", judge_payload: dict | None = None):
         self.answer = answer
+        self.model = "gpt-4.1-nano"  # engine reads .model for spans + cost pricing
         self.judge_payload = judge_payload or {
             "score": 1.0, "claims": [], "chunks": [], "factual_match": 1.0,
             "is_refusal": False, "reasoning": "ok",
@@ -28,6 +29,12 @@ class DummyLLM:
         if "JSON" in (system_prompt or "") or '"score"' in prompt or '"claims"' in prompt or 'JSON' in prompt:
             return json.dumps(self.judge_payload)
         return self.answer
+
+    def generate_with_usage(
+        self, prompt: str, system_prompt: str | None = None
+    ) -> tuple[str, int, int]:
+        text = self.generate(prompt, system_prompt)
+        return text, max(1, len(prompt.split())), len(text.split())
 
 
 def _baseline_config() -> EvalConfig:
