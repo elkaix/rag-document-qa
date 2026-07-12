@@ -13,9 +13,11 @@ Two collaborators live here:
   chunk_id keeping each chunk's best score. The "compose rather than conform"
   adapter from ADR 0004.
 
-The rewriter reports its own token cost; that number is dropped at this seam
-(the pure `Retriever` interface has no cost channel). Surfacing multi-query cost
-into telemetry is deferred to the QueryEngine convergence (step 4c).
+The rewriter reports its own token cost, but the pure `Retriever` interface has
+no cost channel, so it is dropped at this seam. This was deliberate in step 4c:
+the eval harness's old `rewriter_cost_usd` field had zero readers (verified), so
+convergence dropped it rather than plumb a cost path nothing consumed. A cost
+channel can be added if a consumer ever needs multi-query spend broken out.
 """
 
 from __future__ import annotations
@@ -154,8 +156,11 @@ class MultiQueryRetriever:
             surfaces under several expansions, its highest score wins (dense
             similarities share the embedding space, so they compare directly).
         """
+        # expand() also reports rewrite cost/tokens; the pure Retriever interface
+        # has no cost channel, so only the query list is used here (see step 4c).
+        expansions, *_cost_and_tokens = self._rewriter.expand(query)
         best: dict[str, SearchResult] = {}
-        for expansion in self._rewriter.expand(query)[0]:
+        for expansion in expansions:
             for result in self._inner.retrieve(expansion, top_k=top_k):
                 current = best.get(result.chunk_id)
                 if current is None or result.score > current.score:

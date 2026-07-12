@@ -54,11 +54,14 @@ DATA_DIR: Path = BASE_DIR / "data"
 # PATTERN: Seed the PRNG for reproducible TF-IDF splits and test fixtures.
 RANDOM_SEED: int = 42
 
-# TRADE-OFF: 500-char chunks balance context (enough text for meaning) vs.
-#            precision (small enough for specific retrieval).  Overlap of 50
+# TRADE-OFF: 512-char chunks balance context (enough text for meaning) vs.
+#            precision (small enough for specific retrieval).  Overlap of 64
 #            prevents answers that straddle chunk boundaries from being lost.
-CHUNK_SIZE: int = 500
-CHUNK_OVERLAP: int = 50
+# SINGLE SOURCE: production ingestion (RAGBackend) and the eval harness both
+#            read these — so "baseline" eval measures production's chunking
+#            (issue #16, step 4c). These are production's actual shipped values.
+CHUNK_SIZE: int = 512
+CHUNK_OVERLAP: int = 64
 
 TOP_K_RESULTS: int = 5
 
