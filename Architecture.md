@@ -455,7 +455,7 @@ The `src/eval/` package provides a reproducible evaluation system over labeled g
 | Module | Responsibility |
 |--------|----------------|
 | `src/eval/schemas.py` | Pydantic contracts: `EvalQuestion`, `EvalResult`, `AggregatedMetric`, `RunMetadata`, `MetricDelta`, `CompareResult`. |
-| `src/eval/pricing.py` | Hard-coded model price table + `cost_usd()` helper. |
+| `src/telemetry/pricing.py`, `src/telemetry/tokens.py` | **Core** (not eval): model price table + `cost_usd()`, and `count_tokens()`. Imported by both production telemetry and the eval harness (see [ADR 0003](docs/adr/0003-telemetry-ownership.md)). |
 | `src/eval/statistics.py` | `bootstrap_ci()` and `paired_permutation_test()` for run-level confidence intervals and two-run significance testing. |
 | `src/eval/metrics/retrieval.py` | Recall@k, MRR@k, nDCG@k over `(gold_chunk_ids, retrieved_chunk_ids)`. |
 | `src/eval/metrics/operational.py` | Per-stage latency p50/p95/p99, cost, token aggregation. |
@@ -465,7 +465,7 @@ The `src/eval/` package provides a reproducible evaluation system over labeled g
 | `src/eval/datasets/ml_papers.py` | Hand-labeled dev set loader + manifest SHA-256 verification. |
 | `src/eval/config.py` | YAML-loaded `EvalConfig`. |
 | `src/eval/storage.py` | Run-directory CRUD over `eval_runs/<run_id>/`. |
-| `src/eval/pipeline_factory.py` + `src/eval/_telemetry.py` | Builds an isolated RAG pipeline per (config, dataset) using ephemeral Chroma. |
+| `src/eval/pipeline_factory.py` | Builds an isolated RAG pipeline per (config, dataset) using ephemeral Chroma. Token counting and pricing come from `src/telemetry/` (core), not the eval package. |
 | `src/eval/aggregator.py` | Per-dataset + combined `AggregatedMetric` rows from per-question results. |
 | `src/eval/runner.py` | Orchestrates `git_sha`, ingest, query+score loop, aggregation, persistence. |
 | `src/eval/compare.py` | Two-run diff with paired permutation tests + per-question regressions/wins. |
@@ -523,7 +523,7 @@ The system exports per-stage spans for every chat query via OpenTelemetry to [Ar
 
 ### Telemetry Payload
 
-The same numbers are returned to the client as a `StageTelemetry` Pydantic model (`src/api/schemas/telemetry.py`):
+The same numbers are returned to the client as a `StageTelemetry` Pydantic model (`src/api/schemas/telemetry.py`). Token counts are the **provider-reported usage** for the answer pass (from the LLM adapter's `GenerationResult` / streaming terminal `Usage`), with the adapter's local count as fallback — never a reconstructed prompt. Telemetry covers the answer pass only, not the chain-of-thought reasoning pass.
 
 - REST `POST /api/query` — includes a `telemetry` field in the response JSON.
 - WebSocket `/api/chat` — emits a final `{"type": "telemetry", "content": {...}}` event after the existing `done` event.

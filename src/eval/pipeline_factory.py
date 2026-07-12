@@ -38,7 +38,7 @@ from typing import Any
 import chromadb
 
 from src.document_loader import TextChunker
-from src.eval._telemetry import count_tokens
+from src.telemetry.tokens import count_tokens
 from src.eval.config import EvalConfig
 from src.eval.schemas import EvalQuestion
 from src.llm_handler import LLMHandler
@@ -222,7 +222,7 @@ class EvalPipeline:
                 cost_usd: float (generator side)
                 rewriter_cost_usd: float (rewriter side, 0.0 when disabled)
         """
-        from src.eval import pricing
+        from src.telemetry import pricing
 
         timings: dict[str, float] = {}
         rewriter_cost = 0.0

@@ -87,11 +87,7 @@ def counted_usage(input_text: str, output_text: str, model: str) -> Usage:
     uses it, and the real adapters fall back to it only when a provider omits
     usage (e.g. a stream that carries no terminal usage chunk).
     """
-    # NOTE: token/pricing utilities move to the core `src.telemetry` package in
-    #       sequencing step 3; this import becomes `from src.telemetry.tokens
-    #       import count_tokens` then. It is the one transient cross-package
-    #       import during step 2.
-    from src.eval._telemetry import count_tokens
+    from src.telemetry.tokens import count_tokens
 
     return Usage(
         prompt_tokens=count_tokens(input_text, model),

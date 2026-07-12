@@ -51,14 +51,13 @@ from .config import (
     TOP_K_RESULTS,
 )
 from .document_loader import DocumentLoader, TextChunker
-from .eval._telemetry import count_tokens
-from .eval.pricing import cost_usd
 from .evaluation import (
     evaluate_answer_relevancy,
     evaluate_context_precision,
     evaluate_faithfulness,
 )
-from .llm_handler import LLMHandler
+from .llm_handler import LLMHandler, Usage
+from .telemetry.pricing import cost_usd
 from .models.conversation import Conversation
 from .models.document import DocumentRecord
 from .models.evaluation import MessageEvaluation
@@ -387,9 +386,9 @@ class RAGBackend:
         if model and model != self.llm.model:
             handler = LLMHandler(model=model)
 
-        # WHY reconstruct prompt strings here: generate_with_context() builds
-        # these internally before calling self.generate(). We reproduce them to
-        # count exactly the tokens that were billed, not a proxy string.
+        # Build the answer prompt (system + user). Passing it through
+        # generate_with_usage means telemetry counts the exact tokens the
+        # provider billed — no reconstruction of a proxy string.
         answer_system_prompt = (
             "You are a helpful assistant. Answer the user's question based solely on the "
             "provided context. If the context does not contain enough information, say so."
@@ -400,7 +399,9 @@ class RAGBackend:
         t_generate_start = time.perf_counter()
         with tracer.start_as_current_span("rag.generate") as generate_span:
             generate_span.set_attribute("model", handler.model)
-            answer = handler.generate_with_context(question, context)
+            answer, prompt_tokens, completion_tokens = handler.generate_with_usage(
+                answer_user_prompt, system_prompt=answer_system_prompt
+            )
             generate_span.set_attribute("answer_len", len(answer))
         generate_ms = (time.perf_counter() - t_generate_start) * 1000
 
@@ -421,11 +422,8 @@ class RAGBackend:
         confidence = max(0.0, min(1.0, sum(top_scores) / len(top_scores)))
 
         # ---- Telemetry assembly ---------------------------------------------
-        # WHY count system_prompt + user_prompt together: together they form
-        # the full input that the provider billed as prompt tokens.
-        prompt_text = answer_system_prompt + "\n" + answer_user_prompt
-        prompt_tokens = count_tokens(prompt_text, handler.model)
-        completion_tokens = count_tokens(answer, handler.model)
+        # Token counts come from the provider-reported usage above (or the
+        # adapter's local count fallback) — never a reconstructed prompt.
         total_cost = cost_usd(handler.model, prompt_tokens, completion_tokens)
 
         telemetry = StageTelemetry(
@@ -582,10 +580,14 @@ class RAGBackend:
         )
 
         try:
-            for token in self.reasoning_llm.stream_response(
+            for item in self.reasoning_llm.stream_response(
                 reasoning_user, system_prompt=reasoning_system
             ):
-                yield ("reasoning", token)
+                # The reasoning pass reports its own usage, but telemetry covers
+                # the answer pass only — so drop the reasoning terminal Usage.
+                if isinstance(item, Usage):
+                    continue
+                yield ("reasoning", item)
         except Exception as exc:
             # PATTERN: Reasoning is best-effort — a failure here must not block
             # the final answer. Log, emit a terse status, continue to the answer.
@@ -612,8 +614,10 @@ class RAGBackend:
         )
         user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
 
-        # Accumulate full response for persistence and token counting
+        # Accumulate full response for persistence; capture the answer pass's
+        # reported usage (yielded as the stream's terminal event) for telemetry.
         full_response: list[str] = []
+        answer_usage: Usage | None = None
 
         t_generate_start = time.perf_counter()
 
@@ -635,9 +639,12 @@ class RAGBackend:
             with tracer.start_as_current_span("rag.generate") as generate_span:
                 generate_span.set_attribute("model", handler.model)
                 generate_span.set_attribute("has_conversation", True)
-                for token in handler.stream_messages(messages):
-                    full_response.append(token)
-                    yield ("token", token)
+                for item in handler.stream_messages(messages):
+                    if isinstance(item, Usage):
+                        answer_usage = item
+                        continue
+                    full_response.append(item)
+                    yield ("token", item)
                 generate_span.set_attribute("answer_len", sum(len(t) for t in full_response))
 
             generate_ms = (time.perf_counter() - t_generate_start) * 1000
@@ -661,41 +668,38 @@ class RAGBackend:
                 "conversation_id": conversation_id,
             })
 
-            # WHY count full messages list for prompt: the multi-turn path sends
-            # the sliding window + system prompt + user turn as one request.
-            # We join all message content to estimate the billed input tokens.
-            prompt_text = "\n".join(m["content"] for m in messages)
-
         else:
             # No conversation — simple single-turn streaming
             with tracer.start_as_current_span("rag.generate") as generate_span:
                 generate_span.set_attribute("model", handler.model)
                 generate_span.set_attribute("has_conversation", False)
-                for token in handler.stream_response(user_prompt, system_prompt=system_prompt):
-                    full_response.append(token)
-                    yield ("token", token)
+                for item in handler.stream_response(user_prompt, system_prompt=system_prompt):
+                    if isinstance(item, Usage):
+                        answer_usage = item
+                        continue
+                    full_response.append(item)
+                    yield ("token", item)
                 generate_span.set_attribute("answer_len", sum(len(t) for t in full_response))
 
             generate_ms = (time.perf_counter() - t_generate_start) * 1000
 
             yield ("done", {"sources": sources})
 
-            prompt_text = system_prompt + "\n" + user_prompt
-
         # ---- Telemetry assembly (after done, additive) -----------------------
         # WHY after done: the done event is what the client waits for to show
-        # sources. Telemetry is a secondary signal — emit it last so done's
-        # latency is not affected by token-counting arithmetic.
-        answer_text = "".join(full_response)
-        prompt_tokens = count_tokens(prompt_text, handler.model)
-        completion_tokens = count_tokens(answer_text, handler.model)
-        total_cost = cost_usd(handler.model, prompt_tokens, completion_tokens)
+        # sources. Telemetry is a secondary signal — emit it last.
+        #
+        # Usage is the answer pass's reported figure (provider-reported where the
+        # provider supplies it, adapter-counted otherwise), carried on the
+        # stream's terminal event — no prompt reconstruction.
+        usage = answer_usage or Usage(prompt_tokens=0, completion_tokens=0)
+        total_cost = cost_usd(handler.model, usage.prompt_tokens, usage.completion_tokens)
 
         yield ("telemetry", StageTelemetry(
             retrieve_ms=round(retrieve_ms, 2),
             generate_ms=round(generate_ms, 2),
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
             cost_usd=total_cost,
         ).model_dump())
 

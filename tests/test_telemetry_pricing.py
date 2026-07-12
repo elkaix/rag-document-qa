@@ -1,4 +1,4 @@
-"""Tests for src.eval.pricing."""
+"""Tests for src.telemetry.pricing."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import logging
 
 import pytest
 
-from src.eval.pricing import MODEL_PRICES, ModelPrice, cost_usd
+from src.telemetry.pricing import MODEL_PRICES, ModelPrice, cost_usd
 
 
 class TestModelPriceTable:

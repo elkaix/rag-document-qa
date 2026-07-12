@@ -229,15 +229,6 @@ class LLMHandler:
         """Generate a response for a full OpenAI-style messages list."""
         return self._generate(messages).text
 
-    def generate_with_context(self, query: str, context: str) -> str:
-        """Generate a RAG answer from a query and retrieved context."""
-        system_prompt = (
-            "You are a helpful assistant. Answer the user's question based solely on the "
-            "provided context. If the context does not contain enough information, say so."
-        )
-        user_prompt = f"Context:\n{context}\n\nQuestion: {query}\n\nAnswer:"
-        return self.generate(user_prompt, system_prompt=system_prompt)
-
     def generate_with_usage(
         self, prompt: str, system_prompt: str | None = None
     ) -> tuple[str, int, int]:
@@ -263,32 +254,33 @@ class LLMHandler:
 
     def stream_response(
         self, prompt: str, system_prompt: Optional[str] = None
-    ) -> Iterator[str]:
-        """Stream a response for a single prompt, yielding text chunks."""
+    ) -> Iterator[str | Usage]:
+        """Stream a response for a single prompt.
+
+        Yields text chunks, then a terminal ``Usage``. Callers discriminate the
+        terminal event with ``isinstance(item, Usage)``.
+        """
         yield from self._stream(_to_messages(prompt, system_prompt))
 
-    def stream_messages(self, messages: List[dict]) -> Iterator[str]:
-        """Stream a response for a messages list, yielding text chunks."""
+    def stream_messages(self, messages: List[dict]) -> Iterator[str | Usage]:
+        """Stream a response for a messages list.
+
+        Yields text chunks, then a terminal ``Usage`` (see ``stream_response``).
+        """
         yield from self._stream(messages)
 
-    def _stream(self, messages: List[dict]) -> Iterator[str]:
-        """Stream text chunks from the adapter, dropping the terminal usage.
+    def _stream(self, messages: List[dict]) -> Iterator[str | Usage]:
+        """Stream text chunks then a terminal Usage from the adapter.
 
-        The adapters yield a terminal ``Usage`` after the text chunks; this
-        method's public contract is text-only, so it discards that event. The
-        telemetry rewire (sequencing step 3) surfaces the usage to the backend.
+        Falls back to the dummy adapter (which reports counted usage) when the
+        provider is unconfigured. The terminal ``Usage`` flows through to the
+        backend's telemetry assembly.
         """
         try:
-            for item in self._adapter.stream(messages):
-                if isinstance(item, Usage):
-                    return
-                yield item
+            yield from self._adapter.stream(messages)
         except ProviderUnavailableError as exc:
             logger.warning("Provider unavailable, using dummy stream: %s", exc)
-            for item in self._dummy.stream(messages):
-                if isinstance(item, Usage):
-                    return
-                yield item
+            yield from self._dummy.stream(messages)
 
     # ------------------------------------------------------------------ #
     # Model listing (out of scope for the adapter refactor — preserved)   #

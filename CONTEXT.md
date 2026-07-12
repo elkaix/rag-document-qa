@@ -26,3 +26,8 @@ behaviour behind a small interface), **seam** (a boundary you can substitute at)
 - **LLMHandler** — owns provider *selection* (from the model-name prefix), the
   single-prompt → messages translation, and the unconfigured-provider fallback
   to `DummyAdapter`. Delegates all SDK work to one selected `ProviderAdapter`.
+- **telemetry** (`src/telemetry/`) — core token counting (`count_tokens`) and
+  cost pricing (`cost_usd`, `MODEL_PRICES`). Owned by the core so both production
+  telemetry assembly and the eval harness use one source of truth; the eval
+  package imports from here, never the reverse. See
+  [ADR 0003](docs/adr/0003-telemetry-ownership.md).
