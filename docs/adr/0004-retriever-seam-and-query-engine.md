@@ -61,8 +61,10 @@ engine and owns only conversation persistence.
 levers into one Retriever behind the seam and delegates retrieve→generate to a
 `QueryEngine`; its divergent prompt/context/top-k copies are deleted.
 `EvalConfig` chunking/top-k/model defaults now derive from `src/config.py`
-(single source of truth). A parity test pins eval to the shipped prompt and
-context builders.
+(single source of truth) — production ingestion reads the same constants. The
+values are unchanged (config holds production's actual 512/64), so this is pure
+single-sourcing with no behaviour delta on either side. A parity test pins eval
+to the shipped prompt and context builders.
 
 ## Consequences
 
@@ -84,7 +86,11 @@ context builders.
   the dead `rewriter_cost_usd` field is dropped (verified: zero readers); and
   multi-query dedup shifts from first-seen to best-score-and-truncate (the
   *shipped* `MultiQueryRetriever` semantics) — a retrieval-metric shift that is
-  correct-by-definition once eval measures production.
+  correct-by-definition once eval measures production. And because the gate is
+  checked before the no-documents branch, an eval run with an **empty index and
+  no refusal handler** now returns the no-documents sentinel instead of
+  generating from empty context (the old eval path) — latent, since eval always
+  ingests before querying.
 - **Deferred, with signal:** `hybrid` needs a live BM25 corpus kept in sync with
   ingestion/deletion (a genuinely new feature), and `multi_query`'s production
   wiring is held so it lands deliberately; `build_retriever` raises a clear
