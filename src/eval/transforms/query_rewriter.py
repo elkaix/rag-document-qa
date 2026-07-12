@@ -17,7 +17,7 @@ import logging
 import re
 from typing import Protocol
 
-from src.eval import pricing
+from src.telemetry import pricing
 
 logger = logging.getLogger(__name__)
 

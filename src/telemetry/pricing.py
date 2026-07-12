@@ -1,11 +1,13 @@
 """
-Model pricing table and cost arithmetic.
+Model pricing table and cost arithmetic — core telemetry utility.
 
-Eval Harness Position:
-  Pipeline → tokens → [PRICING] → cost_usd → EvalResult.cost_usd
-                       ^^^^^^^^
-  Pure data + a 4-line function. Hard-coded prices are fine for Phase 1;
-  if prices change frequently we move to a JSON file in a later phase.
+RAG Pipeline Position:
+  tokens (reported usage) → [PRICING] → cost_usd → StageTelemetry / EvalResult
+                             ^^^^^^^^
+  Owned by the core (``src/telemetry/``) so both the production telemetry
+  assembly and the eval harness compute cost from one price table — production
+  no longer imports it from the eval package. Pure data + a small function;
+  hard-coded prices are fine here (see below).
 
 Design decisions:
   - Hard-coded table, not env-driven, so price changes are visible in

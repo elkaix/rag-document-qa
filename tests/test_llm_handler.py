@@ -25,7 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import pytest
 
-from src.llm_handler import LLMHandler
+from src.llm_handler import LLMHandler, Usage
 
 
 # --------------------------------------------------------------------------- #
@@ -107,10 +107,10 @@ class TestStreamMessages:
         handler = LLMHandler(model=_DUMMY_MODEL)
         messages = [{"role": "user", "content": "Hello, world!"}]
 
-        tokens = list(handler.stream_messages(messages))
-        full_response = "".join(tokens)
+        items = list(handler.stream_messages(messages))
+        full_response = "".join(i for i in items if isinstance(i, str))
 
-        assert len(tokens) > 0, "stream_messages must yield at least one token"
+        assert full_response, "stream_messages must yield answer text"
         assert "[LLM unavailable]" in full_response, (
             "Streamed fallback must contain '[LLM unavailable]' marker"
         )
@@ -125,8 +125,22 @@ class TestStreamMessages:
         """
         handler = LLMHandler(model=_DUMMY_MODEL)
 
-        tokens = list(handler.stream_messages(_SLIDING_WINDOW_MESSAGES))
-        full_response = "".join(tokens)
+        items = list(handler.stream_messages(_SLIDING_WINDOW_MESSAGES))
+        full_response = "".join(i for i in items if isinstance(i, str))
 
-        assert len(tokens) > 0, "Must yield tokens for multi-turn input"
         assert len(full_response) > 0, "Joined tokens must form a non-empty response"
+
+    def test_stream_messages_ends_with_terminal_usage(self) -> None:
+        """The stream yields text chunks, then exactly one terminal Usage.
+
+        WHY: cost telemetry needs the token counts the provider (or the local
+        fallback) reports for the streamed call, delivered as the final event so
+        text chunks stay pure strings for the UI.
+        """
+        handler = LLMHandler(model=_DUMMY_MODEL)
+
+        items = list(handler.stream_messages([{"role": "user", "content": "Hi"}]))
+
+        assert isinstance(items[-1], Usage), "last streamed item must be Usage"
+        assert sum(isinstance(i, Usage) for i in items) == 1
+        assert all(isinstance(i, str) for i in items[:-1]), "chunks before it are text"

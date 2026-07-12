@@ -1,14 +1,14 @@
-"""Internal telemetry helpers for the eval harness.
+"""Token counting — core telemetry utility.
 
-This module provides token counting and timing utilities used by
-EvalPipeline.query() to track cost and latency. It's kept separate from
-pipeline_factory.py to keep that file under the project's 250-line ceiling.
+Owned by the core (``src/telemetry/``) and used by both production
+(``LLMHandler`` adapters, as the usage fallback) and the eval harness. It used
+to live under ``src/eval/``, which forced production code to import from the eval
+package — the dependency this module's move inverts (core never imports eval).
 
 Token Counting:
-  Counting tokens is essential for eval cost tracking. This module tries
-  tiktoken first (exact model-aware tokenization) and falls back to a
-  word-count heuristic if tiktoken doesn't know the model. The fallback
-  ensures eval doesn't hard-fail on new model releases.
+  This module tries tiktoken first (exact model-aware tokenization) and falls
+  back to a word-count heuristic if tiktoken doesn't know the model. The fallback
+  ensures nothing hard-fails on a new model release before tiktoken is updated.
 """
 
 from __future__ import annotations

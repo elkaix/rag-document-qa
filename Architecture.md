@@ -185,24 +185,27 @@ Thin wrapper over a ChromaDB Collection:
 - **`delete_by_doc_id()`** — removes all chunks for a document via metadata WHERE clause
 - **`get_stats()`** — returns chunk count, backend name, collection name
 
-### `src/llm_handler.py` — LLM Provider Routing
+### `src/llm_handler/` — LLM Provider Routing
 
-Auto-detects provider from model name prefix:
+`LLMHandler` (in `src/llm_handler/__init__.py`) auto-detects the provider from the model-name prefix and selects **one adapter** at construction:
 
-| Prefix | Provider | API Key Env Var |
-|--------|----------|-----------------|
-| `gpt*`, `o1*`, `o3*` | OpenAI | `OPENAI_API_KEY` |
-| `claude*` | Anthropic | `ANTHROPIC_API_KEY` |
-| `glm*` | Zhipu AI (OpenAI-compatible) | `GLM_API_KEY` |
-| everything else | Ollama (localhost:11434) | none |
+| Prefix | Provider | Adapter | API Key Env Var |
+|--------|----------|---------|-----------------|
+| `gpt*`, `o1*`, `o3*` | OpenAI | `OpenAICompatibleAdapter` | `OPENAI_API_KEY` |
+| `claude*` | Anthropic | `AnthropicAdapter` | `ANTHROPIC_API_KEY` |
+| `glm*` | Zhipu AI (OpenAI-compatible) | `OpenAICompatibleAdapter` | `GLM_API_KEY` |
+| everything else | Ollama (localhost:11434) | `OllamaAdapter` | none |
 
-All providers are optional imports with graceful fallback to a dummy response generator.
+Each provider lives behind a `ProviderAdapter` (`src/llm_handler/adapters/`) whose SDK client is **injected** via a zero-arg `client_factory`, so every provider path is unit-testable with a fake (`tests/test_llm_adapters.py`). Adapters return `GenerationResult(text, usage)`; streaming yields text chunks then a terminal `Usage`. Usage is provider-reported where the SDK supplies it, adapter-counted otherwise. See [ADR 0002](docs/adr/0002-provider-adapters.md).
 
-Public API surfaces:
+`LLMHandler` owns provider selection, the single-prompt → messages translation, and the fallback: only `ProviderUnavailableError` (missing SDK, missing GLM key, Ollama connection refused) routes to the `DummyAdapter`; real API errors propagate.
+
+Public API surfaces (unchanged for callers):
 - `generate()` / `stream_response()` — single prompt string
 - `generate_messages()` / `stream_messages()` — OpenAI-style messages list (for multi-turn chat)
+- `generate_with_usage()` — returns `(text, prompt_tokens, completion_tokens)` from provider-reported usage
 
-GPT-5 family and o-series models use `max_completion_tokens` instead of `max_tokens` and omit the `temperature` parameter (constrained to default).
+GPT-5 family and o-series models use `max_completion_tokens` instead of `max_tokens` and omit the `temperature` parameter (constrained to default) — handled inside `OpenAICompatibleAdapter`.
 
 ### `src/database.py` — SQLite/SQLModel
 
@@ -452,7 +455,7 @@ The `src/eval/` package provides a reproducible evaluation system over labeled g
 | Module | Responsibility |
 |--------|----------------|
 | `src/eval/schemas.py` | Pydantic contracts: `EvalQuestion`, `EvalResult`, `AggregatedMetric`, `RunMetadata`, `MetricDelta`, `CompareResult`. |
-| `src/eval/pricing.py` | Hard-coded model price table + `cost_usd()` helper. |
+| `src/telemetry/pricing.py`, `src/telemetry/tokens.py` | **Core** (not eval): model price table + `cost_usd()`, and `count_tokens()`. Imported by both production telemetry and the eval harness (see [ADR 0003](docs/adr/0003-telemetry-ownership.md)). |
 | `src/eval/statistics.py` | `bootstrap_ci()` and `paired_permutation_test()` for run-level confidence intervals and two-run significance testing. |
 | `src/eval/metrics/retrieval.py` | Recall@k, MRR@k, nDCG@k over `(gold_chunk_ids, retrieved_chunk_ids)`. |
 | `src/eval/metrics/operational.py` | Per-stage latency p50/p95/p99, cost, token aggregation. |
@@ -462,7 +465,7 @@ The `src/eval/` package provides a reproducible evaluation system over labeled g
 | `src/eval/datasets/ml_papers.py` | Hand-labeled dev set loader + manifest SHA-256 verification. |
 | `src/eval/config.py` | YAML-loaded `EvalConfig`. |
 | `src/eval/storage.py` | Run-directory CRUD over `eval_runs/<run_id>/`. |
-| `src/eval/pipeline_factory.py` + `src/eval/_telemetry.py` | Builds an isolated RAG pipeline per (config, dataset) using ephemeral Chroma. |
+| `src/eval/pipeline_factory.py` | Builds an isolated RAG pipeline per (config, dataset) using ephemeral Chroma. Token counting and pricing come from `src/telemetry/` (core), not the eval package. |
 | `src/eval/aggregator.py` | Per-dataset + combined `AggregatedMetric` rows from per-question results. |
 | `src/eval/runner.py` | Orchestrates `git_sha`, ingest, query+score loop, aggregation, persistence. |
 | `src/eval/compare.py` | Two-run diff with paired permutation tests + per-question regressions/wins. |
@@ -520,7 +523,7 @@ The system exports per-stage spans for every chat query via OpenTelemetry to [Ar
 
 ### Telemetry Payload
 
-The same numbers are returned to the client as a `StageTelemetry` Pydantic model (`src/api/schemas/telemetry.py`):
+The same numbers are returned to the client as a `StageTelemetry` Pydantic model (`src/api/schemas/telemetry.py`). Token counts are the **provider-reported usage** for the answer pass (from the LLM adapter's `GenerationResult` / streaming terminal `Usage`), with the adapter's local count as fallback — never a reconstructed prompt. Telemetry covers the answer pass only, not the chain-of-thought reasoning pass.
 
 - REST `POST /api/query` — includes a `telemetry` field in the response JSON.
 - WebSocket `/api/chat` — emits a final `{"type": "telemetry", "content": {...}}` event after the existing `done` event.

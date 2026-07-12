@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from src.eval.compare import compare_runs
 from src.eval.config import EvalConfig, load_config
-from src.eval.pricing import MODEL_PRICES, ModelPrice, cost_usd
 from src.eval.runner import EvalRunner
 from src.eval.schemas import (
     AggregatedMetric,
@@ -22,6 +21,9 @@ from src.eval.schemas import (
 )
 from src.eval.statistics import bootstrap_ci, paired_permutation_test
 from src.eval.storage import list_runs, load_run, save_run
+# Pricing moved to the core telemetry package; re-exported here so the eval
+# package's public API (`from src.eval import cost_usd`) is preserved.
+from src.telemetry.pricing import MODEL_PRICES, ModelPrice, cost_usd
 
 __all__ = [
     # 1A — schemas, pricing, statistics
