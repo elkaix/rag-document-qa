@@ -11,7 +11,7 @@ def _sr(chunk_id: str, content: str, score: float) -> SearchResult:
 
 def test_rrf_fusion_asymmetric_inputs():
     """RRF on A=[a,b,c,d], B=[d,a] with rrf_k=60 yields fused order a, d, b, c."""
-    from src.eval.retrievers.bm25_hybrid import reciprocal_rank_fusion
+    from src.retrieval.hybrid import reciprocal_rank_fusion
     A = ["a", "b", "c", "d"]
     B = ["d", "a"]
     fused = reciprocal_rank_fusion([A, B], rrf_k=60)
@@ -21,7 +21,7 @@ def test_rrf_fusion_asymmetric_inputs():
 def test_hybrid_retrieve_returns_top_k():
     """End-to-end: hybrid retriever combines BM25 and Chroma results into top-K."""
     import chromadb
-    from src.eval.retrievers.bm25_hybrid import BM25HybridRetriever
+    from src.retrieval.hybrid import BM25HybridRetriever
     from src.vector_store import ChromaVectorStore
 
     client = chromadb.EphemeralClient()
