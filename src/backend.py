@@ -351,10 +351,6 @@ class RAGBackend:
         tracer = get_tracer()
 
         # ---- PHASE 1: Retrieval (timed + traced) ----------------------------
-        # WHY: We open a span here rather than using @traced_stage because the
-        #      retrieval call is a one-liner on self.vector_store — refactoring
-        #      it to return (payload, attrs) would require an indirection wrapper
-        #      that adds more lines than the inline approach.
         t_retrieve_start = time.perf_counter()
         with tracer.start_as_current_span("rag.retrieve") as retrieve_span:
             retrieve_span.set_attribute("top_k", k)
@@ -770,21 +766,7 @@ class RAGBackend:
         Returns:
             List of chunk dicts with chunk_id, content, and metadata.
         """
-        # WHY: ChromaDB's get() with where filter retrieves all chunks for a
-        #      document without needing to know individual chunk IDs.
-        raw = self.vector_store._collection.get(
-            where={"doc_id": doc_id},
-            include=["documents", "metadatas"],
-        )
-
-        chunks = []
-        for i, chunk_id in enumerate(raw["ids"]):
-            chunks.append({
-                "chunk_id": chunk_id,
-                "content": raw["documents"][i] if raw["documents"] else "",
-                "metadata": raw["metadatas"][i] if raw["metadatas"] else {},
-            })
-        return chunks
+        return self.vector_store.get_by_doc_id(doc_id)
 
     def get_stats(self) -> dict[str, Any]:
         """Return combined statistics from both stores.

@@ -32,17 +32,21 @@ logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
-# Internal helpers                                                             #
+# Shared helpers                                                               #
 # --------------------------------------------------------------------------- #
 
 
-def _parse_json_response(text: str) -> dict | None:
+def parse_json_response(text: str) -> dict | None:
     """Strip markdown code fences and parse the JSON payload inside.
 
     WHY: LLMs often wrap JSON in ```json ... ``` fences even when instructed
     not to. Stripping fences before parsing is more robust than demanding the
     model produce bare JSON — models are inconsistent about following that
     instruction perfectly.
+
+    Shared by every LLM-as-judge caller in this codebase (this module's own
+    judges, plus eval.metrics.generation's factual-match judge) so the
+    fence-stripping logic has exactly one implementation.
 
     Args:
         text: Raw string returned by the LLM.
@@ -145,7 +149,7 @@ def evaluate_faithfulness(
     )
 
     raw = llm.generate(user_prompt, system_prompt=system_prompt)
-    parsed = _parse_json_response(raw)
+    parsed = parse_json_response(raw)
 
     if parsed is None:
         # PATTERN: Fail-safe return — a parse failure means we cannot trust
@@ -211,7 +215,7 @@ def evaluate_answer_relevancy(
     )
 
     raw = llm.generate(user_prompt, system_prompt=system_prompt)
-    parsed = _parse_json_response(raw)
+    parsed = parse_json_response(raw)
 
     if parsed is None:
         return (
@@ -283,7 +287,7 @@ def evaluate_context_precision(
     )
 
     raw = llm.generate(user_prompt, system_prompt=system_prompt)
-    parsed = _parse_json_response(raw)
+    parsed = parse_json_response(raw)
 
     if parsed is None:
         return (

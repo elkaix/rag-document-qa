@@ -23,6 +23,7 @@ Design decisions:
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import subprocess
 from datetime import datetime, timezone
@@ -36,19 +37,18 @@ from src.eval.aggregator import aggregate
 from src.eval.config import EvalConfig
 from src.eval.datasets import ml_papers as ml_papers_ds
 from src.eval.datasets import squad_v2 as squad_ds
-from src.eval.metrics.generation import (
-    answer_correctness,
-    context_recall,
-    judge_answer_relevancy,
-    judge_context_precision,
-    judge_faithfulness,
-)
+from src.eval.metrics.generation import answer_correctness, context_recall
 from src.eval.metrics.operational import aggregate_costs, aggregate_tokens
 from src.eval.metrics.refusal import refusal_correctness
 from src.eval.metrics.retrieval import mrr_at_k, ndcg_at_k, recall_at_k
 from src.eval.pipeline_factory import build_pipeline
 from src.eval.schemas import EvalQuestion, EvalResult, RunMetadata
 from src.eval.storage import compute_run_id, save_run
+from src.evaluation import (
+    evaluate_answer_relevancy,
+    evaluate_context_precision,
+    evaluate_faithfulness,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,26 @@ def _sha256_of_file(path: Path) -> str:
         return h.hexdigest()
     except OSError:
         return "unknown"
+
+
+def _judge_details(reasoning: str, details_json: str | None) -> dict[str, Any]:
+    """Reshape a judge's (reasoning, details_json) into one details dict.
+
+    Both evaluate_faithfulness and evaluate_context_precision return a raw
+    per-claim/per-chunk JSON blob alongside their one-line reasoning; this
+    merges them into the single dict _score_question stores per metric.
+
+    Args:
+        reasoning: The judge's one-sentence summary.
+        details_json: Raw JSON string from the judge, or None on parse failure.
+
+    Returns:
+        The parsed details dict (empty if details_json is falsy) with
+        "reasoning" set.
+    """
+    details: dict[str, Any] = json.loads(details_json) if details_json else {}
+    details["reasoning"] = reasoning
+    return details
 
 
 def _score_question(
@@ -107,18 +127,26 @@ def _score_question(
 
         metrics["context_recall"] = context_recall(question.gold_chunk_ids, retrieved_ids)
 
-        # LLM-judge generation metrics
-        faith_score, faith_details = judge_faithfulness(answer, retrieved_texts, judge_llm)
+        # LLM-judge generation metrics — call the judges directly and reshape
+        # their (score, reasoning[, details_json]) return into (score, dict)
+        # here, since this is their only caller.
+        faith_score, faith_reasoning, faith_json = evaluate_faithfulness(
+            answer, retrieved_texts, judge_llm
+        )
         metrics["judge_faithfulness"] = faith_score
-        details["judge_faithfulness"] = faith_details
+        details["judge_faithfulness"] = _judge_details(faith_reasoning, faith_json)
 
-        cp_score, cp_details = judge_context_precision(question.question, retrieved_texts, judge_llm)
+        cp_score, cp_reasoning, cp_json = evaluate_context_precision(
+            question.question, retrieved_texts, judge_llm
+        )
         metrics["judge_context_precision"] = cp_score
-        details["judge_context_precision"] = cp_details
+        details["judge_context_precision"] = _judge_details(cp_reasoning, cp_json)
 
-        ar_score, ar_details = judge_answer_relevancy(question.question, answer, judge_llm)
+        ar_score, ar_reasoning = evaluate_answer_relevancy(
+            question.question, answer, judge_llm
+        )
         metrics["judge_answer_relevancy"] = ar_score
-        details["judge_answer_relevancy"] = ar_details
+        details["judge_answer_relevancy"] = {"reasoning": ar_reasoning}
 
     # --- Answer correctness (only when gold answer is known) ---
     if question.gold_answer:

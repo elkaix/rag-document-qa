@@ -172,6 +172,31 @@ class TestDocumentOperations:
         docs = backend.list_documents()
         assert len(docs) == 1
 
+    def test_get_document_chunks_returns_ingested_chunks(
+        self, backend: RAGBackend, txt_file: Path
+    ):
+        """get_document_chunks returns every chunk of the ingested document.
+
+        Guards the seam between RAGBackend and ChromaVectorStore.get_by_doc_id —
+        this backend method used to reach into the store's private ChromaDB
+        collection directly.
+        """
+        ingest_result = backend.ingest_file(txt_file)
+        doc_id = ingest_result["doc_id"]
+
+        chunks = backend.get_document_chunks(doc_id)
+
+        assert len(chunks) == ingest_result["chunks_count"]
+        for chunk in chunks:
+            assert "chunk_id" in chunk
+            assert "content" in chunk
+            assert "metadata" in chunk
+            assert chunk["metadata"]["doc_id"] == doc_id
+
+    def test_get_document_chunks_unknown_doc_returns_empty(self, backend: RAGBackend):
+        """An unknown doc_id returns an empty list, not an error."""
+        assert backend.get_document_chunks("nonexistent") == []
+
 
 # --------------------------------------------------------------------------- #
 # Conversation CRUD tests                                                      #

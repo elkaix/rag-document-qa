@@ -8,8 +8,9 @@ from pathlib import Path
 import pytest
 
 from src.eval.config import EvalConfig
-from src.eval.runner import EvalRunner
+from src.eval.runner import EvalRunner, _score_question
 from src.eval.schemas import EvalQuestion
+from src.vector_store import SearchResult
 
 
 class DummyLLM:
@@ -76,6 +77,78 @@ def squad_5(monkeypatch, tmp_path):
             f.write(q.model_dump_json() + "\n")
     monkeypatch.setattr("src.eval.datasets.squad_v2.DEFAULT_OUTPUT_PATH", path)
     return path
+
+
+class TestScoreQuestion:
+    """Direct coverage of _score_question's judge-metric wiring.
+
+    WHY this test exists: _score_question previously delegated the
+    (score, reasoning[, details_json]) -> (score, details_dict) reshape to
+    three wrapper functions in eval.metrics.generation. Those wrappers had
+    their own tests but _score_question itself — the only caller — did not.
+    This guards the rewire that inlines the reshape here.
+    """
+
+    def _question(self) -> EvalQuestion:
+        return EvalQuestion(
+            id="q1",
+            question="What is fact 0?",
+            gold_answer="Fact 0.",
+            gold_chunk_ids=["c1"],
+        )
+
+    def _chunks(self) -> list[SearchResult]:
+        return [
+            SearchResult(
+                content="Fact 0 is important.",
+                metadata={"doc_id": "d1"},
+                score=0.9,
+                doc_id="d1",
+                chunk_id="c1",
+            )
+        ]
+
+    def test_populates_judge_metrics_and_details(self):
+        llm = DummyLLM(
+            answer="Fact 0.",
+            judge_payload={
+                "score": 0.8,
+                "claims": [{"claim": "x", "supported": True, "evidence": "y"}],
+                "chunks": [{"chunk_index": 0, "relevant": True}],
+                "factual_match": 1.0,
+                "is_refusal": False,
+                "reasoning": "matches",
+            },
+        )
+
+        metrics, details = _score_question(
+            self._question(), self._chunks(), "Fact 0.", llm
+        )
+
+        for key in ("judge_faithfulness", "judge_context_precision", "judge_answer_relevancy"):
+            assert metrics[key] == pytest.approx(0.8)
+
+        # answer_correctness is the mean of embedding cosine (real, unmocked
+        # embedder) and the judge's factual_match (1.0 here). generated ==
+        # gold_answer, so cosine ≈ 1.0 and the mean should be too.
+        assert metrics["answer_correctness"] == pytest.approx(1.0, abs=1e-3)
+
+        assert details["judge_faithfulness"]["reasoning"] == "matches"
+        assert "claims" in details["judge_faithfulness"]
+        assert details["judge_context_precision"]["reasoning"] == "matches"
+        assert "chunks" in details["judge_context_precision"]
+        assert details["judge_answer_relevancy"]["reasoning"] == "matches"
+
+    def test_skips_judge_metrics_without_gold_chunk_ids(self):
+        question = EvalQuestion(id="q1", question="What is fact 0?")
+        llm = DummyLLM()
+
+        metrics, details = _score_question(question, self._chunks(), "Fact 0.", llm)
+
+        assert "judge_faithfulness" not in metrics
+        assert "judge_context_precision" not in metrics
+        assert "judge_answer_relevancy" not in metrics
+        assert "context_recall" not in metrics
 
 
 class TestEvalRunner:

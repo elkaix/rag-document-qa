@@ -457,7 +457,7 @@ The `src/eval/` package provides a reproducible evaluation system over labeled g
 | `src/eval/metrics/retrieval.py` | Recall@k, MRR@k, nDCG@k over `(gold_chunk_ids, retrieved_chunk_ids)`. |
 | `src/eval/metrics/operational.py` | Per-stage latency p50/p95/p99, cost, token aggregation. |
 | `src/eval/metrics/refusal.py` | Regex + LLM-judge refusal correctness for unanswerable questions. |
-| `src/eval/metrics/generation.py` | Wraps existing `src/evaluation.py` LLM-as-judge functions; adds `answer_correctness` (cosine + judge mean) and `context_recall`. |
+| `src/eval/metrics/generation.py` | Adds `answer_correctness` (cosine + judge mean) and `context_recall`; the faithfulness/relevancy/context-precision judges from `src/evaluation.py` are called directly by `src/eval/runner.py`. |
 | `src/eval/datasets/squad_v2.py` | Seeded sample + frozen 200-row JSONL artifact from HuggingFace `squad_v2`. |
 | `src/eval/datasets/ml_papers.py` | Hand-labeled dev set loader + manifest SHA-256 verification. |
 | `src/eval/config.py` | YAML-loaded `EvalConfig`. |

@@ -9,13 +9,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from src.eval.metrics.generation import (
-    answer_correctness,
-    context_recall,
-    judge_answer_relevancy,
-    judge_context_precision,
-    judge_faithfulness,
-)
+from src.eval.metrics.generation import answer_correctness, context_recall
 
 
 class FakeLLM:
@@ -93,23 +87,3 @@ class TestAnswerCorrectness:
             )
         # cosine = 0.5/sqrt(0.5) ≈ 0.7071; judge = 0.5; mean ≈ 0.6036
         assert score == pytest.approx((1 / np.sqrt(2) + 0.5) / 2, abs=1e-3)
-
-
-class TestJudgeWrappers:
-    def test_judge_faithfulness_returns_score(self):
-        llm = FakeLLM([{"claims": [], "score": 0.9, "reasoning": "ok"}])
-        score, details = judge_faithfulness("ans", ["ctx1"], llm)
-        assert score == pytest.approx(0.9)
-        assert "claims" in details
-
-    def test_judge_answer_relevancy_returns_score(self):
-        llm = FakeLLM([{"score": 0.8, "reasoning": "ok"}])
-        score, details = judge_answer_relevancy("Q?", "A.", llm)
-        assert score == pytest.approx(0.8)
-        assert details["reasoning"] == "ok"
-
-    def test_judge_context_precision_returns_score(self):
-        llm = FakeLLM([{"chunks": [], "score": 0.6, "reasoning": "ok"}])
-        score, details = judge_context_precision("Q?", ["c1", "c2"], llm)
-        assert score == pytest.approx(0.6)
-        assert "chunks" in details
