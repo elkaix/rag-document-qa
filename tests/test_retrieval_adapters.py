@@ -21,6 +21,7 @@ Why fakes for the composing adapters:
 from __future__ import annotations
 
 import chromadb
+import pytest
 
 from src.retrieval import Retriever
 from src.vector_store import ChromaVectorStore, SearchResult
@@ -192,3 +193,31 @@ def test_multi_query_fans_out_dedups_and_ranks_best_first():
     # c2 was deduped to its higher score (0.7), the union ranked best-first,
     # then truncated to top_k: c1(0.9), c3(0.8) win over c2(0.7).
     assert [r.chunk_id for r in out] == ["c1", "c3"]
+
+
+# --------------------------------------------------------------------------- #
+# Factory — config strategy -> Retriever type                                 #
+# --------------------------------------------------------------------------- #
+
+def test_build_retriever_dense_is_the_default_strategy():
+    from src.retrieval import DenseRetriever, build_retriever
+
+    retriever = build_retriever("dense", _chroma_store())
+    assert isinstance(retriever, DenseRetriever)
+
+
+def test_build_retriever_reranked_composes_dense_and_a_reranker(monkeypatch):
+    """reranked wires a RerankingRetriever without loading the real model here."""
+    from src.retrieval import RerankingRetriever, build_retriever
+
+    monkeypatch.setattr("src.retrieval.factory.CrossEncoderReranker", _FakeReranker)
+    retriever = build_retriever("reranked", _chroma_store(), rerank_over_fetch_n=15)
+    assert isinstance(retriever, RerankingRetriever)
+
+
+@pytest.mark.parametrize("strategy", ["hybrid", "multi_query", "totally-bogus"])
+def test_build_retriever_rejects_unwired_or_unknown_strategies(strategy):
+    from src.retrieval import build_retriever
+
+    with pytest.raises(ValueError):
+        build_retriever(strategy, _chroma_store())
