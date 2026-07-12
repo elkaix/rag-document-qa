@@ -15,11 +15,18 @@ class DummyLLM:
     """Returns a fixed answer; tracks calls."""
     def __init__(self, answer: str = "<dummy>"):
         self.answer = answer
+        self.model = "gpt-4.1-nano"  # engine reads .model for spans + cost pricing
         self.calls: list[tuple[str, str | None]] = []
 
     def generate(self, prompt: str, system_prompt: str | None = None) -> str:
         self.calls.append((prompt, system_prompt))
         return self.answer
+
+    def generate_with_usage(
+        self, prompt: str, system_prompt: str | None = None
+    ) -> tuple[str, int, int]:
+        self.calls.append((prompt, system_prompt))
+        return self.answer, max(1, len(prompt.split())), len(self.answer.split())
 
 
 def _baseline_config() -> EvalConfig:

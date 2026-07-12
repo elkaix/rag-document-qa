@@ -134,11 +134,15 @@ class QueryEngine:
             span.set_attribute("results_count", len(results))
         retrieve_ms = (time.perf_counter() - start) * 1000
 
-        if not results:
-            return [], NO_DOCUMENTS_ANSWER, telemetry_asm.zero(retrieve_ms)
+        # The refusal gate is checked BEFORE the no-documents branch: an empty
+        # retrieval is itself an answerability signal the gate is entitled to
+        # act on (should_refuse([]) is True when enabled). Production leaves the
+        # gate off, so it always falls through to the no-documents notice.
         refusal_text = self._refusal_text(results)
         if refusal_text is not None:
             return [], refusal_text, telemetry_asm.zero(retrieve_ms)
+        if not results:
+            return [], NO_DOCUMENTS_ANSWER, telemetry_asm.zero(retrieve_ms)
 
         context = build_context(results)
         handler = self._handler_for(model)
@@ -195,14 +199,14 @@ class QueryEngine:
             span.set_attribute("results_count", len(results))
         retrieve_ms = (time.perf_counter() - start) * 1000
 
-        if not results:
-            yield ("status", "No indexed documents — nothing to retrieve.")
-            yield ("token", NO_DOCUMENTS_ANSWER)
-            yield ("result", StreamResult([], telemetry_asm.zero(retrieve_ms), self._llm.model))
-            return
         refusal_text = self._refusal_text(results)
         if refusal_text is not None:
             yield ("token", refusal_text)
+            yield ("result", StreamResult([], telemetry_asm.zero(retrieve_ms), self._llm.model))
+            return
+        if not results:
+            yield ("status", "No indexed documents — nothing to retrieve.")
+            yield ("token", NO_DOCUMENTS_ANSWER)
             yield ("result", StreamResult([], telemetry_asm.zero(retrieve_ms), self._llm.model))
             return
 

@@ -31,3 +31,19 @@ behaviour behind a small interface), **seam** (a boundary you can substitute at)
   telemetry assembly and the eval harness use one source of truth; the eval
   package imports from here, never the reverse. See
   [ADR 0003](docs/adr/0003-telemetry-ownership.md).
+- **Retriever** — the seam (Protocol) every retrieval strategy hides behind:
+  `retrieve(query, top_k) -> list[SearchResult]`. Implementations either conform
+  directly (`DenseRetriever`, `BM25HybridRetriever`) or *compose* an inner
+  Retriever (`RerankingRetriever` over-fetches then cross-encodes;
+  `MultiQueryRetriever` fans rewritten queries out and dedups). Live in
+  `src/retrieval/`; selected for production by `build_retriever`. See
+  [ADR 0004](docs/adr/0004-retriever-seam-and-query-engine.md).
+- **QueryEngine** (`src/query_engine/`) — the deep module owning retrieve→generate
+  for both the sync (`ask`) and streaming (`ask_stream`) paths: one Markdown
+  answer prompt, filename-prefixed context, an optional refusal gate, and
+  telemetry assembly — all in one place. Both `RAGBackend` and the eval harness
+  call it, so eval measures the shipped pipeline. See
+  [ADR 0004](docs/adr/0004-retriever-seam-and-query-engine.md).
+- **RefusalHandler** — an answerability gate (not a Retriever): refuses when the
+  top-1 similarity is below a threshold (or nothing was retrieved). Applied
+  inside the QueryEngine; off by default in production.
