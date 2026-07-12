@@ -185,24 +185,27 @@ Thin wrapper over a ChromaDB Collection:
 - **`delete_by_doc_id()`** — removes all chunks for a document via metadata WHERE clause
 - **`get_stats()`** — returns chunk count, backend name, collection name
 
-### `src/llm_handler.py` — LLM Provider Routing
+### `src/llm_handler/` — LLM Provider Routing
 
-Auto-detects provider from model name prefix:
+`LLMHandler` (in `src/llm_handler/__init__.py`) auto-detects the provider from the model-name prefix and selects **one adapter** at construction:
 
-| Prefix | Provider | API Key Env Var |
-|--------|----------|-----------------|
-| `gpt*`, `o1*`, `o3*` | OpenAI | `OPENAI_API_KEY` |
-| `claude*` | Anthropic | `ANTHROPIC_API_KEY` |
-| `glm*` | Zhipu AI (OpenAI-compatible) | `GLM_API_KEY` |
-| everything else | Ollama (localhost:11434) | none |
+| Prefix | Provider | Adapter | API Key Env Var |
+|--------|----------|---------|-----------------|
+| `gpt*`, `o1*`, `o3*` | OpenAI | `OpenAICompatibleAdapter` | `OPENAI_API_KEY` |
+| `claude*` | Anthropic | `AnthropicAdapter` | `ANTHROPIC_API_KEY` |
+| `glm*` | Zhipu AI (OpenAI-compatible) | `OpenAICompatibleAdapter` | `GLM_API_KEY` |
+| everything else | Ollama (localhost:11434) | `OllamaAdapter` | none |
 
-All providers are optional imports with graceful fallback to a dummy response generator.
+Each provider lives behind a `ProviderAdapter` (`src/llm_handler/adapters/`) whose SDK client is **injected** via a zero-arg `client_factory`, so every provider path is unit-testable with a fake (`tests/test_llm_adapters.py`). Adapters return `GenerationResult(text, usage)`; streaming yields text chunks then a terminal `Usage`. Usage is provider-reported where the SDK supplies it, adapter-counted otherwise. See [ADR 0002](docs/adr/0002-provider-adapters.md).
 
-Public API surfaces:
+`LLMHandler` owns provider selection, the single-prompt → messages translation, and the fallback: only `ProviderUnavailableError` (missing SDK, missing GLM key, Ollama connection refused) routes to the `DummyAdapter`; real API errors propagate.
+
+Public API surfaces (unchanged for callers):
 - `generate()` / `stream_response()` — single prompt string
 - `generate_messages()` / `stream_messages()` — OpenAI-style messages list (for multi-turn chat)
+- `generate_with_usage()` — returns `(text, prompt_tokens, completion_tokens)` from provider-reported usage
 
-GPT-5 family and o-series models use `max_completion_tokens` instead of `max_tokens` and omit the `temperature` parameter (constrained to default).
+GPT-5 family and o-series models use `max_completion_tokens` instead of `max_tokens` and omit the `temperature` parameter (constrained to default) — handled inside `OpenAICompatibleAdapter`.
 
 ### `src/database.py` — SQLite/SQLModel
 
