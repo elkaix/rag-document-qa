@@ -351,10 +351,6 @@ class RAGBackend:
         tracer = get_tracer()
 
         # ---- PHASE 1: Retrieval (timed + traced) ----------------------------
-        # WHY: We open a span here rather than using @traced_stage because the
-        #      retrieval call is a one-liner on self.vector_store — refactoring
-        #      it to return (payload, attrs) would require an indirection wrapper
-        #      that adds more lines than the inline approach.
         t_retrieve_start = time.perf_counter()
         with tracer.start_as_current_span("rag.retrieve") as retrieve_span:
             retrieve_span.set_attribute("top_k", k)
