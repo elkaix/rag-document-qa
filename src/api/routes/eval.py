@@ -17,9 +17,6 @@ Design decisions:
 
 from __future__ import annotations
 
-import os
-import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, status
@@ -34,12 +31,15 @@ from src.api.schemas.eval import (
     RunSummaryDTO,
 )
 from src.api.services.eval_runs import RunRegistry, progress_fraction
-from src.eval.doubles import resolve_llm_overrides
+from src.eval.submission import (
+    ConfigNotFoundError,
+    reserve_run_id,
+    resolve_config,
+    submit_run,
+)
 from src.eval.compare import compare_runs as _compare_runs_impl
-from src.eval.config import load_config
-from src.eval.runner import EvalRunner
 from src.eval.schemas import CompareResult, EvalResult
-from src.eval.storage import compute_run_id, list_runs, load_run
+from src.eval.storage import list_runs, load_run
 
 router = APIRouter(prefix="/api/eval", tags=["eval"])
 
@@ -75,55 +75,6 @@ def _get_registry(request: Request) -> RunRegistry:
 # Background worker                                                            #
 # --------------------------------------------------------------------------- #
 
-def _run_eval_in_background(
-    config_name: str,
-    run_id: str,
-    registry: RunRegistry,
-) -> None:
-    """Synchronous worker invoked via BackgroundTasks.
-
-    WHY sync (not async): EvalRunner is CPU/IO-mixed and calls blocking LLM
-    APIs. Sync BackgroundTasks workers are run in a threadpool by Starlette,
-    keeping the event loop free. An async worker would block the loop.
-
-    Pipeline position: DISPATCH — called once per POST /api/eval/run,
-    runs the full EvalRunner lifecycle, then marks the run done/failed
-    in the registry.
-    """
-    cfg_path = CONFIGS_DIR / f"{config_name}.yaml"
-    cfg = load_config(cfg_path)
-
-    # BEFORE: this imported a *private* _DummyLLM out of src.eval.cli and
-    #         repeated the CLI's environment dispatch verbatim.
-    # AFTER:  one public resolver owned by the eval package.
-    # WHY:    the HTTP layer must not reach into another module's privates, and
-    #         one decision should not exist in two copies.
-    overrides = resolve_llm_overrides()
-
-    runner = EvalRunner(
-        cfg,
-        config_path=cfg_path,
-        llm_override=overrides.llm,
-        judge_llm_override=overrides.judge_llm,
-        # WHY forward `total`: the runner learns the question count when it
-        #      loads its datasets, which is after the run was registered.
-        #      Dropping it here left n_total at 0 and froze progress at 0.0.
-        on_progress=lambda done, total: registry.update_progress(
-            run_id, done, n_total=total
-        ),
-        # WHY run_id_override: we pre-computed the run_id at submit time so the
-        # registry could be populated before the run starts. Passing it here
-        # ensures EvalRunner saves to the same directory the status endpoint expects.
-        run_id_override=run_id,
-    )
-
-    try:
-        runner.run()
-        registry.mark_completed(run_id)
-    except Exception as exc:
-        registry.mark_failed(run_id, str(exc))
-
-
 # --------------------------------------------------------------------------- #
 # GET /api/eval/configs                                                        #
 # --------------------------------------------------------------------------- #
@@ -155,51 +106,41 @@ def list_configs() -> list[str]:
     status_code=status.HTTP_202_ACCEPTED,
     summary="Submit an eval run (non-blocking)",
 )
-def submit_run(
+def submit_eval_run(
     body: RunSubmitRequest,
     background_tasks: BackgroundTasks,
     request: Request,
 ) -> RunSubmitResponse:
     """Queue an eval run and return immediately with a run_id to poll.
 
-    PATTERN: async job — the route validates the config exists, pre-computes
-    the run_id (same algorithm as EvalRunner so they agree on the directory
-    name), registers the run in the registry as "queued", dispatches via
-    BackgroundTasks, then returns 202. The client polls /runs/{run_id}/status.
+    PATTERN: async job — reserve the id, dispatch the run to a threadpool
+    worker, return 202. The client polls /runs/{run_id}/status.
 
-    WHY pre-compute run_id: the registry must track the run BEFORE it
-    starts, so the status endpoint can return "queued" immediately after
-    submission. EvalRunner accepts run_id_override to use the same id.
+    BEFORE: this handler carried the orchestration — config resolution, run-id
+            and git-SHA derivation duplicated from EvalRunner, an import of a
+            *private* _DummyLLM out of the CLI module, registry lifecycle, and
+            a 50-line background worker. Submitting a run was reachable only
+            through FastAPI.
+    AFTER:  src/eval/submission.py owns all of it; this handler translates HTTP.
     """
-    config_name = body.config_name
-    cfg_path = CONFIGS_DIR / f"{config_name}.yaml"
-
-    # 404 if the config file doesn't exist.
-    if not cfg_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Config '{config_name}' not found in {CONFIGS_DIR}.",
-        )
-
-    # Pre-compute run_id using the same algorithm as EvalRunner.run().
-    started_at = datetime.now(timezone.utc)
-    try:
-        git_sha = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True
-        ).strip()
-    except Exception:
-        git_sha = "unknown"
-
-    run_id = compute_run_id(config_name, started_at, git_sha)
-
-    # Register before dispatch so status can return "queued" immediately.
     registry = _get_registry(request)
-    # WHY n_total=0: we don't know question count until the runner loads datasets.
-    # update_progress transitions the entry to "running" on first call.
-    registry.register(run_id, n_total=0)
 
-    # Dispatch the synchronous worker via BackgroundTasks (runs in threadpool).
-    background_tasks.add_task(_run_eval_in_background, config_name, run_id, registry)
+    try:
+        # Reserving the id up front lets the status endpoint answer immediately.
+        run_id = reserve_run_id(body.config_name)
+        resolve_config(body.config_name, CONFIGS_DIR)
+    except ConfigNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+
+    background_tasks.add_task(
+        submit_run,
+        body.config_name,
+        configs_dir=CONFIGS_DIR,
+        progress=registry,
+        run_id=run_id,
+    )
 
     return RunSubmitResponse(run_id=run_id, status="queued")
 

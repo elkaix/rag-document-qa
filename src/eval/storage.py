@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,25 @@ def runs_dir() -> Path:
         as an argument, so callers inject rather than mutate.
     """
     return Path(os.getenv("EVAL_RUNS_DIR", DEFAULT_RUNS_DIRNAME))
+
+
+def current_git_sha() -> str:
+    """Return the HEAD commit SHA, or ``"unknown"`` outside a git checkout.
+
+    Returns:
+        The full SHA, or ``"unknown"`` when git is unavailable — the harness may
+        run in a CI container or a zip-extracted deployment, and provenance
+        being unknown is not a reason to fail a run.
+
+    WHY here: run-id derivation needs it, and this used to be a
+        ``subprocess.check_output`` with a bare ``except`` copied into both
+        ``EvalRunner.run`` and the HTTP submit route, which then had to agree on
+        the result to land in the same directory.
+    """
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        return "unknown"
 
 
 def compute_run_id(config_name: str, started_at: datetime, git_sha: str) -> str:

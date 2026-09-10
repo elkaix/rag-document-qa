@@ -42,7 +42,12 @@ from src.eval.metrics.refusal import refusal_correctness
 from src.eval.metrics.retrieval import mrr_at_k, ndcg_at_k, recall_at_k
 from src.eval.pipeline_factory import build_pipeline
 from src.eval.schemas import EvalQuestion, EvalResult, RunMetadata
-from src.eval.storage import compute_run_id, runs_dir, save_run
+from src.eval.storage import (
+    compute_run_id,
+    current_git_sha,
+    runs_dir,
+    save_run,
+)
 from src.evaluation import (
     evaluate_answer_relevancy,
     evaluate_context_precision,
@@ -176,17 +181,18 @@ class EvalRunner:
         llm_override: object | None = None,
         judge_llm_override: object | None = None,
         on_progress: Callable[[int, int], None] | None = None,
-        run_id_override: str | None = None,
+        run_id: str | None = None,
     ) -> None:
         self._config = config
         self._config_path = str(config_path) if config_path else f"<inline:{config.name}>"
         self._llm_override = llm_override
         self._judge_llm_override = judge_llm_override
         self._on_progress = on_progress
-        # WHY run_id_override: the API pre-computes the run_id so it can register
-        # the run in RunRegistry BEFORE the runner starts (enabling status polling).
-        # When set, we use this id instead of computing one from timestamp+sha.
-        self._run_id_override = run_id_override
+        # WHY a caller may supply the id: a submitter that wants to report status
+        # has to know where the run will land before it starts. Deriving it here
+        # and again at the caller — which is what "override" used to reconcile —
+        # meant two timestamps that had to agree to the second.
+        self._run_id = run_id
 
     def run(self) -> RunMetadata:
         """Execute the full eval lifecycle and return run provenance.
@@ -197,23 +203,13 @@ class EvalRunner:
         config = self._config
         started_at = datetime.now(timezone.utc)
 
-        # --- Git SHA ---
-        # WHY try/except: the harness may run outside a git repo (CI containers,
-        # zip-extracted deployments). Fall back to 'unknown' rather than crashing.
-        try:
-            git_sha = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True
-            ).strip()
-        except Exception:
-            git_sha = "unknown"
+        git_sha = current_git_sha()
 
         # --- Env hash (requirements.txt fingerprint) ---
         env_hash = _sha256_of_file(Path("requirements.txt"))[:16]
 
         # --- Run ID and directory ---
-        # WHY: If run_id_override is set (from the API route), use it directly.
-        # This ensures the registered registry run_id matches the saved directory.
-        run_id = self._run_id_override or compute_run_id(config.name, started_at, git_sha)
+        run_id = self._run_id or compute_run_id(config.name, started_at, git_sha)
         # The runs directory is resolved per call, so no module state has to be
         # patched for a run to land somewhere else.
         run_dir = runs_dir() / run_id

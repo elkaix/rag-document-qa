@@ -34,8 +34,13 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
 - [x] `src/retrieval/composition.py` owns the rule; `factory.py` deleted
 - [x] Parity test now covers the reranked case + a structural guard
 
-## Tranche 5 — C4 eval run submission
-- [ ] Submission module; route translates HTTP only
+## Tranche 5 — C4 eval run submission  ✔
+- [x] `src/eval/submission.py` owns config resolution, run-id reservation,
+      doubles, registry lifecycle. `RunProgressSink` Protocol keeps eval free
+      of any import from the API layer.
+- [x] `run_id_override` → plain `run_id`; `current_git_sha()` single-sourced
+- [x] Route is HTTP translation; 478 → 409 lines
+- [x] Failure path + progress-total forwarding now tested without FastAPI
 
 ## Tranche 6 — C2 backend split
 - [ ] Characterization tests for conversation + evaluation clusters
