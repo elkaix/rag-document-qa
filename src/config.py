@@ -20,7 +20,9 @@ Where it fits in the RAG pipeline:
   CONFIG is imported by every layer, so it defines the shape of the whole
   system.
 """
+
 import logging
+import os
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -54,13 +56,37 @@ DATA_DIR: Path = BASE_DIR / "data"
 # PATTERN: Seed the PRNG for reproducible TF-IDF splits and test fixtures.
 RANDOM_SEED: int = 42
 
-# TRADE-OFF: 500-char chunks balance context (enough text for meaning) vs.
-#            precision (small enough for specific retrieval).  Overlap of 50
+# TRADE-OFF: 512-char chunks balance context (enough text for meaning) vs.
+#            precision (small enough for specific retrieval).  Overlap of 64
 #            prevents answers that straddle chunk boundaries from being lost.
-CHUNK_SIZE: int = 500
-CHUNK_OVERLAP: int = 50
+# SINGLE SOURCE: production ingestion (RAGBackend) and the eval harness both
+#            read these — so "baseline" eval measures production's chunking
+#            (issue #16, step 4c). These are production's actual shipped values.
+CHUNK_SIZE: int = 512
+CHUNK_OVERLAP: int = 64
 
 TOP_K_RESULTS: int = 5
+
+# WHY a strategy selector: the Retriever seam (ADR 0004) makes dense, reranked,
+#      hybrid, and multi-query retrieval interchangeable. Production picks one
+#      here, so an eval-validated chain is promoted by config, not by a rewrite.
+#      "dense" is the behaviour-preserving default; "reranked" is wired;
+#      "hybrid"/"multi_query" are recognised but deferred (see build_retrieval_plan).
+RETRIEVER_STRATEGY: str = "dense"
+
+# WHY 20: the reranked strategy over-fetches this many dense candidates before
+#         the cross-encoder narrows them — wide enough to give the precise
+#         reranker real choice. The eval harness imports this constant rather
+#         than repeating the number, so the two cannot drift.
+RERANK_OVER_FETCH_N: int = 20
+
+# WHY the refusal defaults live here and not only in the eval config: the gate
+#      is off in production today, but its threshold and its user-facing text
+#      are product decisions. Leaving them in the eval schema meant a *product
+#      string* lived in a benchmarking config, and whoever wired the gate for
+#      production would have picked a second threshold by hand.
+REFUSAL_SIMILARITY_THRESHOLD: float = 0.35
+REFUSAL_NO_ANSWER_TEXT: str = "I don't have enough information to answer that."
 
 # ---------------------------------------------------------------------------
 # API server
@@ -130,6 +156,63 @@ SLIDING_WINDOW_SIZE: int = 5
 # WHY: Truncating long document titles in the UI prevents layout overflow
 #      while still giving the user enough text to identify the source.
 MAX_TITLE_LENGTH: int = 60
+
+# ---------------------------------------------------------------------------
+# Environment loading
+# ---------------------------------------------------------------------------
+
+# WHY an explicit function instead of loading .env when this module is imported:
+#      reading a file is a side effect, and a side effect on import means any
+#      module that transitively imports config silently gains real credentials.
+#      That is how the test suite came to make live, billable provider calls on
+#      any machine with a .env present. Entry points call this deliberately;
+#      libraries and tests never do.
+#
+# BEFORE: src/llm_handler/__init__.py called load_dotenv() at import time.
+# AFTER:  the two entry points (src/api/main.py, src/eval/cli.py) call load_env().
+# WHY:    importing a library must not arm network calls.
+PROJECT_ROOT: Path = BASE_DIR
+
+
+def load_env(dotenv_path: Path | None = None) -> bool:
+    """Load environment variables from a .env file into ``os.environ``.
+
+    Call this once from an application entry point, before anything reads
+    configuration. Existing environment variables always win, so an explicit
+    export overrides the file.
+
+    Args:
+        dotenv_path: Path to the .env file. Defaults to the project root's.
+
+    Returns:
+        True if a .env file was found and read, False otherwise (a missing
+        file and a missing python-dotenv are both non-fatal).
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return False
+    return load_dotenv(dotenv_path or (PROJECT_ROOT / ".env"), override=False)
+
+
+def allowed_origins() -> list[str]:
+    """Return the CORS origins the API should accept.
+
+    Returns:
+        The origins parsed from ``$ALLOWED_ORIGINS`` (comma-separated), or
+        ``["*"]`` when the variable is unset or empty.
+
+    SECURITY: an unset value stays open, which is deliberate for local dev
+        against a Vite server on another port. Production must set this — see
+        docker-compose.prod.yml. It is resolved here rather than inline in the
+        app module so a security-relevant setting is discoverable alongside
+        every other configurable value.
+    """
+    raw = os.getenv("ALLOWED_ORIGINS", "").strip()
+    if not raw:
+        return ["*"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
 
 # ---------------------------------------------------------------------------
 # Runtime directory bootstrap

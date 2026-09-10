@@ -6,31 +6,42 @@ import pytest
 
 from src.eval.aggregator import aggregate
 from src.eval.config import EvalConfig
-from src.eval.schemas import AggregatedMetric, EvalResult
+from src.eval.schemas import EvalResult
 
 
 def _baseline_config() -> EvalConfig:
-    return EvalConfig.model_validate({
-        "name": "test", "description": "",
-        "pipeline": {
-            "chunker": {"strategy": "recursive", "chunk_size": 256, "chunk_overlap": 32},
-            "retriever": {"top_k": 3},
-            "generator": {"model": "gpt-4.1-nano", "reasoning_model": None},
-        },
-        "eval": {
-            "datasets": ["squad_v2_dev_200", "ml_papers_v1"],
-            "judge_model": "gpt-4.1-nano",
-            "bootstrap_n": 200, "permutation_n": 100, "seed": 42,
-        },
-    })
+    return EvalConfig.model_validate(
+        {
+            "name": "test",
+            "description": "",
+            "pipeline": {
+                "chunker": {"strategy": "recursive", "chunk_size": 256, "chunk_overlap": 32},
+                "retriever": {"top_k": 3},
+                "generator": {"model": "gpt-4.1-nano", "reasoning_model": None},
+            },
+            "eval": {
+                "datasets": ["squad_v2_dev_200", "ml_papers_v1"],
+                "judge_model": "gpt-4.1-nano",
+                "bootstrap_n": 200,
+                "permutation_n": 100,
+                "seed": 42,
+            },
+        }
+    )
 
 
 def _r(qid: str, dataset: str, metrics: dict[str, float], error: str | None = None) -> EvalResult:
     return EvalResult(
-        question_id=qid, dataset=dataset,
-        retrieved_chunk_ids=[], retrieved_chunks=[],
-        generated_answer="", metrics=metrics, metric_details={},
-        timings_ms={}, tokens={"prompt": 0, "completion": 0}, cost_usd=0.0,
+        question_id=qid,
+        dataset=dataset,
+        retrieved_chunk_ids=[],
+        retrieved_chunks=[],
+        generated_answer="",
+        metrics=metrics,
+        metric_details={},
+        timings_ms={},
+        tokens={"prompt": 0, "completion": 0},
+        cost_usd=0.0,
         error=error,
     )
 
@@ -62,7 +73,10 @@ class TestAggregate:
         ]
         aggregated, warnings = aggregate(results, cfg)
         # Per-dataset row skipped; combined also <3 samples → also skipped.
-        assert all(a.metric_name != "recall_at_5" or a.dataset is None for a in aggregated) or aggregated == []
+        assert (
+            all(a.metric_name != "recall_at_5" or a.dataset is None for a in aggregated)
+            or aggregated == []
+        )
         # At least one warning mentions the skipped metric.
         assert any("recall_at_5" in w for w in warnings)
 
@@ -72,15 +86,18 @@ class TestAggregate:
         results.append(_r("err", "squad_v2_dev_200", {"recall_at_5": 0.0}, error="boom"))
         aggregated, _ = aggregate(results, cfg)
         # Errored row excluded → mean still 1.0, n=5.
-        squad = next(a for a in aggregated if a.metric_name == "recall_at_5" and a.dataset == "squad_v2_dev_200")
+        squad = next(
+            a
+            for a in aggregated
+            if a.metric_name == "recall_at_5" and a.dataset == "squad_v2_dev_200"
+        )
         assert squad.mean == pytest.approx(1.0)
         assert squad.n == 5
 
     def test_multiple_metrics(self):
         cfg = _baseline_config()
         results = [
-            _r(f"s{i}", "squad_v2_dev_200",
-               {"recall_at_5": 1.0, "faithfulness": 0.9})
+            _r(f"s{i}", "squad_v2_dev_200", {"recall_at_5": 1.0, "faithfulness": 0.9})
             for i in range(5)
         ]
         aggregated, _ = aggregate(results, cfg)
@@ -93,5 +110,6 @@ class TestAggregate:
         results = [_r(f"s{i}", "squad_v2_dev_200", {"r": float(i % 2)}) for i in range(20)]
         a1, _ = aggregate(results, cfg)
         a2, _ = aggregate(results, cfg)
-        assert {(a.metric_name, a.dataset, a.mean, a.ci_low, a.ci_high) for a in a1} == \
-               {(a.metric_name, a.dataset, a.mean, a.ci_low, a.ci_high) for a in a2}
+        assert {(a.metric_name, a.dataset, a.mean, a.ci_low, a.ci_high) for a in a1} == {
+            (a.metric_name, a.dataset, a.mean, a.ci_low, a.ci_high) for a in a2
+        }

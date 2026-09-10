@@ -33,7 +33,7 @@ import logging
 from collections.abc import Generator
 from typing import Any
 
-from sqlalchemy import Engine, event, text
+from sqlalchemy import Engine, event
 from sqlmodel import Session, SQLModel, create_engine
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ def _attach_foreign_key_pragma(engine: Engine) -> None:
     """
 
     @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:  # noqa: ANN001
+    def _set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
@@ -165,6 +165,15 @@ def get_session(engine: Engine) -> Generator[Session, None, None]:
     PATTERN: We do NOT commit inside get_session. Route handlers are
              responsible for calling session.commit() when they mutate data.
              get_session only handles Session lifecycle (open / close).
+
+    Note:
+        No route currently uses this. Every route reaches persistence through
+        RAGBackend, which in turn hands ConversationStore, ConversationHistory
+        and MessageEvaluator its own session factory (``RAGBackend._session``) —
+        one session-per-operation policy with a single owner. This dependency is
+        kept as the supported way for a future route that genuinely needs a raw
+        session, and as a worked example of the FastAPI generator-dependency
+        pattern; the example above is illustrative, not live code.
     """
     with Session(engine) as session:
         yield session

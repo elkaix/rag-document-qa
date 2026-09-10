@@ -25,16 +25,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import subprocess
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 
-from src.eval import storage as _storage
 from src.eval.aggregator import aggregate
-from src.eval.config import EvalConfig
+from src.eval.config import DatasetName, EvalConfig
 from src.eval.datasets import ml_papers as ml_papers_ds
 from src.eval.datasets import squad_v2 as squad_ds
 from src.eval.metrics.generation import answer_correctness, context_recall
@@ -43,7 +42,12 @@ from src.eval.metrics.refusal import refusal_correctness
 from src.eval.metrics.retrieval import mrr_at_k, ndcg_at_k, recall_at_k
 from src.eval.pipeline_factory import build_pipeline
 from src.eval.schemas import EvalQuestion, EvalResult, RunMetadata
-from src.eval.storage import compute_run_id, save_run
+from src.eval.storage import (
+    compute_run_id,
+    current_git_sha,
+    runs_dir,
+    save_run,
+)
 from src.evaluation import (
     evaluate_answer_relevancy,
     evaluate_context_precision,
@@ -142,9 +146,7 @@ def _score_question(
         metrics["judge_context_precision"] = cp_score
         details["judge_context_precision"] = _judge_details(cp_reasoning, cp_json)
 
-        ar_score, ar_reasoning = evaluate_answer_relevancy(
-            question.question, answer, judge_llm
-        )
+        ar_score, ar_reasoning = evaluate_answer_relevancy(question.question, answer, judge_llm)
         metrics["judge_answer_relevancy"] = ar_score
         details["judge_answer_relevancy"] = {"reasoning": ar_reasoning}
 
@@ -155,6 +157,36 @@ def _score_question(
         details["answer_correctness"] = ac_details
 
     return metrics, details
+
+
+class SpendCeilingExceeded(RuntimeError):
+    """Raised when a run's cumulative cost passes its configured ceiling."""
+
+
+def assert_within_spend_ceiling(results: list[EvalResult], ceiling_usd: float | None) -> None:
+    """Abort a run whose cumulative spend has passed its ceiling.
+
+    Args:
+        results: Every question scored so far.
+        ceiling_usd: The configured limit, or None for no limit.
+
+    Raises:
+        SpendCeilingExceeded: When cumulative cost is strictly greater than the
+            ceiling. The message names the amount and the question count so an
+            operator can see how far in the run stopped.
+
+    WHY a free function: this is the harness's only guard on real money, and it
+        was written inline inside the per-question loop where nothing could
+        reach it — so it had no test at all.
+    """
+    if ceiling_usd is None:
+        return
+    cumulative = sum(r.cost_usd for r in results)
+    if cumulative > ceiling_usd:
+        raise SpendCeilingExceeded(
+            f"Spend ceiling exceeded: ${cumulative:.4f} > ${ceiling_usd:.4f} "
+            f"after {len(results)} questions. Aborting run."
+        )
 
 
 class EvalRunner:
@@ -177,17 +209,18 @@ class EvalRunner:
         llm_override: object | None = None,
         judge_llm_override: object | None = None,
         on_progress: Callable[[int, int], None] | None = None,
-        run_id_override: str | None = None,
+        run_id: str | None = None,
     ) -> None:
         self._config = config
         self._config_path = str(config_path) if config_path else f"<inline:{config.name}>"
         self._llm_override = llm_override
         self._judge_llm_override = judge_llm_override
         self._on_progress = on_progress
-        # WHY run_id_override: the API pre-computes the run_id so it can register
-        # the run in RunRegistry BEFORE the runner starts (enabling status polling).
-        # When set, we use this id instead of computing one from timestamp+sha.
-        self._run_id_override = run_id_override
+        # WHY a caller may supply the id: a submitter that wants to report status
+        # has to know where the run will land before it starts. Deriving it here
+        # and again at the caller — which is what "override" used to reconcile —
+        # meant two timestamps that had to agree to the second.
+        self._run_id = run_id
 
     def run(self) -> RunMetadata:
         """Execute the full eval lifecycle and return run provenance.
@@ -196,30 +229,18 @@ class EvalRunner:
             RunMetadata with run_id, timing, error counts, and warnings.
         """
         config = self._config
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
 
-        # --- Git SHA ---
-        # WHY try/except: the harness may run outside a git repo (CI containers,
-        # zip-extracted deployments). Fall back to 'unknown' rather than crashing.
-        try:
-            git_sha = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True
-            ).strip()
-        except Exception:
-            git_sha = "unknown"
+        git_sha = current_git_sha()
 
         # --- Env hash (requirements.txt fingerprint) ---
         env_hash = _sha256_of_file(Path("requirements.txt"))[:16]
 
         # --- Run ID and directory ---
-        # WHY: If run_id_override is set (from the API route), use it directly.
-        # This ensures the registered registry run_id matches the saved directory.
-        run_id = self._run_id_override or compute_run_id(config.name, started_at, git_sha)
-        # WHY _storage.EVAL_RUNS_DIR at call time: the fixture reloads storage
-        # after setting EVAL_RUNS_DIR env var, but runner's top-level import
-        # already bound the old value. Reading from the live module attribute
-        # ensures we pick up the reloaded (test-patched) path.
-        run_dir = _storage.EVAL_RUNS_DIR / run_id
+        run_id = self._run_id or compute_run_id(config.name, started_at, git_sha)
+        # The runs directory is resolved per call, so no module state has to be
+        # patched for a run to land somewhere else.
+        run_dir = runs_dir() / run_id
 
         # --- Eval-set version fingerprints ---
         # WHY live attribute read: squad_5 fixture patches DEFAULT_OUTPUT_PATH
@@ -240,7 +261,7 @@ class EvalRunner:
         # WHY pre-load: the progress callback needs total before the first
         # on_progress(1, total) call. Eager load also surfaces missing files
         # before any pipeline work starts.
-        dataset_questions: dict[str, list[EvalQuestion]] = {}
+        dataset_questions: dict[DatasetName, list[EvalQuestion]] = {}
         for dataset_name in config.eval.datasets:
             qs = self._load_questions(dataset_name)
             dataset_questions[dataset_name] = qs
@@ -266,15 +287,7 @@ class EvalRunner:
                     all_results.append(result)
                     if self._on_progress is not None:
                         self._on_progress(len(all_results), total_questions)
-                    # Phase 2: abort if spend ceiling is exceeded.
-                    ceiling = config.eval.spend_ceiling_usd
-                    if ceiling is not None:
-                        cumulative = sum(r.cost_usd for r in all_results)
-                        if cumulative > ceiling:
-                            raise RuntimeError(
-                                f"Spend ceiling exceeded: ${cumulative:.4f} > ${ceiling:.4f} "
-                                f"after {len(all_results)} questions. Aborting run."
-                            )
+                    assert_within_spend_ceiling(all_results, config.eval.spend_ceiling_usd)
             finally:
                 # WHY finally: ensures teardown even if a question raises
                 # an unhandled exception outside the per-question try block.
@@ -283,7 +296,7 @@ class EvalRunner:
         # --- Aggregate and persist ---
         aggregated, warnings = aggregate(all_results, config)
         cost_summary = {**aggregate_costs(all_results), **aggregate_tokens(all_results)}
-        finished_at = datetime.now(timezone.utc)
+        finished_at = datetime.now(UTC)
 
         metadata = RunMetadata(
             run_id=run_id,

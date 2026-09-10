@@ -41,8 +41,8 @@ from src.models.message import Message, MessageSource
 
 __all__ = [
     "Conversation",
-    "Message",
-    "MessageSource",
     "DocumentRecord",
+    "Message",
     "MessageEvaluation",
+    "MessageSource",
 ]

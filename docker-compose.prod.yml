@@ -21,6 +21,13 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GLM_API_KEY=${GLM_API_KEY:-}
+      # SECURITY: unset, src/config.py's allowed_origins() falls back to "*",
+      #           which is the right default for local dev against a Vite
+      #           server on another port and the wrong one for a deployed API.
+      #           nginx serves the frontend from :3000 and proxies /api/, so
+      #           that origin is the only one a browser needs. Override with
+      #           ALLOWED_ORIGINS=https://your.domain when deploying elsewhere.
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:3000}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 10s

@@ -17,7 +17,6 @@ Design decisions:
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
 
 from src.eval.config import EvalConfig
 from src.eval.schemas import AggregatedMetric, EvalResult
@@ -81,38 +80,38 @@ def aggregate(
     for (metric_name, dataset), scores in per_dataset.items():
         n = len(scores)
         if n < MIN_SAMPLES:
-            warnings.append(
-                f"Skipped {metric_name} on {dataset}: only {n} samples"
-            )
+            warnings.append(f"Skipped {metric_name} on {dataset}: only {n} samples")
             continue
 
         mean, ci_low, ci_high = bootstrap_ci(scores, n_resamples=bootstrap_n, seed=seed)
-        aggregated.append(AggregatedMetric(
-            metric_name=metric_name,
-            dataset=dataset,
-            mean=mean,
-            ci_low=ci_low,
-            ci_high=ci_high,
-            n=n,
-        ))
+        aggregated.append(
+            AggregatedMetric(
+                metric_name=metric_name,
+                dataset=dataset,
+                mean=mean,
+                ci_low=ci_low,
+                ci_high=ci_high,
+                n=n,
+            )
+        )
 
     # --- Combined rows (dataset=None) ---
     for metric_name, scores in combined.items():
         n = len(scores)
         if n < MIN_SAMPLES:
-            warnings.append(
-                f"Skipped {metric_name} combined: only {n} samples"
-            )
+            warnings.append(f"Skipped {metric_name} combined: only {n} samples")
             continue
 
         mean, ci_low, ci_high = bootstrap_ci(scores, n_resamples=bootstrap_n, seed=seed)
-        aggregated.append(AggregatedMetric(
-            metric_name=metric_name,
-            dataset=None,
-            mean=mean,
-            ci_low=ci_low,
-            ci_high=ci_high,
-            n=n,
-        ))
+        aggregated.append(
+            AggregatedMetric(
+                metric_name=metric_name,
+                dataset=None,
+                mean=mean,
+                ci_low=ci_low,
+                ci_high=ci_high,
+                n=n,
+            )
+        )
 
     return aggregated, warnings

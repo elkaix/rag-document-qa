@@ -7,24 +7,22 @@ Uses ChromaDB EphemeralClient for vector store fixtures (no disk I/O, no cleanup
 
 from __future__ import annotations
 
-import sys
-import os
-from pathlib import Path
-from typing import List
 import hashlib
+import os
+import sys
+from pathlib import Path
 
 # Ensure project root is on sys.path so `from src.x import ...` works
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import pytest
-import numpy as np
 import chromadb
+import numpy as np
+import pytest
 
-from src.document_loader import Chunk, Document
+from src.domain import Chunk, Document
 from src.vector_store import ChromaVectorStore
-
 
 # --------------------------------------------------------------------------- #
 # CI mode: stub LLM provider calls                                             #
@@ -41,14 +39,23 @@ from src.vector_store import ChromaVectorStore
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _stub_openai_in_ci():
-    """Replace openai.OpenAI() with an in-process stub when CI_LLM_MOCK is truthy.
+def _stub_openai_provider():
+    """Replace openai.OpenAI() with an in-process stub for the whole test session.
 
     The stub mimics the chat.completions.create() shape used by LLMHandler,
     returning a canned response with a content attribute and an id. No network
     call is made.
+
+    BEFORE: stubbing was opt-in via CI_LLM_MOCK=1, so a developer machine with a
+            .env made real, billable provider calls and the suite failed without
+            a funded key.
+    AFTER:  stubbing is the default; set RAG_QA_LIVE_LLM=1 to deliberately test
+            against a real provider.
+    WHY:    a test suite must not depend on ambient credentials, and must never
+            spend money by default. The matching root-cause fix removed the
+            import-time load_dotenv() from src/llm_handler (see src/config.py).
     """
-    if os.getenv("CI_LLM_MOCK", "").lower() not in ("1", "true", "yes"):
+    if os.getenv("RAG_QA_LIVE_LLM", "").lower() in ("1", "true", "yes"):
         yield
         return
 
@@ -70,8 +77,12 @@ def _stub_openai_in_ci():
         )
         usage = SimpleNamespace(prompt_tokens=10, completion_tokens=8, total_tokens=18)
         return SimpleNamespace(
-            id="chatcmpl-stub", choices=[choice], usage=usage,
-            model="stub", created=0, object="chat.completion",
+            id="chatcmpl-stub",
+            choices=[choice],
+            usage=usage,
+            model="stub",
+            created=0,
+            object="chat.completion",
         )
 
     def _make_stub_stream_chunks():
@@ -80,8 +91,11 @@ def _stub_openai_in_ci():
             delta = SimpleNamespace(content=piece, role="assistant")
             choice = SimpleNamespace(delta=delta, finish_reason=None, index=0)
             yield SimpleNamespace(
-                id="chatcmpl-stub", choices=[choice], model="stub",
-                created=0, object="chat.completion.chunk",
+                id="chatcmpl-stub",
+                choices=[choice],
+                model="stub",
+                created=0,
+                object="chat.completion.chunk",
             )
 
     class _StubCompletions:
@@ -104,6 +118,44 @@ def _stub_openai_in_ci():
         yield
     finally:
         openai.OpenAI = original
+
+
+# --------------------------------------------------------------------------- #
+# Isolation: never touch the developer's persistent stores                     #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_app_state_dirs(tmp_path_factory):
+    """Redirect the FastAPI lifespan's SQLite and ChromaDB paths into tmp.
+
+    BEFORE: any test entering `with TestClient(app)` ran the real lifespan,
+            which opens `data/rag.db` and `data/chroma/` — the developer's
+            actual store. Confirmed by mtime: running one route test rewrote
+            `data/chroma/chroma.sqlite3`. Tests that replaced `app.state.backend`
+            with a mock did so only *after* startup, so the real stores were
+            already open.
+    AFTER:  the module globals `src.api.main` copied from `src.config` at import
+            time point into a session-scoped tmp dir, so the lifespan builds its
+            own throwaway stores.
+    WHY session-scoped and autouse: a test that forgets this is exactly the case
+            that corrupts local data, and the failure is silent. Opting in is the
+            wrong default for something whose blast radius is the user's files.
+    WHY patch `src.api.main` and not `src.config`: main.py does
+            `from src.config import CHROMA_PATH, SQLITE_URL`, which copies the
+            values at import; rebinding the config module would not be seen.
+    """
+    tmp = tmp_path_factory.mktemp("app_state")
+
+    from src.api import main as api_main
+
+    original = (api_main.CHROMA_PATH, api_main.SQLITE_URL)
+    api_main.CHROMA_PATH = str(tmp / "chroma")
+    api_main.SQLITE_URL = f"sqlite:///{tmp / 'rag.db'}"
+    try:
+        yield tmp
+    finally:
+        api_main.CHROMA_PATH, api_main.SQLITE_URL = original
 
 
 # --------------------------------------------------------------------------- #
@@ -132,6 +184,7 @@ SAMPLE_TEXT_2 = (
 # Document fixtures                                                            #
 # --------------------------------------------------------------------------- #
 
+
 @pytest.fixture
 def sample_document() -> Document:
     """A single Document instance with realistic content."""
@@ -159,7 +212,7 @@ def sample_document_2() -> Document:
 
 
 @pytest.fixture
-def sample_chunks(sample_document: Document) -> List[Chunk]:
+def sample_chunks(sample_document: Document) -> list[Chunk]:
     """Pre-built chunks from the sample document."""
     texts = [
         "Retrieval-Augmented Generation (RAG) is a technique that enhances large language models.",
@@ -185,7 +238,8 @@ def sample_chunks(sample_document: Document) -> List[Chunk]:
 # Embedding fixtures                                                           #
 # --------------------------------------------------------------------------- #
 
-def _make_deterministic_embedding(text: str, dim: int = EMBEDDING_DIM) -> List[float]:
+
+def _make_deterministic_embedding(text: str, dim: int = EMBEDDING_DIM) -> list[float]:
     """Create a deterministic unit-norm embedding from text."""
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     seed = int.from_bytes(digest[:4], "little")
@@ -206,19 +260,17 @@ def chroma_collection():
     a fresh in-memory collection that vanishes when the fixture goes out of scope.
     PATTERN: cosine distance matches how the production vector store is configured.
     """
-    client = chromadb.EphemeralClient()
-    return client.get_or_create_collection(
-        name="test_docs",
-        metadata={"hnsw:space": "cosine"},
-        # WHY None: we supply our own deterministic embeddings via upsert(),
-        # so ChromaDB must not auto-embed — passing embedding_function=None
-        # disables the default all-MiniLM-L6-v2 auto-embedder.
-        embedding_function=None,
-    )
+    # WHY .open: the cosine setting lives with the store, so a fixture cannot
+    # drift from production's configuration. WHY embedding_function=None: we
+    # supply deterministic embeddings via upsert(), so ChromaDB must not
+    # auto-embed with all-MiniLM-L6-v2.
+    return ChromaVectorStore.open(
+        chromadb.EphemeralClient(), "test_docs", embedding_function=None
+    ).collection
 
 
 @pytest.fixture
-def populated_vector_store(sample_chunks: List[Chunk], chroma_collection) -> ChromaVectorStore:
+def populated_vector_store(sample_chunks: list[Chunk], chroma_collection) -> ChromaVectorStore:
     """
     A ChromaVectorStore pre-loaded with sample_chunks and deterministic embeddings.
 
@@ -245,6 +297,7 @@ def populated_vector_store(sample_chunks: List[Chunk], chroma_collection) -> Chr
 # --------------------------------------------------------------------------- #
 # Tmp file helper                                                              #
 # --------------------------------------------------------------------------- #
+
 
 @pytest.fixture
 def tmp_text_file(tmp_path: Path) -> Path:
@@ -281,3 +334,28 @@ def tmp_csv_file(tmp_path: Path) -> Path:
         writer = csv.writer(fh)
         writer.writerows(rows)
     return file
+
+
+# --------------------------------------------------------------------------- #
+# Eval run storage                                                             #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def tmp_eval_runs(tmp_path: Path, monkeypatch) -> Path:
+    """Point the eval runs directory at a temp dir for the duration of a test.
+
+    Returns the directory itself, so a test can assert against the filesystem.
+
+    BEFORE: three test modules each carried their own copy of this fixture, and
+            every copy set EVAL_RUNS_DIR and then `importlib.reload`ed the
+            storage module — because the directory was a module-level constant
+            bound at import time.
+    AFTER:  storage resolves the directory per call, so setting the variable is
+            enough. Storage functions also take `base_dir=` for callers that
+            prefer injection over an environment variable.
+    """
+    runs = tmp_path / "eval_runs"
+    runs.mkdir()
+    monkeypatch.setenv("EVAL_RUNS_DIR", str(runs))
+    return runs

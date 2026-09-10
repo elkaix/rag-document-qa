@@ -25,7 +25,7 @@ Where it fits in the RAG pipeline:
 # NOTE: from __future__ import annotations is intentionally OMITTED.
 # See conversation.py for the full explanation.
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlmodel import Field, SQLModel
 
@@ -66,5 +66,5 @@ class DocumentRecord(SQLModel, table=True):
     chunks_count: int = Field(default=0)
 
     upload_date: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
     )

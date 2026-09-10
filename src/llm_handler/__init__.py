@@ -23,17 +23,11 @@ Design Decision:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
-# Load .env from the project root (two levels up from this package).
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
-except ImportError:
-    pass
-
+# WHY no load_dotenv() here: importing this package must not read files or arm
+#      real provider credentials. Entry points call src.config.load_env()
+#      instead. See the BEFORE/AFTER note in src/config.py.
 from .adapters.base import (
     GenerationResult,
     ProviderAdapter,
@@ -46,8 +40,8 @@ from .providers import build_adapter, detect_provider, list_models
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "LLMHandler",
     "GenerationResult",
+    "LLMHandler",
     "ProviderAdapter",
     "ProviderUnavailableError",
     "Usage",
@@ -97,9 +91,7 @@ class LLMHandler:
         self.ollama_base_url = ollama_base_url.rstrip("/")
 
         self._provider = detect_provider(model)
-        self._adapter = build_adapter(
-            model, temperature, max_tokens, api_key, self.ollama_base_url
-        )
+        self._adapter = build_adapter(model, temperature, max_tokens, api_key, self.ollama_base_url)
         # The fallback is always ready — no client, no configuration.
         self._dummy = DummyAdapter(model)
         logger.info("LLMHandler initialised: model=%s provider=%s", model, self._provider)
@@ -175,6 +167,4 @@ class LLMHandler:
 
     def list_models(self) -> list[str]:
         """Return available model names for the current provider."""
-        return list_models(
-            self._provider, self.model, self.api_key, self.ollama_base_url
-        )
+        return list_models(self._provider, self.model, self.api_key, self.ollama_base_url)

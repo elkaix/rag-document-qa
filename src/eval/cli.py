@@ -24,27 +24,17 @@ import argparse
 import logging
 import os
 from pathlib import Path
-from typing import Any
+
+from src.config import load_env
+from src.eval.doubles import resolve_llm_overrides
 
 logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
-# DummyLLM — test-only, gated behind EVAL_LLM_OVERRIDE_DUMMY=1               #
-# --------------------------------------------------------------------------- #
-
-class _DummyLLM:
-    """Returns canned data for any prompt — used only when EVAL_LLM_OVERRIDE_DUMMY=1."""
-    def generate(self, prompt: str, system_prompt: str | None = None) -> str:
-        if "JSON" in (system_prompt or "") or '"score"' in prompt:
-            return ('{"score": 1.0, "claims": [], "chunks": [], '
-                    '"factual_match": 1.0, "is_refusal": false, "reasoning": "ok"}')
-        return "<dummy>"
-
-
-# --------------------------------------------------------------------------- #
 # Subcommand handlers                                                          #
 # --------------------------------------------------------------------------- #
+
 
 def _cmd_run(args: argparse.Namespace) -> int:
     """Load config, run EvalRunner, print run_id and one-line summary."""
@@ -52,28 +42,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # runner._load_questions picks up the override via the live attr read.
     if env_squad := os.getenv("EVAL_SQUAD_PATH"):
         from src.eval.datasets import squad_v2 as squad_ds
+
         squad_ds.DEFAULT_OUTPUT_PATH = Path(env_squad)
-    import src.eval.storage as _storage
-    _storage.EVAL_RUNS_DIR = Path(os.getenv("EVAL_RUNS_DIR", "eval_runs"))
 
     from src.eval.config import load_config
     from src.eval.runner import EvalRunner
+
     try:
         config = load_config(args.config)
     except (FileNotFoundError, Exception) as exc:
         print(f"Error loading config: {exc}")
         return 1
-    llm_override = None
-    judge_llm_override = None
-    if os.getenv("EVAL_LLM_OVERRIDE_DUMMY") == "1":
-        dummy = _DummyLLM()
-        llm_override = dummy
-        judge_llm_override = dummy
+    overrides = resolve_llm_overrides()
     runner = EvalRunner(
         config,
         config_path=args.config,
-        llm_override=llm_override,
-        judge_llm_override=judge_llm_override,
+        llm_override=overrides.llm,
+        judge_llm_override=overrides.judge_llm,
     )
 
     try:
@@ -86,15 +71,16 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # WHY last-token placement: test extracts run_id as the last whitespace-token
     # on the line containing both "cli-test" and "_". The bare run_id must be
     # the final token — no "key=value" wrapper around it.
-    print(f"Run complete: {metadata.config_name}  n={metadata.n_questions}"
-          f"  errors={metadata.n_errors}  {metadata.run_id}")
+    print(
+        f"Run complete: {metadata.config_name}  n={metadata.n_questions}"
+        f"  errors={metadata.n_errors}  {metadata.run_id}"
+    )
     return 0
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
     """Print a table of all eval runs."""
     import src.eval.storage as _storage
-    _storage.EVAL_RUNS_DIR = Path(os.getenv("EVAL_RUNS_DIR", "eval_runs"))
 
     runs = _storage.list_runs()
 
@@ -120,7 +106,6 @@ def _cmd_list(args: argparse.Namespace) -> int:
 def _cmd_show(args: argparse.Namespace) -> int:
     """Print aggregated metrics; optionally write report.html."""
     import src.eval.storage as _storage
-    _storage.EVAL_RUNS_DIR = Path(os.getenv("EVAL_RUNS_DIR", "eval_runs"))
 
     try:
         run = _storage.load_run(args.run_id)
@@ -150,8 +135,9 @@ def _cmd_show(args: argparse.Namespace) -> int:
 
     if args.html:
         from src.eval.report import render_run_html
+
         html = render_run_html(run)
-        html_path = _storage.EVAL_RUNS_DIR / args.run_id / "report.html"
+        html_path = _storage.runs_dir() / args.run_id / "report.html"
         html_path.write_text(html)
         print(f"\nHTML report written to: {html_path}")
 
@@ -161,8 +147,6 @@ def _cmd_show(args: argparse.Namespace) -> int:
 def _cmd_compare(args: argparse.Namespace) -> int:
     """Print delta table for two runs; optionally write compare HTML."""
     import src.eval.storage as _storage
-    _storage.EVAL_RUNS_DIR = Path(os.getenv("EVAL_RUNS_DIR", "eval_runs"))
-
     from src.eval.compare import compare_runs
 
     try:
@@ -202,12 +186,15 @@ def _cmd_compare(args: argparse.Namespace) -> int:
             if agg_names:
                 print("Metrics in run A: " + ", ".join(sorted(agg_names)))
         except Exception:
+            # This block only enriches an error message; if the run cannot be
+            # read the original error is still the useful one.
             pass
 
     if args.html:
         from src.eval.report import render_compare_html
+
         html = render_compare_html(result)
-        html_path = _storage.EVAL_RUNS_DIR / f"compare_{args.id_a}_{args.id_b}.html"
+        html_path = _storage.runs_dir() / f"compare_{args.id_a}_{args.id_b}.html"
         html_path.write_text(html)
         print(f"\nHTML comparison written to: {html_path}")
 
@@ -261,7 +248,12 @@ def _cmd_archive(args: argparse.Namespace) -> int:
 # Entry point                                                                  #
 # --------------------------------------------------------------------------- #
 
+
 def main(argv: list[str] | None = None) -> int:
+    # WHY here: the CLI is an entry point, so it is allowed to pull .env into the
+    #      process. Library modules must not — see src/config.py load_env().
+    load_env()
+
     parser = argparse.ArgumentParser(prog="src.eval.cli")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -286,7 +278,9 @@ def main(argv: list[str] | None = None) -> int:
     p_archive.add_argument("run_id", help="Run id to archive (must exist under runs_root).")
     p_archive.add_argument("--to", required=True, help="Destination directory.")
     p_archive.add_argument(
-        "--runs-root", default="eval_runs", dest="runs_root",
+        "--runs-root",
+        default="eval_runs",
+        dest="runs_root",
         help="Root directory holding run subdirectories (default: eval_runs).",
     )
 

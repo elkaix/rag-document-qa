@@ -20,15 +20,15 @@ from __future__ import annotations
 
 import uuid
 
-import pytest
 import chromadb
+import pytest
 
-from src.vector_store import ChromaVectorStore, SearchResult
-
+from src.vector_store import ChromaVectorStore
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                     #
 # --------------------------------------------------------------------------- #
+
 
 @pytest.fixture
 def chroma_collection():
@@ -48,15 +48,13 @@ def chroma_collection():
          complete isolation between test runs in the same pytest session.
     """
     # PATTERN: EphemeralClient is the test-friendly equivalent of SQLite's ":memory:"
-    client = chromadb.EphemeralClient()
     # WHY uuid: prevents collection name collision when tests run in the same process
-    collection_name = f"test_docs_{uuid.uuid4().hex}"
-    collection = client.get_or_create_collection(
-        name=collection_name,
-        metadata={"hnsw:space": "cosine"},
+    # WHY .open: cosine space is the store's invariant, not the fixture's.
+    return ChromaVectorStore.open(
+        chromadb.EphemeralClient(),
+        f"test_docs_{uuid.uuid4().hex}",
         embedding_function=None,  # explicit embeddings only — no auto-embedding
-    )
-    return collection
+    ).collection
 
 
 @pytest.fixture
@@ -80,6 +78,7 @@ VEC_C = [0.0, 0.0, 1.0]
 # --------------------------------------------------------------------------- #
 # Tests                                                                        #
 # --------------------------------------------------------------------------- #
+
 
 class TestUpsertAndQuery:
     """Verify basic upsert + semantic query flow."""
@@ -107,9 +106,7 @@ class TestUpsertAndQuery:
 
         assert len(results) == 1
         top = results[0]
-        assert top.chunk_id == "chunk_a", (
-            f"Expected 'chunk_a' as top result, got '{top.chunk_id}'"
-        )
+        assert top.chunk_id == "chunk_a", f"Expected 'chunk_a' as top result, got '{top.chunk_id}'"
         # Score should be close to 1.0 — identical vectors, cosine distance ≈ 0
         assert top.score >= 0.99, f"Expected score ≥ 0.99, got {top.score}"
 
@@ -159,9 +156,9 @@ class TestDeleteByDocId:
         store.delete_by_doc_id("doc1")
 
         stats = store.get_stats()
-        assert stats["total_chunks"] == 1, (
-            f"Expected 1 chunk remaining after deleting doc1, got {stats['total_chunks']}"
-        )
+        assert (
+            stats["total_chunks"] == 1
+        ), f"Expected 1 chunk remaining after deleting doc1, got {stats['total_chunks']}"
 
         # Verify the remaining chunk belongs to doc2
         results = store.query(query_embedding=VEC_C, top_k=5)
@@ -193,9 +190,9 @@ class TestUpsertIdempotency:
             )
 
         stats = store.get_stats()
-        assert stats["total_chunks"] == 1, (
-            f"Expected exactly 1 chunk after 3 identical upserts, got {stats['total_chunks']}"
-        )
+        assert (
+            stats["total_chunks"] == 1
+        ), f"Expected exactly 1 chunk after 3 identical upserts, got {stats['total_chunks']}"
 
 
 class TestGetStats:
@@ -286,3 +283,138 @@ class TestGetByDocId:
         )
 
         assert store.get_by_doc_id("nonexistent") == []
+
+
+class TestAllChunkTexts:
+    """The corpus accessor a sparse retriever needs, on the store's interface."""
+
+    def test_returns_every_chunk_keyed_by_id(self, populated_vector_store):
+        corpus = populated_vector_store.all_chunk_texts()
+        stats = populated_vector_store.get_stats()
+        assert len(corpus) == stats["total_chunks"]
+        assert all(isinstance(text, str) and text for text in corpus.values())
+
+    def test_empty_collection_returns_empty_mapping(self, chroma_collection):
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore(collection=chroma_collection)
+        assert store.all_chunk_texts() == {}
+
+
+class TestCosineInvariantOwnership:
+    """The store owns the space setting its score conversion depends on.
+
+    BEFORE: `metadata={"hnsw:space": "cosine"}` was spelled out at nine
+            construction sites. score = max(0, 1 - distance) is only correct in
+            cosine space, so a site that omitted it produced silently wrong
+            similarity scores rather than an error.
+    """
+
+    def test_open_creates_a_cosine_collection(self):
+        import chromadb
+
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore.open(chromadb.EphemeralClient(), "cosine_check")
+        assert store.collection.metadata["hnsw:space"] == "cosine"
+
+    def test_open_passes_through_an_explicit_embedding_function(self):
+        import chromadb
+
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore.open(
+            chromadb.EphemeralClient(), "no_autoembed", embedding_function=None
+        )
+        store.upsert(
+            ids=["a"],
+            documents=["hello"],
+            metadatas=[{"doc_id": "d"}],
+            embeddings=[[0.1] * 8],
+        )
+        assert store.get_stats()["total_chunks"] == 1
+
+
+class TestDuplicateIdsWithinOneBatch:
+    """Ingesting a document whose chunks repeat verbatim must not crash.
+
+    BUG: chunk ids are content-addressed, so a document containing the same text
+    twice — a repeated boilerplate footer, a disclaimer page, a CSV with
+    duplicate rows — produces the same id twice in one upsert batch. ChromaDB
+    rejects that batch with DuplicateIDError, so the whole upload failed.
+    """
+
+    def test_repeated_ids_collapse_instead_of_raising(self, chroma_collection):
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore(collection=chroma_collection)
+        store.upsert(
+            ids=["same", "same", "other"],
+            documents=["duplicated text", "duplicated text", "distinct text"],
+            metadatas=[{"doc_id": "d"}, {"doc_id": "d"}, {"doc_id": "d"}],
+            embeddings=[[0.1] * 8, [0.1] * 8, [0.2] * 8],
+        )
+        assert store.get_stats()["total_chunks"] == 2
+
+    def test_the_first_occurrence_wins(self, chroma_collection):
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore(collection=chroma_collection)
+        store.upsert(
+            ids=["dup", "dup"],
+            documents=["first", "second"],
+            metadatas=[{"doc_id": "a"}, {"doc_id": "b"}],
+            embeddings=[[0.1] * 8, [0.2] * 8],
+        )
+        chunks = store.get_by_doc_id("a")
+        assert [c["content"] for c in chunks] == ["first"]
+
+
+EMBEDDING_DIM = 384  # matches tests/conftest.py's deterministic embedder
+
+
+class TestQueryArgumentGuards:
+    """The two guard clauses, and the branch production actually takes.
+
+    The suite exercised only `query_embedding=`, while production calls
+    `query_text=` through DenseRetriever — so the shipped branch was covered
+    only indirectly, and neither guard was covered at all.
+    """
+
+    def test_neither_argument_is_rejected(self, populated_vector_store):
+        with pytest.raises(ValueError):
+            populated_vector_store.query()
+
+    def test_both_arguments_are_rejected(self, populated_vector_store):
+        with pytest.raises(ValueError):
+            populated_vector_store.query(query_text="hello", query_embedding=[0.1] * EMBEDDING_DIM)
+
+    def test_query_text_uses_the_collection_embedder(self):
+        """The branch DenseRetriever takes in production."""
+        import chromadb
+
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore.open(chromadb.EphemeralClient(), "query_text_branch")
+        store.upsert(
+            ids=["a", "b"],
+            documents=[
+                "Retrieval augmented generation combines retrieval and generation.",
+                "Baking sourdough requires a mature starter culture.",
+            ],
+            metadatas=[{"doc_id": "d1"}, {"doc_id": "d2"}],
+        )
+
+        results = store.query(query_text="retrieval augmented generation", top_k=2)
+
+        # The assertion is that the text branch embeds and ranks at all — which
+        # document a real embedder prefers is a model property, not a contract.
+        assert [r.doc_id for r in results] == ["d1", "d2"]
+        assert all(0.0 <= r.score <= 1.0 for r in results)
+
+    def test_scores_are_similarities_not_distances(self, populated_vector_store):
+        """Higher must mean better, so composing retrievers never has to ask."""
+        results = populated_vector_store.query(query_embedding=[0.1] * EMBEDDING_DIM, top_k=3)
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True)
+        assert all(0.0 <= s <= 1.0 for s in scores)

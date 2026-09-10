@@ -18,13 +18,11 @@ Why mock approach instead of full-ingest:
 
 from __future__ import annotations
 
-import json
-from typing import Iterator
-from unittest.mock import MagicMock, patch
+from collections.abc import Iterator
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -56,6 +54,7 @@ _FAKE_RESULT = {
 def _make_telemetry_model():
     """Return a StageTelemetry instance with the fake values."""
     from src.api.schemas.telemetry import StageTelemetry
+
     return StageTelemetry(**_FAKE_TELEMETRY)
 
 
@@ -77,11 +76,10 @@ class TestRestTelemetry:
         without touching ChromaDB or an LLM.
         """
         from src.api.main import app
+
         with TestClient(app) as c:
             mock_backend = MagicMock()
-            mock_backend.query_with_telemetry.return_value = (
-                _FAKE_RESULT, _make_telemetry_model()
-            )
+            mock_backend.query_with_telemetry.return_value = (_FAKE_RESULT, _make_telemetry_model())
             # evaluate_faithfulness_realtime must not raise during WS teardown
             mock_backend.evaluate_faithfulness_realtime.return_value = {}
             app.state.backend = mock_backend
@@ -99,8 +97,13 @@ class TestRestTelemetry:
         r = client.post("/api/query", json={"query": "What is RAG?"})
         assert r.status_code == 200
         t = r.json()["telemetry"]
-        for field in ("retrieve_ms", "generate_ms", "prompt_tokens",
-                      "completion_tokens", "cost_usd"):
+        for field in (
+            "retrieve_ms",
+            "generate_ms",
+            "prompt_tokens",
+            "completion_tokens",
+            "cost_usd",
+        ):
             assert field in t, f"Missing telemetry field: {field}"
             assert t[field] >= 0, f"Telemetry field {field} must be >= 0"
 
@@ -130,6 +133,7 @@ class TestRestTelemetry:
         silently become None (the Optional default). This assertion catches it.
         """
         from src.api.main import app
+
         client.post("/api/query", json={"query": "test"})
         app.state.backend.query_with_telemetry.assert_called_once()
         app.state.backend.query.assert_not_called()
@@ -148,19 +152,22 @@ class TestWebSocketTelemetry:
         return [
             ("status", "Searching indexed documents..."),
             ("token", "RAG combines retrieval with generation."),
-            ("done", {
-                "sources": [
-                    {
-                        "doc_id": "doc-1",
-                        "chunk_id": "chunk-1",
-                        "filename": "rag.txt",
-                        "score": 0.92,
-                        "excerpt": "RAG stands for Retrieval-Augmented Generation.",
-                    }
-                ],
-                "message_id": "msg-abc",
-                "conversation_id": "conv-xyz",
-            }),
+            (
+                "done",
+                {
+                    "sources": [
+                        {
+                            "doc_id": "doc-1",
+                            "chunk_id": "chunk-1",
+                            "filename": "rag.txt",
+                            "score": 0.92,
+                            "excerpt": "RAG stands for Retrieval-Augmented Generation.",
+                        }
+                    ],
+                    "message_id": "msg-abc",
+                    "conversation_id": "conv-xyz",
+                },
+            ),
             ("telemetry", _FAKE_TELEMETRY),
         ]
 
@@ -168,6 +175,7 @@ class TestWebSocketTelemetry:
     def ws_client(self):
         """TestClient with a mocked streaming backend."""
         from src.api.main import app
+
         with TestClient(app) as c:
             mock_backend = MagicMock()
 
@@ -181,7 +189,6 @@ class TestWebSocketTelemetry:
 
     def test_stream_emits_telemetry_event(self, ws_client):
         """The WebSocket stream must include a telemetry event."""
-        from src.api.main import app
         with ws_client.websocket_connect("/api/chat") as ws:
             ws.send_json({"query": "What is RAG?", "top_k": 3})
             events = []
@@ -196,9 +203,9 @@ class TestWebSocketTelemetry:
                 except Exception:
                     break
 
-        assert any(e.get("type") == "telemetry" for e in events), (
-            f"No telemetry event received. Got event types: {[e.get('type') for e in events]}"
-        )
+        assert any(
+            e.get("type") == "telemetry" for e in events
+        ), f"No telemetry event received. Got event types: {[e.get('type') for e in events]}"
 
     def test_telemetry_event_has_content_key(self, ws_client):
         """The telemetry event must be shaped: {type: 'telemetry', content: {...}}."""
@@ -232,8 +239,13 @@ class TestWebSocketTelemetry:
                     break
 
         content = tele_event["content"]
-        for field in ("retrieve_ms", "generate_ms", "prompt_tokens",
-                      "completion_tokens", "cost_usd"):
+        for field in (
+            "retrieve_ms",
+            "generate_ms",
+            "prompt_tokens",
+            "completion_tokens",
+            "cost_usd",
+        ):
             assert field in content, f"Missing telemetry field: {field}"
             assert content[field] >= 0, f"Telemetry field {field} must be >= 0"
 

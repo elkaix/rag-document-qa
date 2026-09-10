@@ -21,6 +21,22 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
+# WHY import production config: eval "baseline" runs must benchmark the pipeline
+# users actually get, so chunking/top-k/model defaults derive from the single
+# source of truth (src/config.py) rather than drifting as independent literals
+# (issue #16, step 4c). An explicit YAML value still overrides any default.
+from src.config import (
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
+    DEFAULT_MODEL,
+    EVAL_MODEL,
+    REASONING_MODEL,
+    REFUSAL_NO_ANSWER_TEXT,
+    REFUSAL_SIMILARITY_THRESHOLD,
+    RERANK_OVER_FETCH_N,
+    TOP_K_RESULTS,
+)
+
 
 class ChunkerCfg(BaseModel):
     """Chunking strategy configuration.
@@ -31,8 +47,8 @@ class ChunkerCfg(BaseModel):
     """
 
     strategy: Literal["fixed", "recursive", "semantic"] = "recursive"
-    chunk_size: int = 512
-    chunk_overlap: int = 64
+    chunk_size: int = CHUNK_SIZE
+    chunk_overlap: int = CHUNK_OVERLAP
 
 
 class RetrieverCfg(BaseModel):
@@ -42,7 +58,7 @@ class RetrieverCfg(BaseModel):
     Pipeline position: QUERYING step — Embeddings → [Retriever] → Top-K chunks.
     """
 
-    top_k: int = 5
+    top_k: int = TOP_K_RESULTS
 
 
 class GeneratorCfg(BaseModel):
@@ -53,9 +69,9 @@ class GeneratorCfg(BaseModel):
     Pipeline position: QUERYING step — Chunks → [Generator] → Answer.
     """
 
-    model: str = "gpt-5-mini"
+    model: str = DEFAULT_MODEL
     # WHY: reasoning_model is optional — None disables the CoT pre-pass.
-    reasoning_model: str | None = "gpt-4.1-nano"
+    reasoning_model: str | None = REASONING_MODEL
 
 
 class EmbedderCfg(BaseModel):
@@ -96,8 +112,12 @@ class RerankerCfg(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     model: Literal["ms_marco_minilm_l6_v2"] | None = None
-    rerank_top_n: int = 20
-    final_top_k: int = 5
+    # SINGLE SOURCE: these were independent literals that happened to equal
+    #   production's values. A comment asserted they matched; nothing enforced
+    #   it, so tuning either side would have silently made eval measure a
+    #   different pipeline than the one shipped.
+    rerank_top_n: int = RERANK_OVER_FETCH_N
+    final_top_k: int = TOP_K_RESULTS
 
 
 class QueryRewriterCfg(BaseModel):
@@ -124,8 +144,10 @@ class RefusalHandlerCfg(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
-    similarity_threshold: float = 0.35
-    no_answer_text: str = "I don't have enough information to answer that."
+    # SINGLE SOURCE: the threshold and the user-facing text are product
+    #   decisions; they live in src/config.py so production and eval agree.
+    similarity_threshold: float = REFUSAL_SIMILARITY_THRESHOLD
+    no_answer_text: str = REFUSAL_NO_ANSWER_TEXT
 
 
 class PipelineCfg(BaseModel):
@@ -146,6 +168,12 @@ class PipelineCfg(BaseModel):
     refusal_handler: RefusalHandlerCfg = Field(default_factory=RefusalHandlerCfg)
 
 
+# The labelled gold sets a run may evaluate against. Named once so the runner
+# can key its per-dataset maps by the same closed set the config validates —
+# without the alias, the two loops over those names disagree on the key type.
+DatasetName = Literal["squad_v2_dev_200", "ml_papers_v1"]
+
+
 class EvalCfg(BaseModel):
     """Evaluation harness parameters.
 
@@ -154,8 +182,8 @@ class EvalCfg(BaseModel):
     Why seed: reproducibility across runs and machines.
     """
 
-    datasets: list[Literal["squad_v2_dev_200", "ml_papers_v1"]]
-    judge_model: str = "gpt-4.1-mini"
+    datasets: list[DatasetName]
+    judge_model: str = EVAL_MODEL
     bootstrap_n: int = 1000
     permutation_n: int = 10000
     seed: int = 42

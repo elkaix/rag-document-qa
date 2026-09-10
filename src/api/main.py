@@ -24,16 +24,12 @@ Where it fits in the RAG pipeline:
   Everything beneath (RAGBackend, routes, models) is imported and wired here.
 """
 
-import os
 from contextlib import asynccontextmanager
 
 import chromadb
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.backend import RAGBackend
-from src.config import CHROMA_COLLECTION, CHROMA_PATH, SQLITE_URL
-from src.database import create_db_and_tables, get_engine
 from src.api.routes import (
     conversations_router,
     documents_router,
@@ -43,7 +39,25 @@ from src.api.routes import (
 )
 from src.api.routes.eval import router as eval_router
 from src.api.services.eval_runs import RunRegistry
+from src.backend import RAGBackend
+from src.config import (
+    API_HOST,
+    API_PORT,
+    CHROMA_COLLECTION,
+    CHROMA_PATH,
+    SQLITE_URL,
+    allowed_origins,
+    load_env,
+)
+from src.database import create_db_and_tables, get_engine
 from src.observability import init_observability
+from src.vector_store import ChromaVectorStore
+
+# WHY here and not inside a library: this module is the application entry point,
+#      so it is the one place allowed to pull .env into the process. It runs
+#      before ALLOWED_ORIGINS is read below and before the lifespan builds any
+#      provider client. Importing a library must never arm real credentials.
+load_env()
 
 
 @asynccontextmanager
@@ -71,17 +85,14 @@ async def lifespan(app: FastAPI):
     # WHY PersistentClient: Unlike EphemeralClient (used in tests), this
     #     writes to CHROMA_PATH so vectors survive process restarts.
     chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-    collection = chroma_client.get_or_create_collection(
-        name=CHROMA_COLLECTION,
-        # WHY cosine: Cosine similarity is the standard metric for text
-        #     embeddings. HNSW (Hierarchical Navigable Small World) is the
-        #     index algorithm — fast approximate nearest-neighbour search.
-        metadata={"hnsw:space": "cosine"},
-    )
+    # WHY ChromaVectorStore.open: the store's distance→similarity conversion is
+    #     only correct in cosine space, so the store itself owns that setting
+    #     rather than trusting each construction site to remember it.
+    vector_store = ChromaVectorStore.open(chroma_client, CHROMA_COLLECTION)
 
     # STEP 3: Wire everything into the backend facade
     app.state.engine = engine
-    app.state.backend = RAGBackend(engine=engine, collection=collection)
+    app.state.backend = RAGBackend(engine=engine, collection=vector_store.collection)
 
     # STEP 4: Create the eval run registry (in-memory, thread-safe).
     # WHY: The registry tracks in-flight eval runs across requests. It must
@@ -96,7 +107,9 @@ async def lifespan(app: FastAPI):
     #      (env var absent) uses the function's built-in default endpoint.
     # TRADE-OFF: We don't gate on env var presence. The function handles None
     #            correctly and doing the check here would duplicate its logic.
-    init_observability(otlp_endpoint=os.getenv("OTLP_ENDPOINT"))
+    # WHY no os.getenv here: init_observability resolves OTLP_ENDPOINT itself.
+    #      Reading it at both sites meant two places to change one setting.
+    init_observability()
 
     yield
 
@@ -110,21 +123,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# BUG FIX: CORS used to allow all origins in the same app baked into the
-#          production Docker image. In dev we still want to hit the API from
-#          a Vite dev server on a different port, but production should
-#          restrict. ALLOWED_ORIGINS is a comma-separated env var; an
-#          empty/unset value stays open for dev ergonomics. Set it to your
-#          actual frontend origin in docker-compose.prod.yml.
-_origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
-_allowed_origins = (
-    [o.strip() for o in _origins_env.split(",") if o.strip()]
-    if _origins_env
-    else ["*"]
-)
+# BUG FIX: CORS allowed all origins unconditionally, in the same app baked
+#          into the production Docker image, with no way to narrow it. In dev
+#          we still want to hit the API from a Vite dev server on a different
+#          port, so an unset ALLOWED_ORIGINS still means "*"; what changed is
+#          that production *can* now restrict, and docker-compose.prod.yml
+#          does. The parsing rule lives in src/config.py so a
+#          security-relevant setting sits with the rest of configuration.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins,
+    allow_origins=allowed_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -146,3 +154,16 @@ app.include_router(eval_router)
 async def health():
     """Health check endpoint — returns 200 if the server is running."""
     return {"status": "healthy"}
+
+
+# BUG FIX: README.md and CLAUDE.md both document `python -m src.api.main` as the
+#          local-dev command, but this module had no runner — running it imported
+#          the app, built nothing, and exited silently with status 0. The server
+#          only ever started under Docker, which invokes uvicorn directly.
+# WHY the string target instead of passing `app`: uvicorn needs an import string
+#      to support --reload-style re-import; passing the object works today but
+#      closes that door for no gain.
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("src.api.main:app", host=API_HOST, port=API_PORT)

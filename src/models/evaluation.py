@@ -17,8 +17,7 @@ Why this approach over alternatives:
   "average scores over time" are simple SQL queries.
 """
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlmodel import Field, SQLModel
 
@@ -33,7 +32,7 @@ class MessageEvaluation(SQLModel, table=True):
 
     __tablename__ = "message_evaluations"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
 
     message_id: str = Field(
         foreign_key="messages.id",
@@ -47,10 +46,10 @@ class MessageEvaluation(SQLModel, table=True):
 
     reasoning: str = Field(default="")
 
-    details: Optional[str] = Field(default=None)
+    details: str | None = Field(default=None)
 
     judge_model: str
 
     evaluated_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
     )

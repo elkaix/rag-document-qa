@@ -32,40 +32,72 @@ Where it fits in the RAG pipeline:
 import hashlib
 import logging
 import tempfile
-import time
-import uuid
-from datetime import datetime, timezone
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Engine
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from .api.schemas.telemetry import StageTelemetry
 from .config import (
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
     DEFAULT_MODEL,
     EVAL_MODEL,
-    MAX_TITLE_LENGTH,
     REASONING_MODEL,
+    RERANK_OVER_FETCH_N,
+    RETRIEVER_STRATEGY,
     SLIDING_WINDOW_SIZE,
     TOP_K_RESULTS,
 )
-from .document_loader import DocumentLoader, TextChunker
-from .evaluation import (
-    evaluate_answer_relevancy,
-    evaluate_context_precision,
-    evaluate_faithfulness,
-)
-from .llm_handler import LLMHandler, Usage
-from .telemetry.pricing import cost_usd
-from .models.conversation import Conversation
+from .conversations import ConversationHistory, ConversationStore
+from .domain import SearchResult
+from .evaluation import MessageEvaluator
+from .ingestion import DocumentLoader, TextChunker
+from .llm_handler import LLMHandler
 from .models.document import DocumentRecord
-from .models.evaluation import MessageEvaluation
-from .models.message import Message, MessageSource
-from .observability import get_tracer
+from .query_engine import QueryEngine, StreamResult
+from .retrieval import build_retrieval_plan
 from .vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
+
+
+def _source_dict(result: SearchResult) -> dict[str, Any]:
+    """Shape one retrieved chunk into the source-citation dict the API returns.
+
+    This is the single definition of a source citation. Both query paths use it,
+    so a citation carries the same fields whichever endpoint produced it.
+
+    Args:
+        result: One chunk returned by the Retriever.
+
+    Returns:
+        The citation dict the API serialises and the frontend renders.
+
+    BEFORE: the synchronous path spread this dict and added ``chunk_index``;
+            the streaming path used the dict as-is, so the two endpoints
+            returned different field sets for the same concept.
+    AFTER:  ``chunk_index`` lives here, so the shapes cannot drift again.
+    WHY:    one component renders citations from both paths.
+    """
+    return {
+        "doc_id": result.doc_id,
+        "chunk_id": result.chunk_id,
+        "filename": result.metadata.get("filename"),
+        "score": round(result.score, 4),
+        "excerpt": result.content[:300],
+        "chunk_index": result.metadata.get("chunk_index"),
+    }
+
+
+# One event streamed out of RAGBackend.stream_query: a label plus either a
+# display string (status/reasoning/token) or a payload dict (done/telemetry).
+# WHY named here and not reused from query_engine: the engine's terminal event
+#      carries a StreamResult, which this facade consumes rather than forwards.
+#      The two shapes are deliberately different, so they get different names.
+BackendStreamEvent = tuple[str, "str | dict"]
 
 
 class RAGBackend:
@@ -106,10 +138,12 @@ class RAGBackend:
 
         # TRADE-OFF: Recursive chunking gives better retrieval quality than
         #            fixed-size because it respects paragraph/sentence boundaries.
-        #            512-char chunks with 64-char overlap is a balanced default.
+        # SINGLE SOURCE: chunk size/overlap come from config (CHUNK_SIZE/
+        #            CHUNK_OVERLAP) so the eval harness benchmarks production's
+        #            actual chunking, not a drifted copy (issue #16, step 4c).
         self.chunker = TextChunker(
-            chunk_size=512,
-            chunk_overlap=64,
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP,
             strategy="recursive",
         )
 
@@ -136,9 +170,48 @@ class RAGBackend:
         #      while strong enough to catch factual errors.
         self.eval_llm = LLMHandler(model=EVAL_MODEL, max_tokens=4096)
 
+        # PATTERN: Conversation persistence is its own module, depending only
+        #          on the session factory. The facade keeps its public methods
+        #          so routes are unaffected, but conversation bugs and their
+        #          tests now concentrate in one place.
+        self.conversations = ConversationStore(session_factory=self._session)
+        self.history = ConversationHistory(session_factory=self._session)
+
+        # PATTERN: The evaluation cluster is its own module. The facade keeps
+        #          the three public methods so routes are unaffected, but the
+        #          skip/dedup decisions and their tests now live in one place.
+        self.evaluator = MessageEvaluator(session_factory=self._session, judge_llm=self.eval_llm)
+
+        # PATTERN: The QueryEngine owns retrieve->generate for both the sync and
+        #          streaming paths. The Retriever is selected from config
+        #          (RETRIEVER_STRATEGY) behind the seam, so a validated eval
+        #          chain is promoted to production by configuration, not a
+        #          rewrite. Default "dense" preserves current behaviour.
+        # WHY the plan carries top_k: reranking changes how many chunks the
+        #      engine ends up with, so the count is part of the composition
+        #      rather than a constant the caller supplies alongside it. This
+        #      rule used to exist only on the eval side.
+        plan = build_retrieval_plan(
+            RETRIEVER_STRATEGY,
+            self.vector_store,
+            top_k=TOP_K_RESULTS,
+            rerank_over_fetch_n=RERANK_OVER_FETCH_N,
+        )
+        self.query_engine = QueryEngine(
+            retriever=plan.retriever,
+            llm=self.llm,
+            reasoning_llm=self.reasoning_llm,
+            top_k=plan.top_k,
+        )
+
         logger.info(
-            "RAGBackend initialised (engine=%s, answer_model=%s, reasoning_model=%s, eval_model=%s)",
-            engine.url, DEFAULT_MODEL, REASONING_MODEL, EVAL_MODEL,
+            "RAGBackend initialised (engine=%s, answer_model=%s, reasoning_model=%s, "
+            "eval_model=%s, retriever=%s)",
+            engine.url,
+            DEFAULT_MODEL,
+            REASONING_MODEL,
+            EVAL_MODEL,
+            RETRIEVER_STRATEGY,
         )
 
     # ------------------------------------------------------------------ #
@@ -255,7 +328,9 @@ class RAGBackend:
 
         logger.info(
             "Ingested '%s' -> doc_id=%s (%d chunks)",
-            filename, document.doc_id, len(chunks),
+            filename,
+            document.doc_id,
+            len(chunks),
         )
         return {
             "doc_id": document.doc_id,
@@ -324,122 +399,36 @@ class RAGBackend:
     ) -> tuple[dict[str, Any], StageTelemetry]:
         """Run a full RAG query and return per-stage observability data.
 
-        Identical to query() in output, but also returns a StageTelemetry
-        object with retrieve_ms, generate_ms, prompt_tokens, completion_tokens,
-        and cost_usd. The route layer (Task 5) calls this method so the REST
-        response can include telemetry without changing the query() contract.
-
-        WHY a sibling instead of modifying query():
-          Existing tests assert on result["answer"] and result["sources"] from
-          query(). Changing query() to return a tuple would break them silently
-          at dict-access time. The sibling keeps the tested contract intact.
+        Delegates retrieve->generate to the shared QueryEngine, then shapes the
+        {answer, sources, confidence} dict the API layer expects. Identical
+        output to query(), plus a StageTelemetry (retrieve/generate timing and
+        provider-reported token cost).
 
         RAG Pipeline Position:
-          Question -> [RETRIEVE (traced)] -> [GENERATE (traced)] -> (answer + telemetry)
+          Question -> [QueryEngine: retrieve -> generate -> telemetry] -> (answer + telemetry)
 
         Args:
             question: Natural language question from the user.
             top_k: Number of chunks to retrieve (default from config).
-            model: LLM model override (creates a new handler if different).
+            model: LLM model override.
 
         Returns:
-            Tuple of (result_dict, StageTelemetry). result_dict has the same
-            shape as query(): {answer, sources, confidence}.
+            Tuple of (result_dict, StageTelemetry). result_dict has the shape
+            {answer, sources, confidence}.
         """
-        k = top_k or TOP_K_RESULTS
-        tracer = get_tracer()
+        results, answer, telemetry = self.query_engine.ask(question, top_k=top_k, model=model)
 
-        # ---- PHASE 1: Retrieval (timed + traced) ----------------------------
-        t_retrieve_start = time.perf_counter()
-        with tracer.start_as_current_span("rag.retrieve") as retrieve_span:
-            retrieve_span.set_attribute("top_k", k)
-            retrieve_span.set_attribute("question_len", len(question))
-            results = self.vector_store.query(query_text=question, top_k=k)
-            retrieve_span.set_attribute("results_count", len(results))
-        retrieve_ms = (time.perf_counter() - t_retrieve_start) * 1000
+        sources = [_source_dict(r) for r in results]
 
-        if not results:
-            # PATTERN: Early return with zero telemetry — no LLM call was made.
-            return (
-                {
-                    "answer": "No documents indexed yet. Please upload documents first.",
-                    "sources": [],
-                    "confidence": 0.0,
-                },
-                StageTelemetry(
-                    retrieve_ms=round(retrieve_ms, 2),
-                    generate_ms=0.0,
-                    prompt_tokens=0,
-                    completion_tokens=0,
-                    cost_usd=0.0,
-                ),
-            )
-
-        # Build context string from retrieved chunks
-        context = "\n\n".join(
-            f"[{r.metadata.get('filename', 'unknown')}] {r.content}"
-            for r in results
-        )
-
-        # Generate answer (create a per-query handler if model differs)
-        handler = self.llm
-        if model and model != self.llm.model:
-            handler = LLMHandler(model=model)
-
-        # Build the answer prompt (system + user). Passing it through
-        # generate_with_usage means telemetry counts the exact tokens the
-        # provider billed — no reconstruction of a proxy string.
-        answer_system_prompt = (
-            "You are a helpful assistant. Answer the user's question based solely on the "
-            "provided context. If the context does not contain enough information, say so."
-        )
-        answer_user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-
-        # ---- PHASE 2: Generation (timed + traced) ---------------------------
-        t_generate_start = time.perf_counter()
-        with tracer.start_as_current_span("rag.generate") as generate_span:
-            generate_span.set_attribute("model", handler.model)
-            answer, prompt_tokens, completion_tokens = handler.generate_with_usage(
-                answer_user_prompt, system_prompt=answer_system_prompt
-            )
-            generate_span.set_attribute("answer_len", len(answer))
-        generate_ms = (time.perf_counter() - t_generate_start) * 1000
-
-        sources = [
-            {
-                "doc_id": r.doc_id,
-                "chunk_id": r.chunk_id,
-                "filename": r.metadata.get("filename"),
-                "score": round(r.score, 4),
-                "excerpt": r.content[:300],
-                "chunk_index": r.metadata.get("chunk_index"),
-            }
-            for r in results
-        ]
-
-        # PATTERN: Confidence = clamped average of top-3 similarity scores.
+        # PATTERN: Confidence = clamped average of top-3 similarity scores; 0.0
+        #          when there are no results (empty index or a refusal).
         top_scores = [r.score for r in results[: min(3, len(results))]]
-        confidence = max(0.0, min(1.0, sum(top_scores) / len(top_scores)))
-
-        # ---- Telemetry assembly ---------------------------------------------
-        # Token counts come from the provider-reported usage above (or the
-        # adapter's local count fallback) — never a reconstructed prompt.
-        total_cost = cost_usd(handler.model, prompt_tokens, completion_tokens)
-
-        telemetry = StageTelemetry(
-            retrieve_ms=round(retrieve_ms, 2),
-            generate_ms=round(generate_ms, 2),
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            cost_usd=total_cost,
+        confidence = (
+            round(max(0.0, min(1.0, sum(top_scores) / len(top_scores))), 4) if top_scores else 0.0
         )
 
         return (
-            {
-                "answer": answer,
-                "sources": sources,
-                "confidence": round(confidence, 4),
-            },
+            {"answer": answer, "sources": sources, "confidence": confidence},
             telemetry,
         )
 
@@ -449,7 +438,7 @@ class RAGBackend:
         top_k: int | None = None,
         model: str | None = None,
         conversation_id: str | None = None,
-    ):
+    ) -> Iterator[BackendStreamEvent]:
         """Retrieve context and stream reasoning + answer with chain-of-thought events.
 
         Event stream shape (in order):
@@ -474,234 +463,70 @@ class RAGBackend:
 
         WHY telemetry covers the answer pass only (not reasoning):
         The reasoning pass uses a separate model (REASONING_MODEL) with its own
-        cost. Telemetry here tracks the user-visible answer generation; mixing
-        two model costs into one StageTelemetry would confuse the "per-query
-        cost" display. Reasoning cost is a separate concern.
+        cost. Telemetry here tracks the user-visible answer generation; the
+        engine drops the reasoning pass's usage so the "per-query cost" display
+        reflects one model's spend.
+
+        WHY persistence is deferred to the terminal event: the QueryEngine owns
+        retrieve->generate and yields a terminal ("result", ...) carrying the
+        chunks + telemetry. This facade owns only conversation persistence — it
+        saves the user and assistant messages together, and only when retrieval
+        produced results, so an empty index leaves nothing persisted (as before)
+        and all conversation writes concentrate at one point.
 
         Yields:
             Tuples as described above.
         """
-        k = top_k or TOP_K_RESULTS
-        tracer = get_tracer()
+        # The sliding window is prior *completed* pairs; the current question is
+        # unpaired, so computing the window before persisting the user message is
+        # behaviour-identical to computing it after (the old ordering).
+        history = self._get_sliding_window(conversation_id) if conversation_id else []
 
-        # ---- PHASE 0: Retrieval (timed + traced) --------------------------------
-        yield ("status", "Searching indexed documents...")
-        t_retrieve_start = time.perf_counter()
-        with tracer.start_as_current_span("rag.retrieve") as retrieve_span:
-            retrieve_span.set_attribute("top_k", k)
-            retrieve_span.set_attribute("question_len", len(question))
-            results = self.vector_store.query(query_text=question, top_k=k)
-            retrieve_span.set_attribute("results_count", len(results))
-        retrieve_ms = (time.perf_counter() - t_retrieve_start) * 1000
+        answer_parts: list[str] = []
+        result: StreamResult | None = None
+        for event_type, data in self.query_engine.ask_stream(
+            question, top_k=top_k, model=model, history=history
+        ):
+            if isinstance(data, StreamResult):
+                result = data  # internal terminal event — consumed, not forwarded
+                continue
+            if event_type == "token":
+                answer_parts.append(data)
+            yield (event_type, data)
 
-        if not results:
-            yield ("status", "No indexed documents — nothing to retrieve.")
-            yield ("token", "No documents indexed yet. Please upload documents first.")
-            yield ("done", {"sources": []})
-            # PATTERN: Emit zero telemetry even on early return so the route
-            #          layer always gets a telemetry event it can forward.
-            yield ("telemetry", StageTelemetry(
-                retrieve_ms=round(retrieve_ms, 2),
-                generate_ms=0.0,
-                prompt_tokens=0,
-                completion_tokens=0,
-                cost_usd=0.0,
-            ).model_dump())
-            return
+        # The engine always emits exactly one terminal StreamResult (both the
+        # normal and the no-results/refusal paths), so this binds every time.
+        assert result is not None, "QueryEngine.ask_stream emitted no terminal result"
+        results = result.results
+        sources = [_source_dict(r) for r in results]
 
-        # WHY: Summarise retrieval in one status line so the user can see which
-        #      files contributed without inspecting the sources panel yet.
-        filenames = [r.metadata.get("filename", "unknown") for r in results]
-        unique_files = sorted({f for f in filenames if f})
-        file_summary = ", ".join(unique_files[:3])
-        if len(unique_files) > 3:
-            file_summary += f" (+{len(unique_files) - 3} more)"
-        yield (
-            "status",
-            f"Retrieved {len(results)} chunk(s) across {len(unique_files)} file(s): {file_summary}",
-        )
-
-        # Build context from retrieved chunks (shared by reasoning + answer)
-        context = "\n\n".join(
-            f"[{r.metadata.get('filename', 'unknown')}] {r.content}"
-            for r in results
-        )
-
-        handler = self.llm
-        if model and model != self.llm.model:
-            handler = LLMHandler(model=model)
-
-        sources = [
-            {
-                "doc_id": r.doc_id,
-                "chunk_id": r.chunk_id,
-                "filename": r.metadata.get("filename"),
-                "score": round(r.score, 4),
-                "excerpt": r.content[:300],
-            }
-            for r in results
-        ]
-
-        # ---- PHASE 1: Reasoning pass (chain-of-thought) ------------------------
-        # WHY a dedicated reasoning prompt: Asking the model to "think first,
-        # answer later" in a single call is brittle — formatting drifts between
-        # providers. A separate short call with a focused system prompt gives
-        # deterministic reasoning tokens we can stream as their own event type.
-        #
-        # WHY a dedicated reasoning model: The CoT output is short, throwaway
-        # scaffolding. Running it through the user's (potentially premium)
-        # answer model doubles cost for no quality gain. self.reasoning_llm is
-        # cached to REASONING_MODEL (default: gpt-5-nano) independent of the
-        # answer model — so premium answers stay cheap to "think" about.
-        yield ("status", f"Analyzing retrieved context ({self.reasoning_llm.model})...")
-
-        # WHY a RESEARCH-PLAN style prompt (not raw CoT): exposing raw generated
-        #      chain-of-thought is a documented product risk — the model may
-        #      verbalise uncertain or incorrect intermediate beliefs that users
-        #      mistake for confident answers. Instead we ask for a concise,
-        #      outcome-oriented *reasoning summary* that describes the plan
-        #      without asserting factual conclusions. Still streams live so
-        #      the UI's two-step feel (plan → answer) is preserved.
-        reasoning_system = (
-            "You are the planning step of a retrieval-augmented Q&A system. "
-            "In 3-5 concise sentences, summarise how you will construct the "
-            "answer using the retrieved excerpts. Cover:\n"
-            "1) What the user is asking, resolving any ambiguity explicitly.\n"
-            "2) Which excerpts are most relevant and the gist of their support.\n"
-            "3) Any gaps or conflicts the reader should be aware of.\n"
-            "4) The shape of the answer you will give next.\n"
-            "Stay factual and outcome-oriented — describe the plan, do not "
-            "verbalise stream-of-consciousness reasoning. No markdown headings, "
-            "no bullet lists, no preamble. Do NOT produce the final answer."
-        )
-        reasoning_user = (
-            f"Context:\n{context}\n\nQuestion: {question}\n\n"
-            "Reasoning plan (summary only, do not answer):"
-        )
-
-        try:
-            for item in self.reasoning_llm.stream_response(
-                reasoning_user, system_prompt=reasoning_system
-            ):
-                # The reasoning pass reports its own usage, but telemetry covers
-                # the answer pass only — so drop the reasoning terminal Usage.
-                if isinstance(item, Usage):
-                    continue
-                yield ("reasoning", item)
-        except Exception as exc:
-            # PATTERN: Reasoning is best-effort — a failure here must not block
-            # the final answer. Log, emit a terse status, continue to the answer.
-            logger.warning("Reasoning pass failed: %s", exc)
-            yield ("status", "Reasoning unavailable — skipping to answer.")
-
-        # ---- PHASE 2: Answer pass (timed + traced) -----------------------------
-        yield ("status", "Composing answer...")
-
-        system_prompt = (
-            "You are a helpful assistant. Answer the user's question based solely on the "
-            "provided context. If the context does not contain enough information, say so.\n\n"
-            "Format your response using Markdown for readability:\n"
-            "- Use ## for main sections and ### for sub-sections (max 3 levels)\n"
-            "- Use **bold** for key terms and important concepts\n"
-            "- Use bullet points (-) for lists of related items\n"
-            "- Use numbered lists (1.) for sequential steps\n"
-            "- Use `inline code` for technical terms, parameters, or commands\n"
-            "- Use fenced code blocks (```language) for code snippets\n"
-            "- Use > blockquotes for notable quotes from the context\n"
-            "- Keep paragraphs short (2-3 sentences max)\n"
-            "- Add blank lines between sections for visual breathing room\n"
-            "Do NOT use # (h1) headings. Start directly with content or ## sections."
-        )
-        user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-
-        # Accumulate full response for persistence; capture the answer pass's
-        # reported usage (yielded as the stream's terminal event) for telemetry.
-        full_response: list[str] = []
-        answer_usage: Usage | None = None
-
-        t_generate_start = time.perf_counter()
-
-        if conversation_id:
-            # PHASE 1: Save user message BEFORE streaming
+        if conversation_id and results:
             self._save_message(conversation_id, "user", question)
-
-            # PHASE 2: Load sliding window (completed pairs only — excludes
-            #          the just-saved user message because it has no assistant
-            #          reply yet).
-            window = self._get_sliding_window(conversation_id)
-
-            # PHASE 3: Build messages list for multi-turn generation
-            messages = [{"role": "system", "content": system_prompt}]
-            messages.extend(window)
-            messages.append({"role": "user", "content": user_prompt})
-
-            # PHASE 4: Stream via messages API (multi-turn aware)
-            with tracer.start_as_current_span("rag.generate") as generate_span:
-                generate_span.set_attribute("model", handler.model)
-                generate_span.set_attribute("has_conversation", True)
-                for item in handler.stream_messages(messages):
-                    if isinstance(item, Usage):
-                        answer_usage = item
-                        continue
-                    full_response.append(item)
-                    yield ("token", item)
-                generate_span.set_attribute("answer_len", sum(len(t) for t in full_response))
-
-            generate_ms = (time.perf_counter() - t_generate_start) * 1000
-
-            # PHASE 5: Save assistant message + sources
-            assistant_content = "".join(full_response)
             assistant_msg_id = self._save_message(
-                conversation_id, "assistant", assistant_content,
-                model=handler.model, sources=sources,
+                conversation_id,
+                "assistant",
+                "".join(answer_parts),
+                model=result.model,
+                sources=sources,
             )
-
-            # PHASE 6: Auto-title on first message
+            # WHY: Auto-title on the first turn so the sidebar shows something
+            #      meaningful; message_id + conversation_id let the frontend
+            #      update local state without re-fetching.
             self._auto_title(conversation_id, question)
-
-            # WHY: Include message_id and conversation_id in the done event
-            #      so the frontend can update its local state (add the new
-            #      message to the conversation without re-fetching).
-            yield ("done", {
-                "sources": sources,
-                "message_id": assistant_msg_id,
-                "conversation_id": conversation_id,
-            })
-
+            yield (
+                "done",
+                {
+                    "sources": sources,
+                    "message_id": assistant_msg_id,
+                    "conversation_id": conversation_id,
+                },
+            )
         else:
-            # No conversation — simple single-turn streaming
-            with tracer.start_as_current_span("rag.generate") as generate_span:
-                generate_span.set_attribute("model", handler.model)
-                generate_span.set_attribute("has_conversation", False)
-                for item in handler.stream_response(user_prompt, system_prompt=system_prompt):
-                    if isinstance(item, Usage):
-                        answer_usage = item
-                        continue
-                    full_response.append(item)
-                    yield ("token", item)
-                generate_span.set_attribute("answer_len", sum(len(t) for t in full_response))
-
-            generate_ms = (time.perf_counter() - t_generate_start) * 1000
-
             yield ("done", {"sources": sources})
 
-        # ---- Telemetry assembly (after done, additive) -----------------------
-        # WHY after done: the done event is what the client waits for to show
-        # sources. Telemetry is a secondary signal — emit it last.
-        #
-        # Usage is the answer pass's reported figure (provider-reported where the
-        # provider supplies it, adapter-counted otherwise), carried on the
-        # stream's terminal event — no prompt reconstruction.
-        usage = answer_usage or Usage(prompt_tokens=0, completion_tokens=0)
-        total_cost = cost_usd(handler.model, usage.prompt_tokens, usage.completion_tokens)
-
-        yield ("telemetry", StageTelemetry(
-            retrieve_ms=round(retrieve_ms, 2),
-            generate_ms=round(generate_ms, 2),
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-            cost_usd=total_cost,
-        ).model_dump())
+        # Telemetry last (additive): the done event is what the client waits on
+        # for sources; telemetry is a secondary signal.
+        yield ("telemetry", result.telemetry.model_dump())
 
     # ------------------------------------------------------------------ #
     # Document management                                                  #
@@ -747,7 +572,7 @@ class RAGBackend:
         """
         with self._session() as session:
             records = session.exec(
-                select(DocumentRecord).order_by(DocumentRecord.upload_date.desc())
+                select(DocumentRecord).order_by(col(DocumentRecord.upload_date).desc())
             ).all()
             return [
                 {
@@ -788,55 +613,27 @@ class RAGBackend:
         }
 
     # ------------------------------------------------------------------ #
-    # Conversation CRUD                                                    #
+    # Conversation CRUD — delegated to ConversationStore                   #
     # ------------------------------------------------------------------ #
 
     def create_conversation(self, title: str = "New Chat") -> dict[str, Any]:
-        """Create a new conversation in SQLite.
+        """Create a conversation.
 
         Args:
-            title: Human-readable conversation title.
+            title: Human-readable title.
 
         Returns:
-            Dict with id, title, created_at.
+            The conversation summary.
         """
-        conv = Conversation(title=title)
-        with self._session() as session:
-            session.add(conv)
-            session.commit()
-            session.refresh(conv)
-            return {
-                "id": conv.id,
-                "title": conv.title,
-                "pinned": conv.pinned,
-                "created_at": conv.created_at.isoformat(),
-                "updated_at": conv.updated_at.isoformat(),
-            }
+        return self.conversations.create(title)
 
     def list_conversations(self) -> list[dict[str, Any]]:
-        """Return all conversations, pinned first, then by updated_at descending.
-
-        WHY pinned first: Users pin important conversations so they stay at the
-        top of the sidebar regardless of when they were last updated.
+        """Return every conversation in sidebar order (pinned first).
 
         Returns:
-            List of conversation summary dicts.
+            Conversation summaries.
         """
-        with self._session() as session:
-            convs = session.exec(
-                select(Conversation)
-                .order_by(Conversation.pinned.desc(), Conversation.updated_at.desc())
-            ).all()
-            return [
-                {
-                    "id": c.id,
-                    "title": c.title,
-                    "pinned": c.pinned,
-                    "created_at": c.created_at.isoformat(),
-                    "updated_at": c.updated_at.isoformat(),
-                }
-                for c in convs
-            ]
+        return self.conversations.list_all()
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
         """Return a conversation with its messages and their sources.
@@ -845,55 +642,9 @@ class RAGBackend:
             conversation_id: UUID of the conversation.
 
         Returns:
-            Dict with id, title, messages (each with sources), or None if not found.
+            The detail shape, or None when not found.
         """
-        with self._session() as session:
-            conv = session.get(Conversation, conversation_id)
-            if conv is None:
-                return None
-
-            # WHY: Eagerly load messages ordered by creation time so the
-            #      frontend can render them in chronological order.
-            messages = session.exec(
-                select(Message)
-                .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at)
-            ).all()
-
-            msg_dicts = []
-            for msg in messages:
-                # Load sources for each message
-                sources = session.exec(
-                    select(MessageSource)
-                    .where(MessageSource.message_id == msg.id)
-                ).all()
-
-                msg_dicts.append({
-                    "id": msg.id,
-                    "role": msg.role,
-                    "content": msg.content,
-                    "model": msg.model,
-                    "created_at": msg.created_at.isoformat(),
-                    "sources": [
-                        {
-                            "doc_id": s.doc_id,
-                            "chunk_id": s.chunk_id,
-                            "filename": s.filename,
-                            "score": s.score,
-                            "excerpt": s.excerpt,
-                        }
-                        for s in sources
-                    ],
-                })
-
-            return {
-                "id": conv.id,
-                "title": conv.title,
-                "pinned": conv.pinned,
-                "created_at": conv.created_at.isoformat(),
-                "updated_at": conv.updated_at.isoformat(),
-                "messages": msg_dicts,
-            }
+        return self.conversations.get(conversation_id)
 
     def update_conversation(
         self,
@@ -901,179 +652,72 @@ class RAGBackend:
         title: str | None = None,
         pinned: bool | None = None,
     ) -> dict[str, Any] | None:
-        """Update a conversation's title and/or pinned status.
+        """Change a conversation's title and/or pinned state.
 
         Args:
             conversation_id: UUID of the conversation.
-            title: New title (if provided).
-            pinned: New pinned status (if provided).
+            title: New title, when supplied.
+            pinned: New pinned state, when supplied.
 
         Returns:
-            Updated conversation dict, or None if not found.
+            The updated summary, or None when not found.
         """
-        with self._session() as session:
-            conv = session.get(Conversation, conversation_id)
-            if conv is None:
-                return None
-
-            if title is not None:
-                conv.title = title
-            if pinned is not None:
-                conv.pinned = pinned
-
-            conv.updated_at = datetime.now(timezone.utc)
-            session.add(conv)
-            session.commit()
-            session.refresh(conv)
-
-            return {
-                "id": conv.id,
-                "title": conv.title,
-                "pinned": conv.pinned,
-                "created_at": conv.created_at.isoformat(),
-                "updated_at": conv.updated_at.isoformat(),
-            }
+        return self.conversations.update(conversation_id, title=title, pinned=pinned)
 
     def delete_conversation(self, conversation_id: str) -> bool:
-        """Delete a conversation and all its messages and sources (cascade).
-
-        WHY cascade: ON DELETE CASCADE in the FK definitions means deleting
-        the Conversation row automatically removes all child Messages and
-        grandchild MessageSources. The PRAGMA foreign_keys=ON listener in
-        database.py ensures this works in SQLite.
+        """Delete a conversation with its messages and sources.
 
         Args:
             conversation_id: UUID of the conversation.
 
         Returns:
-            True if deleted, False if not found.
+            True when deleted, False when not found.
         """
-        with self._session() as session:
-            conv = session.get(Conversation, conversation_id)
-            if conv is None:
-                return False
-            session.delete(conv)
-            session.commit()
-        return True
+        return self.conversations.delete(conversation_id)
 
     def search_conversations(self, query: str) -> list[dict[str, Any]]:
-        """Search conversations by title or message content.
-
-        Uses SQL LIKE for simple substring matching. For a portfolio project
-        this is adequate; production would use full-text search (FTS5).
+        """Find conversations by title or message content.
 
         Args:
             query: Search string.
 
         Returns:
-            List of matching conversation summary dicts.
+            Matching conversation summaries.
         """
-        with self._session() as session:
-            # WHY: Two separate queries then union the IDs. This avoids a
-            #      complex JOIN that could return duplicate rows.
-            matching_by_title = session.exec(
-                select(Conversation.id).where(Conversation.title.contains(query))
-            ).all()
-
-            matching_by_message = session.exec(
-                select(Message.conversation_id)
-                .where(Message.content.contains(query))
-            ).all()
-
-            # Combine and deduplicate
-            matching_ids = set(matching_by_title) | set(matching_by_message)
-
-            if not matching_ids:
-                return []
-
-            convs = session.exec(
-                select(Conversation)
-                .where(Conversation.id.in_(matching_ids))
-                .order_by(Conversation.updated_at.desc())
-            ).all()
-
-            return [
-                {
-                    "id": c.id,
-                    "title": c.title,
-                    "pinned": c.pinned,
-                    "created_at": c.created_at.isoformat(),
-                    "updated_at": c.updated_at.isoformat(),
-                }
-                for c in convs
-            ]
+        return self.conversations.search(query)
 
     def export_conversation(self, conversation_id: str) -> str | None:
-        """Export a conversation as a Markdown string.
-
-        Format:
-          # {title}
-          ---
-          **User:** {message}
-          **Assistant:** {message}
+        """Render a conversation as Markdown.
 
         Args:
             conversation_id: UUID of the conversation.
 
         Returns:
-            Markdown string, or None if conversation not found.
+            A Markdown transcript, or None when not found.
         """
-        data = self.get_conversation(conversation_id)
-        if data is None:
-            return None
-
-        lines = [f"# {data['title']}", "---", ""]
-        for msg in data["messages"]:
-            role_label = "User" if msg["role"] == "user" else "Assistant"
-            lines.append(f"**{role_label}:** {msg['content']}")
-            lines.append("")
-
-        return "\n".join(lines)
+        return self.conversations.export_markdown(conversation_id)
 
     def create_share_token(self, conversation_id: str) -> str | None:
-        """Generate a share token for read-only public access.
-
-        WHY UUID4: Opaque, unguessable tokens. Anyone with the token can
-        view the conversation, so it must not be sequential or predictable.
+        """Mint a read-only share token for a conversation.
 
         Args:
             conversation_id: UUID of the conversation.
 
         Returns:
-            UUID4 token string, or None if conversation not found.
+            The token, or None when not found.
         """
-        token = str(uuid.uuid4())
-        with self._session() as session:
-            conv = session.get(Conversation, conversation_id)
-            if conv is None:
-                return None
-            conv.share_token = token
-            session.add(conv)
-            session.commit()
-        return token
+        return self.conversations.create_share_token(conversation_id)
 
     def get_shared_conversation(self, token: str) -> dict[str, Any] | None:
-        """Retrieve a conversation by its share token.
+        """Return the conversation a share token points at.
 
         Args:
-            token: The share token string.
+            token: The share token.
 
         Returns:
-            Conversation dict with messages, or None if token is invalid.
+            The detail shape, or None when the token matches nothing.
         """
-        with self._session() as session:
-            conv = session.exec(
-                select(Conversation).where(Conversation.share_token == token)
-            ).first()
-            if conv is None:
-                return None
-            # WHY: Capture the ID inside the session scope to avoid detached
-            #      instance errors when get_conversation opens a new session.
-            conv_id = conv.id
-
-        # WHY: Reuse get_conversation to build the full response dict with
-        #      messages and sources, avoiding code duplication.
-        return self.get_conversation(conv_id)
+        return self.conversations.get_by_share_token(token)
 
     # ------------------------------------------------------------------ #
     # Evaluation                                                          #
@@ -1085,243 +729,43 @@ class RAGBackend:
         answer: str,
         contexts: list[str],
     ) -> dict:
-        """Score a freshly-generated answer for faithfulness and persist the result.
-
-        Called immediately after stream_query completes (while context is still
-        available in memory) so the user gets a score without a second DB round-trip
-        to reload the sources.
-
-        WHY realtime vs. on-demand: The retrieval contexts are already in memory at
-        the end of stream_query. Scoring here avoids re-loading MessageSource rows
-        from SQLite just to rebuild the context list — cheaper and faster.
-
-        PATTERN: Fail-safe — any exception is caught and logged so a judge LLM
-        timeout or bad JSON response never crashes the caller (the streaming endpoint).
+        """Score a freshly-generated answer for faithfulness and persist it.
 
         Args:
-            message_id: UUID of the assistant Message row to attach the score to.
+            message_id: UUID of the assistant Message to attach the score to.
             answer: The full generated answer text.
-            contexts: List of retrieved excerpt strings (matching MessageSource.excerpt).
+            contexts: Retrieved excerpts the answer should be grounded in.
 
         Returns:
-            Dict with metric, score, and reasoning. Returns a zero-score sentinel
-            on failure so callers can always safely read ["score"].
+            Dict with metric, score and reasoning; a zero-score sentinel on
+            failure so callers can always read ``["score"]``.
         """
-        try:
-            score, reasoning, details = evaluate_faithfulness(
-                answer, contexts, self.eval_llm
-            )
-            eval_row = MessageEvaluation(
-                message_id=message_id,
-                metric="faithfulness",
-                score=score,
-                reasoning=reasoning,
-                details=details,
-                judge_model=self.eval_llm.model,
-            )
-            with self._session() as session:
-                session.add(eval_row)
-                session.commit()
-
-            logger.info(
-                "Faithfulness score for message %s: %.3f", message_id, score
-            )
-            return {"metric": "faithfulness", "score": score, "reasoning": reasoning}
-
-        except Exception as exc:
-            # PATTERN: Evaluation is a non-critical path. Log the failure but
-            #          never propagate it — the answer was already delivered.
-            logger.error(
-                "evaluate_faithfulness_realtime failed for message %s: %s",
-                message_id, exc,
-            )
-            return {"metric": "faithfulness", "score": 0.0, "reasoning": str(exc)}
+        return self.evaluator.score_realtime(message_id, answer, contexts)
 
     def evaluate_message(self, message_id: str) -> list[dict]:
-        """Run all three evaluation metrics for a persisted assistant message.
-
-        Loads the message and its sources from SQLite, finds the preceding user
-        question, then scores faithfulness (unless already scored), answer
-        relevancy, and context precision.
-
-        WHY skip existing faithfulness: evaluate_faithfulness_realtime may have
-        already run immediately after generation (while contexts were in memory).
-        Re-running it would duplicate the row and skew aggregations. The other
-        two metrics are always fresh because they are not run in the realtime path.
+        """Run every not-yet-recorded evaluation metric for a persisted message.
 
         Args:
             message_id: UUID of the assistant Message to evaluate.
 
         Returns:
-            List of dicts, each with metric, score, and reasoning.
-            Returns [] if the message is not found.
+            One dict per metric; empty when the message is not found.
         """
-        with self._session() as session:
-            msg = session.get(Message, message_id)
-            if msg is None:
-                logger.warning("evaluate_message: message %s not found", message_id)
-                return []
-
-            sources = session.exec(
-                select(MessageSource).where(MessageSource.message_id == message_id)
-            ).all()
-            contexts = [s.excerpt for s in sources if s.excerpt]
-
-            # Find the preceding user message (the question for this answer).
-            # WHY created_at < this message: The user message immediately before
-            # this assistant message in the thread is the question that prompted
-            # the answer. Ordering desc + limit 1 picks the closest one.
-            user_msg = session.exec(
-                select(Message)
-                .where(
-                    Message.conversation_id == msg.conversation_id,
-                    Message.role == "user",
-                    Message.created_at < msg.created_at,
-                )
-                .order_by(Message.created_at.desc())
-            ).first()
-
-            question = user_msg.content if user_msg else ""
-            answer = msg.content
-
-            # Check whether faithfulness was already scored in the realtime path
-            existing_faith = session.exec(
-                select(MessageEvaluation).where(
-                    MessageEvaluation.message_id == message_id,
-                    MessageEvaluation.metric == "faithfulness",
-                )
-            ).first()
-
-        results: list[dict] = []
-
-        # ---- Faithfulness (skip if already scored) ----------------------------
-        # BUG FIX: Both branches now emit `details` so the frontend's claim
-        #          breakdown renders identically whether faithfulness was
-        #          scored in this call or cached from the realtime path.
-        if existing_faith is None and contexts:
-            score, reasoning, details = evaluate_faithfulness(
-                answer, contexts, self.eval_llm
-            )
-            eval_row = MessageEvaluation(
-                message_id=message_id,
-                metric="faithfulness",
-                score=score,
-                reasoning=reasoning,
-                details=details,
-                judge_model=self.eval_llm.model,
-            )
-            with self._session() as session:
-                session.add(eval_row)
-                session.commit()
-            results.append({
-                "metric": "faithfulness",
-                "score": score,
-                "reasoning": reasoning,
-                "details": details,
-            })
-        elif existing_faith is not None:
-            results.append({
-                "metric": "faithfulness",
-                "score": existing_faith.score,
-                "reasoning": existing_faith.reasoning,
-                "details": existing_faith.details,
-            })
-
-        # ---- Answer relevancy (skip if already scored) -------------------------
-        with self._session() as session:
-            existing_rel = session.exec(
-                select(MessageEvaluation).where(
-                    MessageEvaluation.message_id == message_id,
-                    MessageEvaluation.metric == "answer_relevancy",
-                )
-            ).first()
-        if existing_rel is None and question:
-            score, reasoning = evaluate_answer_relevancy(question, answer, self.eval_llm)
-            eval_row = MessageEvaluation(
-                message_id=message_id,
-                metric="answer_relevancy",
-                score=score,
-                reasoning=reasoning,
-                details=None,
-                judge_model=self.eval_llm.model,
-            )
-            with self._session() as session:
-                session.add(eval_row)
-                session.commit()
-            results.append({"metric": "answer_relevancy", "score": score, "reasoning": reasoning})
-        elif existing_rel is not None:
-            results.append({
-                "metric": "answer_relevancy",
-                "score": existing_rel.score,
-                "reasoning": existing_rel.reasoning,
-            })
-
-        # ---- Context precision (skip if already scored) -----------------------
-        with self._session() as session:
-            existing_prec = session.exec(
-                select(MessageEvaluation).where(
-                    MessageEvaluation.message_id == message_id,
-                    MessageEvaluation.metric == "context_precision",
-                )
-            ).first()
-        if existing_prec is None and question and contexts:
-            score, reasoning, details = evaluate_context_precision(
-                question, contexts, self.eval_llm
-            )
-            eval_row = MessageEvaluation(
-                message_id=message_id,
-                metric="context_precision",
-                score=score,
-                reasoning=reasoning,
-                details=details,
-                judge_model=self.eval_llm.model,
-            )
-            with self._session() as session:
-                session.add(eval_row)
-                session.commit()
-            results.append({"metric": "context_precision", "score": score, "reasoning": reasoning})
-        elif existing_prec is not None:
-            results.append({
-                "metric": "context_precision",
-                "score": existing_prec.score,
-                "reasoning": existing_prec.reasoning,
-            })
-
-        return results
+        return self.evaluator.score_message(message_id)
 
     def get_evaluation(self, message_id: str) -> list[dict]:
-        """Return all stored evaluation scores for a message.
-
-        PATTERN: Read-only query — this method never calls the judge LLM.
-        Use evaluate_message() to generate missing scores first.
+        """Return all stored evaluation scores for a message, calling no judge.
 
         Args:
             message_id: UUID of the assistant Message.
 
         Returns:
-            List of dicts with metric, score, reasoning, details, judge_model,
-            and evaluated_at. Returns [] if no evaluations exist yet.
+            One dict per stored metric; empty when nothing has been scored.
         """
-        with self._session() as session:
-            rows = session.exec(
-                select(MessageEvaluation).where(
-                    MessageEvaluation.message_id == message_id
-                )
-            ).all()
-            return [
-                {
-                    "metric": row.metric,
-                    "score": row.score,
-                    "reasoning": row.reasoning,
-                    "details": row.details,
-                    "judge_model": row.judge_model,
-                    "evaluated_at": row.evaluated_at.isoformat(),
-                }
-                for row in rows
-            ]
+        return self.evaluator.scores_for(message_id)
 
     # ------------------------------------------------------------------ #
-    # Internal helpers                                                     #
+    # Internal helpers — delegated to ConversationHistory                   #
     # ------------------------------------------------------------------ #
 
     def _save_message(
@@ -1332,146 +776,19 @@ class RAGBackend:
         model: str | None = None,
         sources: list[dict[str, Any]] | None = None,
     ) -> str:
-        """Persist a message (and optional sources) to SQLite.
-
-        Also updates the parent conversation's updated_at timestamp so that
-        list_conversations() sorts by most-recently-active.
-
-        Args:
-            conversation_id: UUID of the parent conversation.
-            role: "user" or "assistant".
-            content: Message text.
-            model: LLM model name (only for assistant messages).
-            sources: List of source dicts from retrieval (only for assistant).
-
-        Returns:
-            The UUID string of the newly created Message.
-        """
-        msg = Message(
-            conversation_id=conversation_id,
-            role=role,
-            content=content,
-            model=model,
+        """Persist one message and its sources. See ConversationHistory."""
+        return self.history.save_message(
+            conversation_id, role, content, model=model, sources=sources
         )
-
-        # WHY: Capture the ID before entering the session scope. Message.id is
-        #      set by default_factory at construction time (uuid4), so it's
-        #      available immediately. After session.commit(), SQLAlchemy expires
-        #      all attributes — accessing msg.id outside the session would
-        #      trigger a DetachedInstanceError.
-        msg_id = msg.id
-
-        with self._session() as session:
-            session.add(msg)
-
-            # WHY: Save sources as separate MessageSource rows rather than
-            #      embedding them in a JSON column. This keeps the schema
-            #      normalized and enables per-source queries.
-            if sources:
-                for src in sources:
-                    source = MessageSource(
-                        message_id=msg_id,
-                        doc_id=src.get("doc_id", ""),
-                        chunk_id=src.get("chunk_id", ""),
-                        filename=src.get("filename"),
-                        score=src.get("score", 0.0),
-                        excerpt=src.get("excerpt", ""),
-                    )
-                    session.add(source)
-
-            # Update conversation's updated_at timestamp
-            conv = session.get(Conversation, conversation_id)
-            if conv:
-                conv.updated_at = datetime.now(timezone.utc)
-                session.add(conv)
-
-            session.commit()
-
-        return msg_id
 
     def _get_sliding_window(
         self,
         conversation_id: str,
         max_pairs: int = SLIDING_WINDOW_SIZE,
     ) -> list[dict[str, str]]:
-        """Return the last N completed exchange pairs for LLM context.
+        """Return the last N completed exchanges. See ConversationHistory."""
+        return self.history.sliding_window(conversation_id, max_pairs=max_pairs)
 
-        CRITICAL: Only return COMPLETED pairs — a user message followed by an
-        assistant message. A user message with no assistant reply is NOT a
-        complete pair and must be excluded.
-
-        WHY exclude unpaired: The current user question is saved BEFORE streaming
-        starts (phase 1 of stream_query). If we included it in the window, the
-        LLM would see the question twice — once in the window and once as the
-        explicit user turn appended by stream_query. This causes the model to
-        repeat itself or get confused.
-
-        Args:
-            conversation_id: UUID of the conversation.
-            max_pairs: Maximum number of user/assistant pairs to return.
-
-        Returns:
-            List of {"role": str, "content": str} dicts representing the
-            last max_pairs completed exchanges, in chronological order.
-        """
-        with self._session() as session:
-            messages = session.exec(
-                select(Message)
-                .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at)
-            ).all()
-
-            # Build completed pairs only (inside session scope to prevent
-            # DetachedInstanceError if a future change adds a commit above).
-            # WHY: We walk the message list looking for consecutive user->assistant
-            #      pairs. Any other pattern (user->user, assistant->assistant,
-            #      standalone messages) is skipped.
-            pairs: list[Message] = []
-            i = 0
-            while i < len(messages) - 1:
-                if messages[i].role == "user" and messages[i + 1].role == "assistant":
-                    pairs.append(messages[i])
-                    pairs.append(messages[i + 1])
-                    i += 2
-                else:
-                    i += 1
-
-            # Take the last max_pairs * 2 messages (each pair = 2 messages)
-            window = pairs[-(max_pairs * 2):]
-            return [{"role": m.role, "content": m.content} for m in window]
-
-    def _auto_title(
-        self,
-        conversation_id: str,
-        first_query: str,
-    ) -> None:
-        """Set the conversation title from the first user query if still "New Chat".
-
-        Truncates at a word boundary to avoid cutting mid-word, with a maximum
-        length of MAX_TITLE_LENGTH characters from config.
-
-        Args:
-            conversation_id: UUID of the conversation.
-            first_query: The user's first question text.
-        """
-        with self._session() as session:
-            conv = session.get(Conversation, conversation_id)
-            if conv is None or conv.title != "New Chat":
-                return
-
-            # Truncate at word boundary
-            title = first_query.strip()
-            if len(title) > MAX_TITLE_LENGTH:
-                # Find the last space before the limit
-                truncated = title[:MAX_TITLE_LENGTH]
-                last_space = truncated.rfind(" ")
-                if last_space > 0:
-                    title = truncated[:last_space] + "..."
-                else:
-                    # Single long word — hard truncate
-                    title = truncated + "..."
-
-            conv.title = title
-            conv.updated_at = datetime.now(timezone.utc)
-            session.add(conv)
-            session.commit()
+    def _auto_title(self, conversation_id: str, first_query: str) -> None:
+        """Name an untitled thread after its first question. See ConversationHistory."""
+        self.history.auto_title(conversation_id, first_query)

@@ -32,8 +32,8 @@ Where it fits in the RAG pipeline:
 # must not.
 
 import uuid
-from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -81,15 +81,15 @@ class Conversation(SQLModel, table=True):
     pinned: bool = Field(default=False)
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
     )
     updated_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
     )
 
     # WHY: Nullable + indexed — most conversations are private (NULL), but
     #      shared ones need fast lookup by token without a full table scan.
-    share_token: Optional[str] = Field(default=None, index=True)
+    share_token: str | None = Field(default=None, index=True)
 
     # PATTERN: cascade_delete=True tells SQLModel to include
     #          ON DELETE CASCADE on the Message.conversation_id FK column.

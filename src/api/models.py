@@ -5,7 +5,6 @@ Pydantic v2 request/response models for the RAG API.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -45,7 +44,7 @@ class SourceInfo(BaseModel):
 
     doc_id: str
     chunk_id: str
-    filename: Optional[str] = None
+    filename: str | None = None
     score: float
     excerpt: str = Field(description="Short excerpt from the source chunk.")
 
@@ -58,15 +57,13 @@ class QueryResponse(BaseModel):
     """
 
     answer: str = Field(description="Generated answer.")
-    sources: List[SourceInfo] = Field(default_factory=list, description="Retrieved source chunks.")
-    confidence: float = Field(
-        ge=0.0, le=1.0, description="Estimated answer confidence (0–1)."
-    )
+    sources: list[SourceInfo] = Field(default_factory=list, description="Retrieved source chunks.")
+    confidence: float = Field(ge=0.0, le=1.0, description="Estimated answer confidence (0–1).")
     latency_ms: float = Field(description="Total request latency in milliseconds.")
     # WHY: StageTelemetry carries per-stage timing and token-cost numbers.
     #      Optional with None default so existing callers that construct
     #      QueryResponse without telemetry (e.g., older tests) still validate.
-    telemetry: Optional[StageTelemetry] = Field(
+    telemetry: StageTelemetry | None = Field(
         default=None,
         description="Per-stage timing, token counts, and cost for this request.",
     )
@@ -79,7 +76,7 @@ class UploadResponse(BaseModel):
     filename: str = Field(description="Original filename.")
     chunks_count: int = Field(ge=0, description="Number of chunks indexed.")
     status: str = Field(description="Processing status: 'success' or 'error'.")
-    message: Optional[str] = Field(default=None, description="Optional detail message.")
+    message: str | None = Field(default=None, description="Optional detail message.")
 
 
 class DocumentInfo(BaseModel):
@@ -89,16 +86,16 @@ class DocumentInfo(BaseModel):
     filename: str
     chunks: int = Field(ge=0, description="Number of indexed chunks.")
     upload_date: datetime
-    file_type: Optional[str] = None
-    file_size_bytes: Optional[int] = None
+    file_type: str | None = None
+    file_size_bytes: int | None = None
 
 
 class ErrorResponse(BaseModel):
     """Standard error response body."""
 
     error: str = Field(description="Short error code or type.")
-    detail: Optional[str] = Field(default=None, description="Detailed error message.")
-    request_id: Optional[str] = Field(default=None, description="Optional request trace ID.")
+    detail: str | None = Field(default=None, description="Detailed error message.")
+    request_id: str | None = Field(default=None, description="Optional request trace ID.")
 
 
 # --------------------------------------------------------------------------- #
@@ -124,8 +121,8 @@ class ConversationUpdate(BaseModel):
     This is the standard "partial update" pattern for PATCH endpoints.
     """
 
-    title: Optional[str] = Field(default=None, max_length=200, description="New title.")
-    pinned: Optional[bool] = Field(default=None, description="Pin/unpin the conversation.")
+    title: str | None = Field(default=None, max_length=200, description="New title.")
+    pinned: bool | None = Field(default=None, description="Pin/unpin the conversation.")
 
 
 class ConversationSummary(BaseModel):
@@ -141,7 +138,7 @@ class ConversationSummary(BaseModel):
     pinned: bool
     created_at: str = Field(description="ISO-8601 UTC timestamp.")
     updated_at: str = Field(description="ISO-8601 UTC timestamp.")
-    share_token: Optional[str] = Field(
+    share_token: str | None = Field(
         default=None,
         description="Opaque share token for read-only public access.",
     )
@@ -157,9 +154,9 @@ class MessageInfo(BaseModel):
     id: str
     role: str = Field(description="'user' or 'assistant'.")
     content: str
-    model: Optional[str] = Field(default=None, description="LLM model (assistant messages only).")
+    model: str | None = Field(default=None, description="LLM model (assistant messages only).")
     created_at: str = Field(description="ISO-8601 UTC timestamp.")
-    sources: List[SourceInfo] = Field(
+    sources: list[SourceInfo] = Field(
         default_factory=list,
         description="Document chunks cited by this message.",
     )
@@ -177,8 +174,8 @@ class ConversationDetail(BaseModel):
     pinned: bool
     created_at: str
     updated_at: str
-    share_token: Optional[str] = None
-    messages: List[MessageInfo] = Field(
+    share_token: str | None = None
+    messages: list[MessageInfo] = Field(
         default_factory=list,
         description="Chronologically ordered messages in this conversation.",
     )

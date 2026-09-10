@@ -29,7 +29,7 @@ Where it fits in the RAG pipeline:
 # See conversation.py for the full explanation.
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Optional
 
 from sqlmodel import Field, Relationship, SQLModel
@@ -79,15 +79,15 @@ class Message(SQLModel, table=True):
     content: str = Field(default="")
 
     # WHY: Nullable — user messages don't have a model; only assistant messages do.
-    model: Optional[str] = Field(default=None)
+    model: str | None = Field(default=None)
 
     created_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
     )
 
     # WHY: token_count is approximate and may be unavailable for some providers,
     #      so it's Optional rather than raising at insert time.
-    token_count: Optional[int] = Field(default=None)
+    token_count: int | None = Field(default=None)
 
     # PATTERN: back_populates="messages" must match the attribute name on
     #          Conversation.messages. SQLModel uses these strings to wire
@@ -126,7 +126,7 @@ class MessageSource(SQLModel, table=True):
 
     # WHY: Optional[int] + default=None tells SQLModel this is an auto-increment
     #      PK. SQLite assigns the value on INSERT, so Python starts with None.
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
 
     message_id: str = Field(
         foreign_key="messages.id",
@@ -139,7 +139,7 @@ class MessageSource(SQLModel, table=True):
 
     # WHY: filename is Optional — a source might reference a chunk whose document
     #      was deleted from DocumentRecord (soft-delete scenario).
-    filename: Optional[str] = None
+    filename: str | None = None
 
     score: float
 

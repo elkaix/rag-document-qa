@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.observability import TRACER_NAME, get_tracer, init_observability
+from src.observability import get_tracer, init_observability
 
 
 class TestInitObservability:
@@ -16,6 +16,7 @@ class TestInitObservability:
         """A bad endpoint is logged but doesn't crash."""
         # Reset the idempotency flag so this call actually attempts init.
         import src.observability as obs
+
         obs._INITIALIZED = False  # type: ignore[attr-defined]
         init_observability(otlp_endpoint="http://127.0.0.1:1/v1/traces")
         # Subsequent spans must still work (as no-ops or local).

@@ -10,17 +10,18 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, HTTPException, UploadFile, status
 
+from src.api.dependencies import BackendDep
 from src.api.models import UploadResponse
+from src.ingestion import SUPPORTED_EXTENSIONS as ALLOWED_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["upload"])
 
-from src.document_loader import SUPPORTED_EXTENSIONS as ALLOWED_EXTENSIONS
+
 MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
@@ -33,7 +34,7 @@ def _validate_extension(filename: str) -> None:
         )
 
 
-async def _process_upload(file: UploadFile, request: Request) -> UploadResponse:
+async def _process_upload(file: UploadFile, backend: BackendDep) -> UploadResponse:
     """Validate and ingest a single uploaded file via the backend."""
     filename = file.filename or "upload"
     _validate_extension(filename)
@@ -67,8 +68,6 @@ async def _process_upload(file: UploadFile, request: Request) -> UploadResponse:
         chunks.append(piece)
     contents = b"".join(chunks)
 
-    backend = request.app.state.backend
-
     try:
         result = backend.ingest_bytes(filename, contents)
     except Exception as exc:
@@ -92,23 +91,23 @@ async def _process_upload(file: UploadFile, request: Request) -> UploadResponse:
     summary="Upload a single document",
     status_code=status.HTTP_201_CREATED,
 )
-async def upload_single(file: UploadFile, request: Request) -> UploadResponse:
+async def upload_single(file: UploadFile, backend: BackendDep) -> UploadResponse:
     """Upload and index a single document file.
 
     - **file**: Multipart file upload (PDF, DOCX, TXT, MD, HTML, CSV, JSON).
 
     Returns document ID, filename, chunk count, and status.
     """
-    return await _process_upload(file, request)
+    return await _process_upload(file, backend)
 
 
 @router.post(
     "/upload/batch",
-    response_model=List[UploadResponse],
+    response_model=list[UploadResponse],
     summary="Upload multiple documents",
     status_code=status.HTTP_201_CREATED,
 )
-async def upload_batch(files: List[UploadFile], request: Request) -> List[UploadResponse]:
+async def upload_batch(files: list[UploadFile], backend: BackendDep) -> list[UploadResponse]:
     """Upload and index multiple document files in one request.
 
     - **files**: List of multipart file uploads.
@@ -121,10 +120,10 @@ async def upload_batch(files: List[UploadFile], request: Request) -> List[Upload
             detail="No files provided.",
         )
 
-    results: List[UploadResponse] = []
+    results: list[UploadResponse] = []
     for file in files:
         try:
-            result = await _process_upload(file, request)
+            result = await _process_upload(file, backend)
             results.append(result)
         except HTTPException as exc:
             results.append(

@@ -21,29 +21,30 @@ from src.eval.schemas import (
 )
 from src.eval.statistics import bootstrap_ci, paired_permutation_test
 from src.eval.storage import list_runs, load_run, save_run
+
 # Pricing moved to the core telemetry package; re-exported here so the eval
 # package's public API (`from src.eval import cost_usd`) is preserved.
 from src.telemetry.pricing import MODEL_PRICES, ModelPrice, cost_usd
 
 __all__ = [
+    "MODEL_PRICES",
     # 1A — schemas, pricing, statistics
     "AggregatedMetric",
     "CompareResult",
+    # 1B — config, runner, storage, compare
+    "EvalConfig",
     "EvalQuestion",
     "EvalResult",
+    "EvalRunner",
     "MetricDelta",
-    "MODEL_PRICES",
     "ModelPrice",
     "RunMetadata",
     "bootstrap_ci",
-    "cost_usd",
-    "paired_permutation_test",
-    # 1B — config, runner, storage, compare
-    "EvalConfig",
-    "EvalRunner",
     "compare_runs",
+    "cost_usd",
     "list_runs",
     "load_config",
     "load_run",
+    "paired_permutation_test",
     "save_run",
 ]

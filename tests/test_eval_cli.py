@@ -9,11 +9,12 @@ from pathlib import Path
 
 import pytest
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _run_cli(args: list[str], env_overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+def _run_cli(
+    args: list[str], env_overrides: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     if env_overrides:
         env.update(env_overrides)
@@ -38,10 +39,13 @@ def tmp_eval_runs(tmp_path: Path) -> Path:
 def synthetic_squad(tmp_path: Path, monkeypatch) -> Path:
     """Write a tiny 3-question synthetic squad set and override the loader's path."""
     from src.eval.schemas import EvalQuestion
+
     questions = [
         EvalQuestion(
-            id=f"q{i}", question=f"What is fact {i}?",
-            gold_answer=f"Fact {i}.", gold_chunk_ids=[f"q{i}"],
+            id=f"q{i}",
+            question=f"What is fact {i}?",
+            gold_answer=f"Fact {i}.",
+            gold_chunk_ids=[f"q{i}"],
             metadata={"context": f"Fact {i} is important.", "title": "t"},
         )
         for i in range(3)
@@ -57,8 +61,10 @@ def synthetic_squad(tmp_path: Path, monkeypatch) -> Path:
 def cli_config(tmp_path: Path, synthetic_squad: Path) -> Path:
     """Write a baseline-shaped YAML config; runner picks it up."""
     import yaml
+
     config_data = {
-        "name": "cli-test", "description": "",
+        "name": "cli-test",
+        "description": "",
         "pipeline": {
             "chunker": {"strategy": "recursive", "chunk_size": 256, "chunk_overlap": 32},
             "retriever": {"top_k": 3},
@@ -67,7 +73,9 @@ def cli_config(tmp_path: Path, synthetic_squad: Path) -> Path:
         "eval": {
             "datasets": ["squad_v2_dev_200"],
             "judge_model": "gpt-4.1-nano",
-            "bootstrap_n": 100, "permutation_n": 100, "seed": 42,
+            "bootstrap_n": 100,
+            "permutation_n": 100,
+            "seed": 42,
         },
     }
     config_path = tmp_path / "test_config.yaml"
@@ -131,8 +139,13 @@ class TestCliShow:
         }
         run_result = _run_cli(["run", "--config", str(cli_config)], env_overrides=env)
         # Extract run_id from stdout (it's printed somewhere)
-        run_id = next(line for line in run_result.stdout.split("\n")
-                      if "cli-test" in line and "_" in line).strip().split()[-1]
+        run_id = (
+            next(
+                line for line in run_result.stdout.split("\n") if "cli-test" in line and "_" in line
+            )
+            .strip()
+            .split()[-1]
+        )
 
         result = _run_cli(["show", run_id], env_overrides=env)
         assert result.returncode == 0
@@ -146,8 +159,13 @@ class TestCliShow:
             "EVAL_SQUAD_PATH": str(synthetic_squad),
         }
         run_result = _run_cli(["run", "--config", str(cli_config)], env_overrides=env)
-        run_id = next(line for line in run_result.stdout.split("\n")
-                      if "cli-test" in line and "_" in line).strip().split()[-1]
+        run_id = (
+            next(
+                line for line in run_result.stdout.split("\n") if "cli-test" in line and "_" in line
+            )
+            .strip()
+            .split()[-1]
+        )
 
         result = _run_cli(["show", run_id, "--html"], env_overrides=env)
         assert result.returncode == 0
@@ -164,8 +182,8 @@ class TestCliCompare:
             "EVAL_SQUAD_PATH": str(synthetic_squad),
         }
         # Create two runs
-        r1 = _run_cli(["run", "--config", str(cli_config)], env_overrides=env)
-        r2 = _run_cli(["run", "--config", str(cli_config)], env_overrides=env)
+        _run_cli(["run", "--config", str(cli_config)], env_overrides=env)
+        _run_cli(["run", "--config", str(cli_config)], env_overrides=env)
         run_ids = sorted(p.name for p in tmp_eval_runs.iterdir() if p.is_dir())
         assert len(run_ids) == 2
 

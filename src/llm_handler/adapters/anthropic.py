@@ -15,7 +15,7 @@ Design Decision:
 
 from __future__ import annotations
 
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 
 from .base import (
     GenerationResult,
@@ -83,9 +83,7 @@ class AnthropicAdapter:
                 collected.append(text)
                 yield text
             usage = _usage_from(stream.get_final_message())
-        yield usage or counted_usage(
-            join_message_text(messages), "".join(collected), self.model
-        )
+        yield usage or counted_usage(join_message_text(messages), "".join(collected), self.model)
 
 
 def _usage_from(message: object) -> Usage | None:

@@ -9,12 +9,7 @@ import yaml
 from pydantic import ValidationError
 
 from src.eval.config import (
-    EvalCfg,
     EvalConfig,
-    GeneratorCfg,
-    PipelineCfg,
-    RetrieverCfg,
-    ChunkerCfg,
     load_config,
 )
 
@@ -46,11 +41,15 @@ class TestEvalConfigConstruction:
         assert cfg.eval.datasets == ["squad_v2_dev_200"]
 
     def test_defaults_applied_when_omitted(self):
+        from src.config import CHUNK_SIZE
+
         d = _baseline_dict()
         del d["pipeline"]["chunker"]["chunk_size"]
         del d["eval"]["bootstrap_n"]
         cfg = EvalConfig.model_validate(d)
-        assert cfg.pipeline.chunker.chunk_size == 512  # default
+        # Step 4c: the chunk-size default now derives from production config
+        # (single source of truth), not a hard-coded eval literal.
+        assert cfg.pipeline.chunker.chunk_size == CHUNK_SIZE
         assert cfg.eval.bootstrap_n == 1000  # default
 
     def test_missing_required_field_raises(self):
@@ -116,6 +115,7 @@ eval:
     p = tmp_path / "legacy.yaml"
     p.write_text(yaml_text)
     from src.eval.config import load_config
+
     cfg = load_config(p)
     assert cfg.pipeline.embedder.name == "chroma_default"
     assert cfg.pipeline.hybrid.enabled is False
@@ -146,6 +146,7 @@ eval:
     p = tmp_path / "phase2g.yaml"
     p.write_text(yaml_text)
     from src.eval.config import load_config
+
     cfg = load_config(p)
     assert cfg.pipeline.embedder.name == "bge_small_en_v1_5"
     assert cfg.pipeline.hybrid.enabled is True
@@ -171,5 +172,6 @@ eval:
     p = tmp_path / "bad.yaml"
     p.write_text(yaml_text)
     from src.eval.config import load_config
+
     with pytest.raises(ValidationError):
         load_config(p)

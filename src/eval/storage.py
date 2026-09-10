@@ -8,8 +8,9 @@ Eval Harness Position:
 Design decisions:
   - One directory per run, with five well-known files. Plain JSON / JSONL
     so any tool (jq, pandas, the eye) can inspect a run.
-  - EVAL_RUNS_DIR is env-overridable so tests use tmp dirs without
-    touching the user's real eval_runs/.
+  - The runs directory is resolved per call (runs_dir()), and every read/write
+    accepts it as an argument, so a caller can point at a temp directory without
+    mutating module state.
   - delete_run refuses path traversal — destructive operations get a
     safety check at the boundary.
 """
@@ -19,14 +20,51 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from src.eval.schemas import AggregatedMetric, EvalResult, RunMetadata
 
-# WHY: env-overridable so pytest can point at a temp dir without touching real data.
-EVAL_RUNS_DIR = Path(os.getenv("EVAL_RUNS_DIR", "eval_runs"))
+DEFAULT_RUNS_DIRNAME = "eval_runs"
+
+
+def runs_dir() -> Path:
+    """Resolve the eval runs directory.
+
+    Returns:
+        ``$EVAL_RUNS_DIR`` when set, otherwise ``eval_runs`` in the working
+        directory.
+
+    BEFORE: this was a module-level constant evaluated at import time, so the
+        CLI configured it by *reassigning another module's global*
+        (``_storage.EVAL_RUNS_DIR = ...``) and tests had to re-import the module
+        after setting the variable. Five separate WHY-comments across three
+        files existed to explain that workaround.
+    AFTER:  resolution happens per call, and every function takes the directory
+        as an argument, so callers inject rather than mutate.
+    """
+    return Path(os.getenv("EVAL_RUNS_DIR", DEFAULT_RUNS_DIRNAME))
+
+
+def current_git_sha() -> str:
+    """Return the HEAD commit SHA, or ``"unknown"`` outside a git checkout.
+
+    Returns:
+        The full SHA, or ``"unknown"`` when git is unavailable — the harness may
+        run in a CI container or a zip-extracted deployment, and provenance
+        being unknown is not a reason to fail a run.
+
+    WHY here: run-id derivation needs it, and this used to be a
+        ``subprocess.check_output`` with a bare ``except`` copied into both
+        ``EvalRunner.run`` and the HTTP submit route, which then had to agree on
+        the result to land in the same directory.
+    """
+    try:
+        return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    except Exception:
+        return "unknown"
 
 
 def compute_run_id(config_name: str, started_at: datetime, git_sha: str) -> str:
@@ -98,9 +136,7 @@ def save_run(
     # metrics.json — list of AggregatedMetric dicts; default=str handles any
     # non-JSON-native types (e.g. numpy floats) gracefully.
     metrics_data = [am.model_dump() for am in aggregated]
-    (run_dir / "metrics.json").write_text(
-        json.dumps(metrics_data, indent=2, default=str)
-    )
+    (run_dir / "metrics.json").write_text(json.dumps(metrics_data, indent=2, default=str))
 
     # cost.json — plain dict; default=str for safety.
     (run_dir / "cost.json").write_text(json.dumps(cost, indent=2, default=str))
@@ -109,11 +145,12 @@ def save_run(
     (run_dir / "config.yaml").write_text(config_yaml_text)
 
 
-def load_run(run_id: str) -> dict:
+def load_run(run_id: str, base_dir: Path | None = None) -> dict:
     """Load all artifacts for a run from disk.
 
     Args:
-        run_id: Directory name under EVAL_RUNS_DIR.
+        run_id: Directory name under the runs directory.
+        base_dir: Runs directory to read from. Defaults to ``runs_dir()``.
 
     Returns:
         Dict with keys:
@@ -123,20 +160,18 @@ def load_run(run_id: str) -> dict:
           - "cost"       → dict
 
     Raises:
-        FileNotFoundError: If EVAL_RUNS_DIR / run_id does not exist.
+        FileNotFoundError: If the run directory does not exist.
 
     Teaches:
         model_validate_json vs model_validate — use model_validate_json
         when reading raw JSON strings (avoids an intermediate parse step),
         model_validate when you already have a Python dict/list.
     """
-    run_dir = EVAL_RUNS_DIR / run_id
+    run_dir = (base_dir or runs_dir()) / run_id
     if not run_dir.exists():
         raise FileNotFoundError(f"Run {run_id} not found at {run_dir}")
 
-    metadata = RunMetadata.model_validate_json(
-        (run_dir / "metadata.json").read_text()
-    )
+    metadata = RunMetadata.model_validate_json((run_dir / "metadata.json").read_text())
 
     # JSONL: skip blank lines to handle trailing newlines robustly.
     results = [
@@ -160,12 +195,15 @@ def load_run(run_id: str) -> dict:
     }
 
 
-def list_runs() -> list[RunMetadata]:
-    """Enumerate all valid eval runs in EVAL_RUNS_DIR.
+def list_runs(base_dir: Path | None = None) -> list[RunMetadata]:
+    """Enumerate all valid eval runs in the runs directory.
 
     A valid run is a subdirectory containing metadata.json. Directories
     without metadata.json (e.g. incomplete or interrupted runs) are silently
     skipped.
+
+    Args:
+        base_dir: Runs directory to scan. Defaults to ``runs_dir()``.
 
     Returns:
         RunMetadata instances sorted by started_at descending (newest first).
@@ -175,11 +213,12 @@ def list_runs() -> list[RunMetadata]:
         the filesystem *is* the index. Any directory with metadata.json
         is a valid run; the rest are ignored.
     """
-    if not EVAL_RUNS_DIR.exists():
+    base = base_dir or runs_dir()
+    if not base.exists():
         return []
 
     runs: list[RunMetadata] = []
-    for entry in EVAL_RUNS_DIR.iterdir():
+    for entry in base.iterdir():
         if not entry.is_dir():
             continue
         metadata_file = entry / "metadata.json"
@@ -194,11 +233,12 @@ def list_runs() -> list[RunMetadata]:
     return runs
 
 
-def delete_run(run_id: str) -> None:
+def delete_run(run_id: str, base_dir: Path | None = None) -> None:
     """Permanently delete a run directory.
 
     Args:
-        run_id: Directory name under EVAL_RUNS_DIR.
+        run_id: Directory name under the runs directory.
+        base_dir: Runs directory to delete from. Defaults to ``runs_dir()``.
 
     Raises:
         ValueError: If run_id contains path traversal characters ('..' or '/').
@@ -213,5 +253,5 @@ def delete_run(run_id: str) -> None:
     if ".." in run_id or "/" in run_id or "\\" in run_id:
         raise ValueError(f"Invalid run_id: {run_id}")
 
-    run_dir = EVAL_RUNS_DIR / run_id
+    run_dir = (base_dir or runs_dir()) / run_id
     shutil.rmtree(run_dir)

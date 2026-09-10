@@ -33,14 +33,13 @@ from sqlmodel import Session, select
 
 from src.backend import RAGBackend
 from src.database import create_db_and_tables, get_engine
-from src.models.conversation import Conversation
-from src.models.document import DocumentRecord
 from src.models.message import Message, MessageSource
-
+from src.vector_store import ChromaVectorStore
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                     #
 # --------------------------------------------------------------------------- #
+
 
 @pytest.fixture
 def tmp_sqlite_engine():
@@ -70,11 +69,9 @@ def chroma_backend_collection():
     WHY unique name: ChromaDB's EphemeralClient shares an in-process store.
     A UUID suffix ensures complete isolation between test runs.
     """
-    client = chromadb.EphemeralClient()
-    return client.get_or_create_collection(
-        name=f"test_backend_{uuid.uuid4().hex}",
-        metadata={"hnsw:space": "cosine"},
-    )
+    return ChromaVectorStore.open(
+        chromadb.EphemeralClient(), f"test_backend_{uuid.uuid4().hex}"
+    ).collection
 
 
 @pytest.fixture
@@ -114,6 +111,7 @@ def txt_file(tmp_path: Path) -> Path:
 # --------------------------------------------------------------------------- #
 # Document operation tests                                                     #
 # --------------------------------------------------------------------------- #
+
 
 class TestDocumentOperations:
     """Tests for ingest, list, query, delete, and idempotent re-ingest."""
@@ -162,9 +160,7 @@ class TestDocumentOperations:
         assert chunks_deleted >= 1
         assert backend.list_documents() == []
 
-    def test_reingest_same_file_is_idempotent(
-        self, backend: RAGBackend, txt_file: Path
-    ):
+    def test_reingest_same_file_is_idempotent(self, backend: RAGBackend, txt_file: Path):
         """Ingesting the same file twice results in only 1 document in list_documents."""
         backend.ingest_file(txt_file)
         backend.ingest_file(txt_file)
@@ -172,9 +168,7 @@ class TestDocumentOperations:
         docs = backend.list_documents()
         assert len(docs) == 1
 
-    def test_get_document_chunks_returns_ingested_chunks(
-        self, backend: RAGBackend, txt_file: Path
-    ):
+    def test_get_document_chunks_returns_ingested_chunks(self, backend: RAGBackend, txt_file: Path):
         """get_document_chunks returns every chunk of the ingested document.
 
         Guards the seam between RAGBackend and ChromaVectorStore.get_by_doc_id —
@@ -201,6 +195,7 @@ class TestDocumentOperations:
 # --------------------------------------------------------------------------- #
 # Conversation CRUD tests                                                      #
 # --------------------------------------------------------------------------- #
+
 
 class TestConversationCRUD:
     """Tests for conversation create, list, get, update, delete, search, export, share."""
@@ -242,9 +237,7 @@ class TestConversationCRUD:
         """update_conversation can rename and pin a conversation."""
         conv = backend.create_conversation(title="Old Title")
 
-        updated = backend.update_conversation(
-            conv["id"], title="New Title", pinned=True
-        )
+        updated = backend.update_conversation(conv["id"], title="New Title", pinned=True)
 
         assert updated is not None
         assert updated["title"] == "New Title"
@@ -253,15 +246,19 @@ class TestConversationCRUD:
     def test_delete_conversation_cascades(self, backend: RAGBackend):
         """Deleting a conversation removes its messages and sources."""
         conv = backend.create_conversation()
-        msg_id = backend._save_message(
-            conv["id"], "assistant", "Answer",
-            sources=[{
-                "doc_id": "d1",
-                "chunk_id": "c1",
-                "filename": "f.txt",
-                "score": 0.9,
-                "excerpt": "some text",
-            }],
+        backend._save_message(
+            conv["id"],
+            "assistant",
+            "Answer",
+            sources=[
+                {
+                    "doc_id": "d1",
+                    "chunk_id": "c1",
+                    "filename": "f.txt",
+                    "score": 0.9,
+                    "excerpt": "some text",
+                }
+            ],
         )
 
         deleted = backend.delete_conversation(conv["id"])
@@ -319,6 +316,7 @@ class TestConversationCRUD:
 # Sliding window tests                                                         #
 # --------------------------------------------------------------------------- #
 
+
 class TestSlidingWindow:
     """Tests for _get_sliding_window — the chat-history truncation logic."""
 
@@ -366,3 +364,98 @@ class TestSlidingWindow:
         assert window[2]["content"] == "Question 4"
         assert window[3]["role"] == "assistant"
         assert window[3]["content"] == "Answer 4"
+
+
+class TestConversationCharacterization:
+    """Behaviours the conversation cluster owns that had no direct test.
+
+    Pinned before that cluster was extracted from the facade so the extraction
+    could be proven behaviour-preserving rather than merely compiling.
+    """
+
+    def test_auto_title_only_replaces_the_placeholder(self, backend: RAGBackend):
+        conv_id = backend.create_conversation("New Chat")["id"]
+        backend._auto_title(conv_id, "What is retrieval augmented generation?")
+        titled = backend.get_conversation(conv_id)["title"]
+        assert titled != "New Chat"
+
+        backend._auto_title(conv_id, "A completely different question")
+        assert (
+            backend.get_conversation(conv_id)["title"] == titled
+        ), "a user-visible title must not be overwritten by a later turn"
+
+    def test_auto_title_truncates_on_a_word_boundary(self, backend: RAGBackend):
+        conv_id = backend.create_conversation()["id"]
+        backend._auto_title(conv_id, "supercalifragilistic " * 12)
+        title = backend.get_conversation(conv_id)["title"]
+        assert not title.rstrip(".").endswith("supercalifragilisti")
+
+    def test_save_message_returns_an_id_usable_after_commit(self, backend: RAGBackend):
+        """The id is captured before commit; SQLAlchemy expires attributes after."""
+        conv_id = backend.create_conversation()["id"]
+        msg_id = backend._save_message(conv_id, "user", "hello")
+        assert msg_id
+        assert any(m["id"] == msg_id for m in backend.get_conversation(conv_id)["messages"])
+
+    def test_save_message_persists_sources_and_bumps_the_conversation(self, backend: RAGBackend):
+        conv_id = backend.create_conversation()["id"]
+        before = backend.get_conversation(conv_id)["updated_at"]
+        msg_id = backend._save_message(
+            conv_id,
+            "assistant",
+            "answer",
+            model="m",
+            sources=[
+                {
+                    "doc_id": "d",
+                    "chunk_id": "c",
+                    "filename": "f.txt",
+                    "score": 0.5,
+                    "excerpt": "e",
+                }
+            ],
+        )
+        conv = backend.get_conversation(conv_id)
+        message = next(m for m in conv["messages"] if m["id"] == msg_id)
+        assert len(message["sources"]) == 1
+        assert conv["updated_at"] >= before
+
+    def test_search_matches_titles_and_message_bodies_without_duplicates(self, backend: RAGBackend):
+        conv_id = backend.create_conversation("kangaroo notes")["id"]
+        backend._save_message(conv_id, "user", "tell me about kangaroo biology")
+
+        hits = backend.search_conversations("kangaroo")
+
+        assert [c["id"] for c in hits].count(
+            conv_id
+        ) == 1, "a conversation matching on both title and body must appear once"
+
+    def test_list_conversations_puts_pinned_first(self, backend: RAGBackend):
+        first = backend.create_conversation("older")["id"]
+        second = backend.create_conversation("newer")["id"]
+        backend.update_conversation(first, pinned=True)
+
+        listed = [c["id"] for c in backend.list_conversations()]
+
+        assert listed[0] == first
+        assert second in listed
+
+
+class TestRepetitiveDocumentIngest:
+    """A document whose chunks repeat verbatim must ingest, not crash.
+
+    BUG: content-addressed chunk ids meant a repeated boilerplate footer or a
+    disclaimer page produced the same id twice in one upsert batch, and ChromaDB
+    rejected the batch with DuplicateIDError — the upload failed outright.
+    """
+
+    def test_a_document_with_repeated_text_ingests(self, backend: RAGBackend, tmp_path: Path):
+        repetitive = tmp_path / "boilerplate.txt"
+        repetitive.write_text(
+            "Retrieval augmented generation combines a retriever with a generator. " * 60
+        )
+
+        result = backend.ingest_file(repetitive)
+
+        assert result["chunks_count"] >= 1
+        assert backend.get_stats()["total_chunks"] >= 1

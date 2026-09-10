@@ -9,11 +9,13 @@ import pytest
 def embedder():
     """Module-scoped to amortize the model-load cost across tests."""
     from src.eval.embedders import BgeEmbedder
+
     return BgeEmbedder()
 
 
 def test_returns_384_dim_vectors(embedder):
     import numpy as np
+
     out = embedder(["hello world"])
     assert len(out) == 1
     assert len(out[0]) == 384
@@ -26,6 +28,7 @@ def test_returns_384_dim_vectors(embedder):
 def test_synonyms_closer_than_unrelated(embedder):
     """Sanity check that the right model is loaded — not a stub."""
     import numpy as np
+
     a, b, c = embedder(["cat", "feline", "airplane"])
     a, b, c = np.array(a), np.array(b), np.array(c)
     cos = lambda u, v: float(u @ v / (np.linalg.norm(u) * np.linalg.norm(v)))
@@ -35,12 +38,12 @@ def test_synonyms_closer_than_unrelated(embedder):
 def test_chroma_collection_uses_embedder(embedder):
     """End-to-end: a Chroma collection created with BgeEmbedder retrieves the right doc."""
     import chromadb
-    client = chromadb.EphemeralClient()
-    coll = client.get_or_create_collection(
-        name="test_bge_e2e",
-        embedding_function=embedder,
-        metadata={"hnsw:space": "cosine"},
-    )
+
+    from src.vector_store import ChromaVectorStore
+
+    coll = ChromaVectorStore.open(
+        chromadb.EphemeralClient(), "test_bge_e2e", embedding_function=embedder
+    ).collection
     coll.upsert(
         ids=["d1", "d2", "d3"],
         documents=[

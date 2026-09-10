@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, status
 
+from src.api.dependencies import BackendDep
 from src.api.models import DocumentInfo
 
 logger = logging.getLogger(__name__)
@@ -24,12 +25,11 @@ router = APIRouter(prefix="/api", tags=["documents"])
 
 @router.get(
     "/documents",
-    response_model=List[DocumentInfo],
+    response_model=list[DocumentInfo],
     summary="List all indexed documents",
 )
-async def list_documents(request: Request) -> List[DocumentInfo]:
+async def list_documents(backend: BackendDep) -> list[DocumentInfo]:
     """Return metadata for every document currently indexed in the vector store."""
-    backend = request.app.state.backend
     entries = backend.list_documents()
 
     # BUG FIX: Backend returns "id" and "chunks_count" (matching DocumentRecord
@@ -52,12 +52,11 @@ async def list_documents(request: Request) -> List[DocumentInfo]:
     summary="Delete a document and all its chunks",
     status_code=status.HTTP_200_OK,
 )
-async def delete_document(doc_id: str, request: Request) -> Dict[str, Any]:
+async def delete_document(doc_id: str, backend: BackendDep) -> dict[str, Any]:
     """Delete a document (and all its indexed chunks) by doc_id.
 
     Returns a JSON object with 'doc_id', 'chunks_deleted', and 'status'.
     """
-    backend = request.app.state.backend
 
     # Check existence
     docs = {d["id"]: d for d in backend.list_documents()}
@@ -84,13 +83,12 @@ async def delete_document(doc_id: str, request: Request) -> Dict[str, Any]:
     "/documents/{doc_id}/chunks",
     summary="List all chunks for a document",
 )
-async def get_document_chunks(doc_id: str, request: Request) -> Dict[str, Any]:
+async def get_document_chunks(doc_id: str, backend: BackendDep) -> dict[str, Any]:
     """Return all indexed chunks for a specific document.
 
     The response includes the doc_id, filename, and a list of chunk dicts
     containing chunk_id, content excerpt, and metadata.
     """
-    backend = request.app.state.backend
 
     # Check existence
     docs = {d["id"]: d for d in backend.list_documents()}

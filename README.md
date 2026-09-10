@@ -289,28 +289,58 @@ The `/api/chat` endpoint streams responses through structured JSON events:
 ```
 src/
 ├── api/
-│   ├── main.py                  # FastAPI app with lifespan, CORS, routers
-│   ├── models.py                # Pydantic v2 request/response schemas
-│   ├── dependencies.py          # Dependency injection helpers
-│   └── routes/
-│       ├── upload.py             # File upload + validation
-│       ├── query.py              # REST query + WebSocket streaming
-│       ├── documents.py          # Document CRUD + chunk inspection
-│       ├── conversations.py      # Conversation CRUD + search/export/share
-│       └── evaluation.py         # On-demand evaluation endpoints
+│   ├── main.py                   # FastAPI app with lifespan, CORS, routers
+│   ├── models.py                 # Pydantic v2 request/response schemas
+│   ├── dependencies.py           # BackendDep — the one DI seam for routes
+│   ├── routes/
+│   │   ├── upload.py             # File upload + validation
+│   │   ├── query.py              # REST query + WebSocket streaming
+│   │   ├── documents.py          # Document CRUD + chunk inspection
+│   │   ├── conversations.py      # Conversation CRUD + search/export/share
+│   │   ├── evaluation.py         # On-demand per-message evaluation
+│   │   └── eval.py               # Eval-harness runs, configs, compare
+│   ├── schemas/                  # Eval + telemetry response models
+│   └── services/eval_runs.py     # In-process eval run registry + progress
 ├── models/
 │   ├── conversation.py           # Conversation table (cascade relationships)
 │   ├── message.py                # Message + MessageSource tables
 │   ├── document.py               # DocumentRecord metadata
 │   └── evaluation.py             # MessageEvaluation scores
-├── backend.py                    # RAGBackend — stateful orchestration facade
+├── ingestion/
+│   ├── parsers.py                # PARSERS registry — one function per format
+│   ├── loader.py                 # Path → Document, via the registry
+│   └── chunking.py               # TextChunker — three strategies + filters
+├── retrieval/
+│   ├── base.py                   # The Retriever Protocol (the seam)
+│   ├── dense.py, hybrid.py       # Adapters: vector search, BM25 hybrid
+│   ├── reranker.py               # Cross-encoder reranking adapter
+│   ├── query_rewriter.py         # Multi-query rewriting adapter
+│   ├── refusal_handler.py        # Answerability gate
+│   └── composition.py            # The single composition rule → RetrievalPlan
+├── query_engine/
+│   ├── engine.py                 # QueryEngine — retrieve → generate, both paths
+│   ├── prompt.py                 # The single answer prompt + context assembly
+│   ├── streaming.py              # Streaming event protocol
+│   └── telemetry.py              # Per-stage telemetry assembly
+├── conversations/
+│   ├── store.py                  # ConversationStore — CRUD, search, share
+│   ├── history.py                # Sliding window, message saves, auto-title
+│   └── shaping.py                # Pure ORM-row → response-dict functions
+├── evaluation/
+│   ├── judges.py                 # RAGAS-inspired LLM judges (3 metrics)
+│   └── message_evaluator.py      # Per-message scoring + persistence
+├── llm_handler/
+│   ├── __init__.py               # LLMHandler — provider routing + fallback
+│   ├── providers.py              # Prefix → provider, credential resolution
+│   └── adapters/                 # OpenAI-compatible, Anthropic, Ollama, dummy
+├── eval/                         # Offline eval harness (datasets, metrics, CLI)
+├── telemetry/                    # Model pricing + token counting (core)
+├── domain.py                     # Document, Chunk, SearchResult, content_hash
+├── backend.py                    # RAGBackend — the orchestration facade
 ├── config.py                     # Centralized configuration constants
 ├── database.py                   # SQLite + SQLModel setup
-├── document_loader.py            # Multi-format parser (7 file types)
-├── llm_handler.py                # Multi-provider LLM adapter with streaming
-├── vector_store.py               # ChromaDB wrapper (embeddings + search)
-├── evaluation.py                 # RAGAS-inspired scoring (3 metrics)
-└── generator.py                  # Prompt templates + context assembly
+├── observability.py              # OpenTelemetry → Phoenix, fail-quiet
+└── vector_store.py               # ChromaDB wrapper (embeddings + search)
 
 frontend/src/
 ├── pages/

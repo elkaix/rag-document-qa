@@ -12,11 +12,10 @@ Design decisions:
   - Ephemeral Chroma collection per (config, dataset) so two concurrent
     runs cannot pollute each other's vectors. Random suffix on the
     collection name guards against collisions.
-  - Per-stage timings via time.perf_counter() so the runner can record
-    p50/p95/p99 latency at aggregation time.
-  - Token counting: tiktoken if available, word-count×1.3 fallback —
-    eval should not hard-fail because a tokenizer for a new model
-    isn't installed.
+  - retrieve->generate is delegated to the shared QueryEngine (issue #16,
+    step 4c): the levers become a composed Retriever behind the seam, and the
+    prompt / context / telemetry come from production's one module — so eval
+    measures the pipeline that is actually shipped, not a hand-copied twin.
   - Test doubles (DummyLLM) inject via *_override params; production
     uses LLMHandler(model_name).
 
@@ -30,26 +29,40 @@ Return type of query():
 from __future__ import annotations
 
 import logging
-import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import chromadb
 
-from src.document_loader import TextChunker
-from src.telemetry.tokens import count_tokens
+from src.domain import SearchResult
 from src.eval.config import EvalConfig
 from src.eval.schemas import EvalQuestion
+from src.ingestion import TextChunker
 from src.llm_handler import LLMHandler
-from src.vector_store import ChromaVectorStore, SearchResult
+from src.query_engine import QueryEngine
+from src.retrieval import (
+    CrossEncoderReranker,
+    DenseRetriever,
+    QueryRewriter,
+    RefusalHandler,
+    Retriever,
+)
+from src.retrieval.composition import compose_retrieval
+from src.vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
+
+# WHY a module constant: the ML-papers corpus manifest path is a deployment
+#      fact, and EvalPipeline takes it as a field so a test can point elsewhere.
+DEFAULT_ML_PAPERS_MANIFEST = Path("eval_data/ml_papers_v1/corpus_manifest.json")
 
 
 # --------------------------------------------------------------------------- #
 # EvalPipeline                                                                 #
 # --------------------------------------------------------------------------- #
+
 
 @dataclass
 class EvalPipeline:
@@ -71,17 +84,28 @@ class EvalPipeline:
     config: EvalConfig
     dataset_name: str
 
-    # Phase 2 additions — None when the corresponding lever is off.
-    hybrid_retriever: object | None = None       # BM25HybridRetriever or None
-    reranker: object | None = None               # CrossEncoderReranker or None
-    rewriter: object | None = None               # QueryRewriter or None
-    refusal_handler: object | None = None        # RefusalHandler or None
+    # Phase 2 additions — None when the corresponding lever is off. Composed into
+    # a single Retriever by _get_engine(); the refusal gate is passed to the engine.
+    hybrid_retriever: Retriever | None = None  # BM25HybridRetriever, set during ingest
+    reranker: CrossEncoderReranker | None = None
+    rewriter: QueryRewriter | None = None
+    refusal_handler: RefusalHandler | None = None
 
     # Private: needed for teardown() — ChromaVectorStore doesn't own the client.
     # WHY not reach into vector_store._collection._client: that would couple us
     # to ChromaDB internals that could change. Own the client reference here.
     _client: chromadb.ClientAPI = field(repr=False, default=None)  # type: ignore[assignment]
     _collection_name: str = field(repr=False, default="")
+
+    # WHY a field rather than a literal inside _ingest_ml_papers: the path was
+    # hardcoded at the call site, which made the whole 58-line ingest branch
+    # unreachable in a test — the only path a test could take was the
+    # missing-manifest no-op.
+    ml_papers_manifest: Path = field(default=DEFAULT_ML_PAPERS_MANIFEST)
+
+    # Lazily-built QueryEngine, cached after the first query(). Deferred because
+    # the hybrid retriever is only assembled during ingest() (it needs the corpus).
+    _engine: QueryEngine | None = field(repr=False, default=None)
 
     def ingest(self, questions: list[EvalQuestion]) -> None:
         """Upsert question contexts into the vector store.
@@ -105,9 +129,7 @@ class EvalPipeline:
         elif self.dataset_name == "ml_papers_v1":
             self._ingest_ml_papers()
         else:
-            logger.warning(
-                "Unknown dataset %r — ingest is a no-op.", self.dataset_name
-            )
+            logger.warning("Unknown dataset %r — ingest is a no-op.", self.dataset_name)
 
     def _ingest_squad(self, questions: list[EvalQuestion]) -> None:
         """Upsert each question's context as one Chroma document.
@@ -140,9 +162,11 @@ class EvalPipeline:
             # WHY here (lazy): BM25HybridRetriever needs the full chunk corpus at
             # construction time. build_pipeline() runs before ingest, so we defer.
             if self.config.pipeline.hybrid.enabled:
-                documents_map = dict(zip(ids, documents))
+                documents_map = dict(zip(ids, documents, strict=False))
                 self.hybrid_retriever = _build_hybrid_retriever(
-                    self.config.pipeline.hybrid, self.vector_store, documents_map,
+                    self.config.pipeline.hybrid,
+                    self.vector_store,
+                    documents_map,
                 )
 
     def _ingest_ml_papers(self) -> None:
@@ -154,11 +178,10 @@ class EvalPipeline:
         it means no papers have been added yet.
         """
         import json
-        from pathlib import Path
 
-        from src.document_loader import DocumentLoader
+        from src.ingestion import DocumentLoader
 
-        manifest_path = Path("eval_data/ml_papers_v1/corpus_manifest.json")
+        manifest_path = self.ml_papers_manifest
         if not manifest_path.exists():
             logger.info("ML Papers manifest not found at %s — ingest is a no-op.", manifest_path)
             return
@@ -189,127 +212,85 @@ class EvalPipeline:
                 documents=[c.content for c in chunks],
                 metadatas=[{"doc_id": c.doc_id, "paper_id": paper.get("id", "")} for c in chunks],
             )
-            logger.info(
-                "Ingested paper %s: %d chunks.", paper.get("id"), len(chunks)
-            )
+            logger.info("Ingested paper %s: %d chunks.", paper.get("id"), len(chunks))
 
         # Phase 2: build hybrid retriever over all upserted chunks.
         # WHY after the loop: we need the complete corpus before building BM25.
         if self.config.pipeline.hybrid.enabled:
-            all_ids = self.vector_store._collection.get()["ids"]
-            all_docs = self.vector_store._collection.get()["documents"]
-            if all_ids:
-                documents_map = dict(zip(all_ids, all_docs))
+            # BEFORE: two redundant self.vector_store._collection.get() calls,
+            #         unpacking ChromaDB's raw batch shape here.
+            # AFTER:  one call through the store's own interface.
+            # WHY:    reaching past the store contradicted the encapsulation
+            #         rationale stated 120 lines above in this same file.
+            documents_map = self.vector_store.all_chunk_texts()
+            if documents_map:
                 self.hybrid_retriever = _build_hybrid_retriever(
-                    self.config.pipeline.hybrid, self.vector_store, documents_map,
+                    self.config.pipeline.hybrid,
+                    self.vector_store,
+                    documents_map,
                 )
 
     def query(self, question: str) -> tuple[list[SearchResult], str, dict]:
-        """Retrieve relevant chunks and generate an answer with timing + cost telemetry.
+        """Retrieve chunks and generate an answer via the shared QueryEngine.
 
-        Phase 2 pipeline steps: rewrite → retrieve (hybrid or dense) → rerank →
-        refusal gate → generate. Each step is a no-op when the corresponding
-        config lever is off, preserving backward compatibility with Phase 1 callers.
+        The levers become a composed Retriever behind the seam (hybrid-or-dense,
+        wrapped in multi-query and reranking adapters as configured); the engine
+        applies the refusal gate, builds the shipped prompt + context, and
+        assembles telemetry. This is the convergence that makes eval measure the
+        production pipeline (issue #16, step 4c).
 
         Args:
             question: Natural language question from the eval set.
 
         Returns:
             Tuple of (chunks, answer, telemetry). telemetry keys:
-                timings_ms: dict of stage→ms for rewrite, retrieve, rerank,
-                            refusal_check, generate
+                timings_ms: {"retrieve": float, "generate": float}
                 tokens: {"prompt": int, "completion": int}
-                cost_usd: float (generator side)
-                rewriter_cost_usd: float (rewriter side, 0.0 when disabled)
+                cost_usd: float
         """
-        from src.telemetry import pricing
-
-        timings: dict[str, float] = {}
-        rewriter_cost = 0.0
-
-        # ---- Rewrite (lever 2e) -----------------------------------------------
-        t = time.perf_counter()
-        if self.rewriter is not None:
-            queries, rewriter_cost, _, _ = self.rewriter.expand(question)
-        else:
-            queries = [question]
-        timings["rewrite"] = (time.perf_counter() - t) * 1000.0
-
-        # ---- Retrieve ---------------------------------------------------------
-        # WHY use rerank_top_n for initial fetch when a reranker is active:
-        # the reranker needs a wider candidate pool to re-score before final_top_k.
-        top_k_initial = (
-            self.config.pipeline.reranker.rerank_top_n
-            if self.reranker is not None else self.config.pipeline.retriever.top_k
+        results, answer, stage = self._get_engine().ask(question)
+        return (
+            results,
+            answer,
+            {
+                "timings_ms": {"retrieve": stage.retrieve_ms, "generate": stage.generate_ms},
+                "tokens": {"prompt": stage.prompt_tokens, "completion": stage.completion_tokens},
+                "cost_usd": stage.cost_usd,
+            },
         )
-        t = time.perf_counter()
-        if self.hybrid_retriever is not None:
-            seen: dict[str, SearchResult] = {}
-            for q in queries:
-                for r in self.hybrid_retriever.retrieve(q, top_k=top_k_initial):
-                    if r.chunk_id not in seen:
-                        seen[r.chunk_id] = r
-            results = list(seen.values())
-        else:
-            seen = {}
-            for q in queries:
-                for r in self.vector_store.query(query_text=q, top_k=top_k_initial):
-                    if r.chunk_id not in seen:
-                        seen[r.chunk_id] = r
-            results = list(seen.values())
-        timings["retrieve"] = (time.perf_counter() - t) * 1000.0
 
-        # ---- Rerank (lever 2d) ------------------------------------------------
-        t = time.perf_counter()
-        if self.reranker is not None:
-            results = self.reranker.rerank(
-                question, results,
-                final_top_k=self.config.pipeline.reranker.final_top_k,
-            )
-        else:
-            results = results[: self.config.pipeline.retriever.top_k]
-        timings["rerank"] = (time.perf_counter() - t) * 1000.0
+    def _get_engine(self) -> QueryEngine:
+        """Build (once) and return the QueryEngine composed from the configured levers.
 
-        # ---- Refusal gate (lever 2g) ------------------------------------------
-        t = time.perf_counter()
-        if self.refusal_handler is not None and self.refusal_handler.should_refuse(results):
-            chunks, answer = self.refusal_handler.refuse_response()
-            timings["refusal_check"] = (time.perf_counter() - t) * 1000.0
-            return chunks, answer, {
-                "timings_ms": timings,
-                "tokens": {"prompt": 0, "completion": 0},
-                "cost_usd": 0.0,
-                "rewriter_cost_usd": rewriter_cost,
-            }
-        timings["refusal_check"] = (time.perf_counter() - t) * 1000.0
+        Built lazily because the hybrid retriever is only available after ingest().
+        The lever composition is the Retriever seam used as designed: multi-query
+        wraps the base retriever, reranking wraps that.
+        """
+        if self._engine is not None:
+            return self._engine
 
-        # ---- Generate ---------------------------------------------------------
-        context = "\n\n".join(r.content for r in results)
-        system_prompt = (
-            "You are a helpful assistant. Answer the question based solely on the "
-            "provided context. If the context does not contain enough information, "
-            "say so clearly."
+        # BEFORE: this stacked the adapters and derived top_k here, so the same
+        #         rule existed in two modules and production had no equivalent
+        #         of the top_k half at all.
+        # AFTER:  one composition owner, shared with production's presets.
+        plan = compose_retrieval(
+            base=self.hybrid_retriever or DenseRetriever(self.vector_store),
+            rewriter=self.rewriter,
+            reranker=self.reranker,
+            top_k=self.config.pipeline.retriever.top_k,
+            rerank_over_fetch_n=self.config.pipeline.reranker.rerank_top_n,
+            rerank_final_top_k=self.config.pipeline.reranker.final_top_k,
         )
-        user_prompt = f"Context:\n{context}\n\nQuestion: {question}\n\nAnswer:"
-        # WHY count both: the LLM sees system_prompt + user_prompt as prompt tokens.
-        full_prompt_text = system_prompt + "\n" + user_prompt
-        model = self.config.pipeline.generator.model
-
-        t = time.perf_counter()
-        answer = self.llm.generate(user_prompt, system_prompt=system_prompt)
-        timings["generate"] = (time.perf_counter() - t) * 1000.0
-
-        # ---- Token counting + cost estimation ---------------------------------
-        prompt_tokens = count_tokens(full_prompt_text, model)
-        completion_tokens = count_tokens(answer, model)
-        cost = pricing.cost_usd(model, prompt_tokens, completion_tokens)
-
-        return results, answer, {
-            "timings_ms": timings,
-            "tokens": {"prompt": prompt_tokens, "completion": completion_tokens},
-            "cost_usd": cost,
-            "rewriter_cost_usd": rewriter_cost,
-        }
+        # reasoning_llm is unused on the sync ask() path (the eval harness never
+        # streams), so the answer LLM stands in for the constructor requirement.
+        self._engine = QueryEngine(
+            retriever=plan.retriever,
+            llm=self.llm,
+            reasoning_llm=self.llm,
+            top_k=plan.top_k,
+            refusal=self.refusal_handler,
+        )
+        return self._engine
 
     def teardown(self) -> None:
         """Delete the ephemeral Chroma collection and release the client reference.
@@ -336,6 +317,7 @@ class EvalPipeline:
 # --------------------------------------------------------------------------- #
 # Factory                                                                      #
 # --------------------------------------------------------------------------- #
+
 
 def build_pipeline(
     config: EvalConfig,
@@ -383,20 +365,17 @@ def build_pipeline(
     # NOTE: First call auto-downloads all-MiniLM-L6-v2 ONNX (~80MB) if not cached.
     collection_name = f"eval_{config.name}_{dataset_name}_{uuid.uuid4().hex[:6]}"
     client = chromadb.EphemeralClient()
-    collection = client.get_or_create_collection(
-        name=collection_name,
-        embedding_function=embedding_function,
-        # WHY cosine: ChromaVectorStore converts distance→similarity via
-        # score = max(0, 1 - distance). This only makes sense in cosine space
-        # where distance ∈ [0, 2] and identical vectors have distance 0.
-        metadata={"hnsw:space": "cosine"},
+    # WHY .open: the cosine setting the score conversion depends on belongs to
+    # the store, not to each caller. See ChromaVectorStore.SPACE_METADATA.
+    vector_store = ChromaVectorStore.open(
+        client, collection_name, embedding_function=embedding_function
     )
-    vector_store = ChromaVectorStore(collection=collection)
 
     # ---- LLM handlers ----------------------------------------------------------
     llm = llm_override if llm_override is not None else LLMHandler(config.pipeline.generator.model)
     judge_llm = (
-        judge_llm_override if judge_llm_override is not None
+        judge_llm_override
+        if judge_llm_override is not None
         else LLMHandler(config.eval.judge_model)
     )
 
@@ -420,6 +399,7 @@ def build_pipeline(
 # Phase 2 component builders                                                   #
 # --------------------------------------------------------------------------- #
 
+
 def _build_embedding_function(cfg) -> object:
     """Build the Chroma EmbeddingFunction for the given embedder config.
 
@@ -434,9 +414,11 @@ def _build_embedding_function(cfg) -> object:
     """
     if cfg.name == "chroma_default":
         from chromadb.utils import embedding_functions
+
         return embedding_functions.DefaultEmbeddingFunction()
     if cfg.name == "bge_small_en_v1_5":
         from src.eval.embedders import BgeEmbedder
+
         return BgeEmbedder()
     raise ValueError(f"Unknown embedder name: {cfg.name}")
 
@@ -454,10 +436,14 @@ def _build_hybrid_retriever(cfg, vector_store, documents: dict[str, str]):
     """
     if not cfg.enabled:
         return None
-    from src.eval.retrievers import BM25HybridRetriever
+    from src.retrieval import BM25HybridRetriever
+
     return BM25HybridRetriever(
-        vector_store=vector_store, documents=documents,
-        bm25_top_k=cfg.bm25_top_k, dense_top_k=cfg.dense_top_k, rrf_k=cfg.rrf_k,
+        vector_store=vector_store,
+        documents=documents,
+        bm25_top_k=cfg.bm25_top_k,
+        dense_top_k=cfg.dense_top_k,
+        rrf_k=cfg.rrf_k,
     )
 
 
@@ -472,7 +458,8 @@ def _build_reranker(cfg):
     """
     if cfg.model is None:
         return None
-    from src.eval.retrievers import CrossEncoderReranker
+    from src.retrieval import CrossEncoderReranker
+
     return CrossEncoderReranker()
 
 
@@ -489,7 +476,8 @@ def _build_rewriter(cfg, llm):
     """
     if cfg.model is None:
         return None
-    from src.eval.transforms import QueryRewriter
+    from src.retrieval import QueryRewriter
+
     return QueryRewriter(model=cfg.model, max_expansions=cfg.max_expansions, llm=llm)
 
 
@@ -504,8 +492,10 @@ def _build_refusal(cfg):
     """
     if not cfg.enabled:
         return None
-    from src.eval.transforms import RefusalHandler
+    from src.retrieval import RefusalHandler
+
     return RefusalHandler(
-        enabled=True, similarity_threshold=cfg.similarity_threshold,
+        enabled=True,
+        similarity_threshold=cfg.similarity_threshold,
         no_answer_text=cfg.no_answer_text,
     )

@@ -31,3 +31,45 @@ behaviour behind a small interface), **seam** (a boundary you can substitute at)
   telemetry assembly and the eval harness use one source of truth; the eval
   package imports from here, never the reverse. See
   [ADR 0003](docs/adr/0003-telemetry-ownership.md).
+- **domain** (`src/domain.py`) — the leaf module holding the value objects that
+  cross module seams: `Document`, `Chunk`, `SearchResult`, and `content_hash`.
+  It imports nothing from this package, so naming a type at a seam never drags
+  an implementation along. `SearchResult` used to live in `src/vector_store.py`
+  (which does `import chromadb`), so the whole `retrieval` and `query_engine`
+  packages imported the storage vendor merely to name what a Retriever returns.
+  See [ADR 0005](docs/adr/0005-domain-value-types.md).
+- **ingestion** (`src/ingestion/`) — `parsers` (one function per format behind a
+  `PARSERS` registry, from which `SUPPORTED_EXTENSIONS` is derived, plus the pure
+  `normalise_pdf_text`), `loader` (paths, source metadata, batch error policy),
+  and `chunking` (the three strategies and the quality filters). Replaces the
+  504-line `document_loader` module, whose format dispatch went to private
+  methods and whose PDF, DOCX and HTML paths had no tests. See
+  [ADR 0008](docs/adr/0008-ingestion-parsing-seam.md).
+- **Retriever** — the seam (Protocol) every retrieval strategy hides behind:
+  `retrieve(query, top_k) -> list[SearchResult]`. Implementations either conform
+  directly (`DenseRetriever`, `BM25HybridRetriever`) or *compose* an inner
+  Retriever (`RerankingRetriever` over-fetches then cross-encodes;
+  `MultiQueryRetriever` fans rewritten queries out and dedups). Live in
+  `src/retrieval/`; composed for both production and eval by
+  `compose_retrieval` (`src/retrieval/composition.py`). See
+  [ADR 0004](docs/adr/0004-retriever-seam-and-query-engine.md).
+- **QueryEngine** (`src/query_engine/`) — the deep module owning retrieve→generate
+  for both the sync (`ask`) and streaming (`ask_stream`) paths: one Markdown
+  answer prompt, filename-prefixed context, an optional refusal gate, and
+  telemetry assembly — all in one place. Both `RAGBackend` and the eval harness
+  call it, so eval measures the shipped pipeline. See
+  [ADR 0004](docs/adr/0004-retriever-seam-and-query-engine.md).
+- **ConversationStore** / **ConversationHistory** (`src/conversations/`) — the
+  two modules owning chat-thread persistence. The store handles the thread
+  lifecycle, search, export and share tokens; the history handles message
+  writes, the completed-pairs sliding window fed to the next prompt, and the
+  auto-title rule. Both take the session factory and nothing else. Wire shapes
+  live in `shaping.py`. See [ADR 0007](docs/adr/0007-backend-split.md).
+- **MessageEvaluator** (`src/evaluation/`) — orchestration around the judges:
+  load a persisted message, find the question it answered, score what has not
+  been scored yet, persist. The pure scoring functions live beside it in
+  `judges.py`. Judges are injected via a `Judges` struct so they can be
+  substituted without patching a module. See [ADR 0007](docs/adr/0007-backend-split.md).
+- **RefusalHandler** — an answerability gate (not a Retriever): refuses when the
+  top-1 similarity is below a threshold (or nothing was retrieved). Applied
+  inside the QueryEngine; off by default in production.

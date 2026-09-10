@@ -26,38 +26,40 @@ TRADE-OFF: ChromaDB stores data on disk by default (PersistentClient). For unit
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import chromadb
+
+from src.domain import SearchResult
+
+# Sentinel: "argument not supplied", distinct from an explicit None.
+_UNSET: Any = object()
 
 logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
-# Data model                                                                   #
-# --------------------------------------------------------------------------- #
-
-@dataclass
-class SearchResult:
-    """
-    A single result returned from a ChromaDB similarity search.
-
-    WHY a dataclass rather than a TypedDict: dataclasses give us attribute access
-    (result.score), type checking, and a clean repr — all useful for debugging
-    and for the response models in the FastAPI layer.
-    """
-
-    content: str          # The raw chunk text shown to the LLM as context
-    metadata: dict[str, Any]  # Source info: filename, page, chunk_index, etc.
-    score: float          # Cosine similarity 0..1 (1 = identical, 0 = orthogonal)
-    doc_id: str           # Which document this chunk came from
-    chunk_id: str         # Unique ID for this specific chunk
-
-
-# --------------------------------------------------------------------------- #
 # ChromaVectorStore                                                            #
 # --------------------------------------------------------------------------- #
+
+
+def _first_occurrence_indices(ids: list[str]) -> list[int]:
+    """Return the positions of each id's first appearance, in order.
+
+    Args:
+        ids: Chunk ids, possibly with repeats.
+
+    Returns:
+        Indices to keep so every id appears exactly once, earliest wins.
+    """
+    seen: set[str] = set()
+    keep: list[int] = []
+    for index, chunk_id in enumerate(ids):
+        if chunk_id not in seen:
+            seen.add(chunk_id)
+            keep.append(index)
+    return keep
+
 
 class ChromaVectorStore:
     """
@@ -73,34 +75,72 @@ class ChromaVectorStore:
 
     Example (production):
         client = chromadb.PersistentClient(path="./chroma_db")
-        collection = client.get_or_create_collection(
-            name="documents",
-            metadata={"hnsw:space": "cosine"},
-        )
-        store = ChromaVectorStore(collection=collection)
+        store = ChromaVectorStore.open(client, "documents")
 
     Example (testing):
         client = chromadb.EphemeralClient()
-        collection = client.get_or_create_collection(
-            name="test_docs",
-            metadata={"hnsw:space": "cosine"},
-            embedding_function=None,
-        )
-        store = ChromaVectorStore(collection=collection)
+        store = ChromaVectorStore.open(client, "test_docs", embedding_function=None)
     """
+
+    # WHY a module constant: the cosine setting was spelled out at nine
+    #      construction sites. The score conversion below is only correct in
+    #      cosine space, so a site that forgot it produced silently wrong
+    #      similarity scores rather than an error.
+    SPACE_METADATA: ClassVar[dict[str, str]] = {"hnsw:space": "cosine"}
+
+    @classmethod
+    def open(
+        cls,
+        client: chromadb.ClientAPI,
+        name: str,
+        embedding_function: Any = _UNSET,
+    ) -> ChromaVectorStore:
+        """Get or create a cosine-space collection and wrap it.
+
+        This is the supported way to build a store: it owns the one invariant
+        the score conversion depends on, so callers cannot forget it.
+
+        Args:
+            client: Any ChromaDB client — persistent in production, ephemeral
+                in tests.
+            name: Collection name.
+            embedding_function: Passed through to ChromaDB when supplied.
+                Omit it to accept ChromaDB's built-in embedder; pass ``None``
+                to supply raw embeddings yourself.
+
+        Returns:
+            A store over a collection guaranteed to use cosine distance.
+        """
+        kwargs: dict[str, Any] = {"name": name, "metadata": dict(cls.SPACE_METADATA)}
+        if embedding_function is not _UNSET:
+            kwargs["embedding_function"] = embedding_function
+        return cls(collection=client.get_or_create_collection(**kwargs))
 
     def __init__(self, collection: chromadb.Collection) -> None:
         """
+        Prefer :meth:`open`, which creates the collection with the required
+        cosine space. Use this constructor directly only when a collection
+        already exists and is known to be cosine.
+
         Args:
-            collection: A pre-configured ChromaDB Collection instance.
-                        Must use cosine space (metadata={"hnsw:space": "cosine"})
-                        for scores to be meaningful in the 0..1 range.
+            collection: A ChromaDB Collection configured for cosine space.
         """
         self._collection = collection
         logger.debug(
             "ChromaVectorStore initialised with collection '%s'",
             collection.name,
         )
+
+    @property
+    def collection(self) -> chromadb.Collection:
+        """The wrapped ChromaDB collection.
+
+        Exposed for the two callers that legitimately need the collection object
+        itself — wiring a facade and naming a collection for teardown — so they
+        do not have to touch the private attribute. Reading *data* through this
+        is a seam breach; use the query and lookup methods instead.
+        """
+        return self._collection
 
     # ---------------------------------------------------------------------- #
     # Write operations                                                        #
@@ -132,20 +172,36 @@ class ChromaVectorStore:
                         auto-embed using the collection's embedding function.
 
         Note:
-            All four lists must have the same length.
+            All four lists must have the same length. Ids repeated *within* one
+            call are collapsed to their first occurrence.
+
+        BUG FIX: chunk ids are content-addressed, so a document containing the
+            same text twice — a repeated boilerplate footer, a disclaimer page,
+            a CSV with duplicate rows — produced the same id twice in a single
+            batch. ChromaDB rejects such a batch with DuplicateIDError, so the
+            whole upload failed rather than storing the document. Two chunks
+            with the same content-addressed id *are* the same chunk, so
+            collapsing them is what the id scheme already means.
         """
+        keep = _first_occurrence_indices(ids)
+        if len(keep) != len(ids):
+            logger.debug(
+                "Collapsed %d repeated chunk id(s) within one upsert batch",
+                len(ids) - len(keep),
+            )
+
         kwargs: dict[str, Any] = {
-            "ids": ids,
-            "documents": documents,
-            "metadatas": metadatas,
+            "ids": [ids[i] for i in keep],
+            "documents": [documents[i] for i in keep],
+            "metadatas": [metadatas[i] for i in keep],
         }
         if embeddings is not None:
             # WHY: only include embeddings key when provided — passing embeddings=None
             # to ChromaDB triggers auto-embedding via the collection's embedding function.
-            kwargs["embeddings"] = embeddings
+            kwargs["embeddings"] = [embeddings[i] for i in keep]
 
         self._collection.upsert(**kwargs)
-        logger.debug("Upserted %d chunks into '%s'", len(ids), self._collection.name)
+        logger.debug("Upserted %d chunks into '%s'", len(keep), self._collection.name)
 
     # ---------------------------------------------------------------------- #
     # Read operations                                                         #
@@ -197,7 +253,10 @@ class ChromaVectorStore:
             return []
 
         # Build ChromaDB query kwargs based on which input was provided
-        query_kwargs: dict[str, Any] = {"n_results": top_k, "include": ["documents", "metadatas", "distances"]}
+        query_kwargs: dict[str, Any] = {
+            "n_results": top_k,
+            "include": ["documents", "metadatas", "distances"],
+        }
         if query_text is not None:
             query_kwargs["query_texts"] = [query_text]
         else:
@@ -211,12 +270,14 @@ class ChromaVectorStore:
         # WHY: ChromaDB returns batched results (outer list = one entry per query).
         # We always send a single query, so we index [0] to get the per-chunk lists.
         ids = raw["ids"][0]
-        documents = raw["documents"][0]       # type: ignore[index]
-        metadatas = raw["metadatas"][0]       # type: ignore[index]
-        distances = raw["distances"][0]       # type: ignore[index]
+        documents = raw["documents"][0]  # type: ignore[index]
+        metadatas = raw["metadatas"][0]  # type: ignore[index]
+        distances = raw["distances"][0]  # type: ignore[index]
 
         results: list[SearchResult] = []
-        for chunk_id, text, meta, distance in zip(ids, documents, metadatas, distances):
+        for chunk_id, text, meta, distance in zip(
+            ids, documents, metadatas, distances, strict=False
+        ):
             # PATTERN: ChromaDB cosine distance is in [0, 2] where 0 = identical.
             # Convert to similarity score in [0, 1]:
             #   score = max(0, 1 - distance)
@@ -274,6 +335,31 @@ class ChromaVectorStore:
             for i, chunk_id in enumerate(raw["ids"])
         ]
 
+    def all_chunk_texts(self) -> dict[str, str]:
+        """Return every indexed chunk as ``{chunk_id: text}``.
+
+        WHY this method exists: a sparse retriever (BM25) needs the whole corpus
+        as text keyed by chunk id, which it cannot get from a similarity search.
+        The eval pipeline used to reach into ``vector_store._collection`` and
+        call ChromaDB's ``get()`` itself — twice, redundantly — parsing the raw
+        batch-response shape at the call site. That is the same seam breach
+        ``get_by_doc_id`` was added to close.
+
+        Returns:
+            Mapping of chunk_id to chunk text for the whole collection. Empty
+            when nothing has been indexed yet.
+
+        TRADE-OFF: this materialises the entire collection in memory, which is
+            what a BM25 corpus requires. It is a corpus-build call, not a
+            per-query one.
+        """
+        raw = self._collection.get(include=["documents"])
+        ids = raw.get("ids") or []
+        documents = raw.get("documents") or []
+        return {
+            chunk_id: documents[i] if i < len(documents) else "" for i, chunk_id in enumerate(ids)
+        }
+
     # ---------------------------------------------------------------------- #
     # Delete operations                                                       #
     # ---------------------------------------------------------------------- #
@@ -305,7 +391,9 @@ class ChromaVectorStore:
         self._collection.delete(where={"doc_id": doc_id})
         logger.debug(
             "Deleted %d chunks for doc_id='%s' from '%s'",
-            count, doc_id, self._collection.name,
+            count,
+            doc_id,
+            self._collection.name,
         )
         return count
 

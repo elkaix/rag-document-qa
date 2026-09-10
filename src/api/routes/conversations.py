@@ -28,12 +28,11 @@ Where it fits in the RAG pipeline:
 from __future__ import annotations
 
 import logging
-from typing import Annotated, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
 
-from src.api.dependencies import get_backend
+from src.api.dependencies import BackendDep
 from src.api.models import (
     ConversationCreate,
     ConversationDetail,
@@ -42,7 +41,6 @@ from src.api.models import (
     MessageInfo,
     SourceInfo,
 )
-from src.backend import RAGBackend
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +48,11 @@ logger = logging.getLogger(__name__)
 #      tags=["conversations"] groups them in the OpenAPI docs sidebar.
 router = APIRouter(prefix="/api", tags=["conversations"])
 
-# PATTERN: Annotated dependency — the modern FastAPI way to declare dependencies.
-#          Instead of `backend = Depends(get_backend)` as a default param, we use
-#          Annotated[RAGBackend, Depends(get_backend)] which is clearer in type
-#          checkers and avoids the "mutable default argument" anti-pattern.
-BackendDep = Annotated[RAGBackend, Depends(get_backend)]
-
 
 # --------------------------------------------------------------------------- #
 # Helper: convert backend dict -> Pydantic ConversationSummary                 #
 # --------------------------------------------------------------------------- #
+
 
 def _to_summary(data: dict) -> ConversationSummary:
     """Convert a backend conversation dict to a ConversationSummary response model.
@@ -119,12 +112,13 @@ def _to_detail(data: dict) -> ConversationDetail:
 # List & Create                                                                #
 # --------------------------------------------------------------------------- #
 
+
 @router.get(
     "/conversations",
-    response_model=List[ConversationSummary],
+    response_model=list[ConversationSummary],
     summary="List all conversations",
 )
-def list_conversations(backend: BackendDep) -> List[ConversationSummary]:
+def list_conversations(backend: BackendDep) -> list[ConversationSummary]:
     """Return all conversations, pinned first, then by most recently updated.
 
     WHY sync def: The backend performs synchronous SQLite queries. FastAPI
@@ -161,15 +155,16 @@ def create_conversation(
 #      with conversation_id="search" and return 404. Defining /search
 #      first ensures it matches literal "search" before the path param.
 
+
 @router.get(
     "/conversations/search",
-    response_model=List[ConversationSummary],
+    response_model=list[ConversationSummary],
     summary="Search conversations by title or message content",
 )
 def search_conversations(
     backend: BackendDep,
     q: str = Query(..., min_length=1, max_length=500, description="Search query string."),
-) -> List[ConversationSummary]:
+) -> list[ConversationSummary]:
     """Search conversations by title or message content using substring matching.
 
     TRADE-OFF: Uses SQL LIKE for simplicity. Production would use SQLite FTS5
@@ -182,6 +177,7 @@ def search_conversations(
 # --------------------------------------------------------------------------- #
 # Detail, Update, Delete — parameterised by {conversation_id}                  #
 # --------------------------------------------------------------------------- #
+
 
 @router.get(
     "/conversations/{conversation_id}",
@@ -262,6 +258,7 @@ def delete_conversation(
 # Export & Share                                                                #
 # --------------------------------------------------------------------------- #
 
+
 @router.get(
     "/conversations/{conversation_id}/export",
     response_class=PlainTextResponse,
@@ -326,6 +323,7 @@ def create_share_token(
 # --------------------------------------------------------------------------- #
 # Shared (public read-only) — uses /api/shared/{token} path                    #
 # --------------------------------------------------------------------------- #
+
 
 @router.get(
     "/shared/{token}",

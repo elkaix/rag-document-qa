@@ -29,9 +29,7 @@ class TestCostUsd:
 
     def test_combined_cost(self):
         price = MODEL_PRICES["gpt-4.1-mini"]
-        result = cost_usd(
-            "gpt-4.1-mini", prompt_tokens=500_000, completion_tokens=500_000
-        )
+        result = cost_usd("gpt-4.1-mini", prompt_tokens=500_000, completion_tokens=500_000)
         expected = 0.5 * price.prompt_per_1m + 0.5 * price.completion_per_1m
         assert result == pytest.approx(expected)
 
