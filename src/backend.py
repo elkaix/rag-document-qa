@@ -51,7 +51,7 @@ from .config import (
     TOP_K_RESULTS,
 )
 from .conversations import ConversationHistory, ConversationStore
-from .document_loader import DocumentLoader, TextChunker
+from .ingestion import DocumentLoader, TextChunker
 from .domain import SearchResult
 from .evaluation import MessageEvaluator
 from .llm_handler import LLMHandler

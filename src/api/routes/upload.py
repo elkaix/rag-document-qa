@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["upload"])
 
-from src.document_loader import SUPPORTED_EXTENSIONS as ALLOWED_EXTENSIONS
+from src.ingestion import SUPPORTED_EXTENSIONS as ALLOWED_EXTENSIONS
 MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
 
 

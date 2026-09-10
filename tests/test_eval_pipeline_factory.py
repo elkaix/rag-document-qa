@@ -115,7 +115,7 @@ class TestMLPapersIngest:
 
         import chromadb
 
-        from src.document_loader import TextChunker
+        from src.ingestion import TextChunker
         from src.eval.pipeline_factory import EvalPipeline
         from src.vector_store import ChromaVectorStore
 

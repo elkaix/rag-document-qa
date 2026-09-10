@@ -38,6 +38,13 @@ behaviour behind a small interface), **seam** (a boundary you can substitute at)
   (which does `import chromadb`), so the whole `retrieval` and `query_engine`
   packages imported the storage vendor merely to name what a Retriever returns.
   See [ADR 0005](docs/adr/0005-domain-value-types.md).
+- **ingestion** (`src/ingestion/`) — `parsers` (one function per format behind a
+  `PARSERS` registry, from which `SUPPORTED_EXTENSIONS` is derived, plus the pure
+  `normalise_pdf_text`), `loader` (paths, source metadata, batch error policy),
+  and `chunking` (the three strategies and the quality filters). Replaces the
+  504-line `document_loader` module, whose format dispatch went to private
+  methods and whose PDF, DOCX and HTML paths had no tests. See
+  [ADR 0008](docs/adr/0008-ingestion-parsing-seam.md).
 - **Retriever** — the seam (Protocol) every retrieval strategy hides behind:
   `retrieve(query, top_k) -> list[SearchResult]`. Implementations either conform
   directly (`DenseRetriever`, `BM25HybridRetriever`) or *compose* an inner

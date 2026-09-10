@@ -36,7 +36,7 @@ from typing import Any
 
 import chromadb
 
-from src.document_loader import TextChunker
+from src.ingestion import TextChunker
 from src.eval.config import EvalConfig
 from src.eval.schemas import EvalQuestion
 from src.llm_handler import LLMHandler
@@ -178,7 +178,7 @@ class EvalPipeline:
         """
         import json
 
-        from src.document_loader import DocumentLoader
+        from src.ingestion import DocumentLoader
 
         manifest_path = self.ml_papers_manifest
         if not manifest_path.exists():

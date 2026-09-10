@@ -1,5 +1,5 @@
 """
-Tests for document_loader module.
+Tests for the ingestion package — loading and chunking.
 
 All tests use local fixtures — no external services required.
 """
@@ -12,7 +12,7 @@ from typing import List
 
 import pytest
 
-from src.document_loader import DocumentLoader, TextChunker
+from src.ingestion import DocumentLoader, TextChunker
 from src.domain import Chunk, Document
 
 
@@ -244,3 +244,110 @@ class TestTextChunkerValidation:
     def test_invalid_strategy_raises(self) -> None:
         with pytest.raises(ValueError, match="strategy"):
             TextChunker(strategy="unknown")
+
+
+class TestChunkQualityFilters:
+    """The filters that decide a chunk is not worth indexing.
+
+    Both were documented but untested; the review listed them among the
+    module's uncovered paths.
+    """
+
+    def _doc(self, content: str) -> Document:
+        return Document(content=content, metadata={"filename": "f.txt"})
+
+    def test_chunks_shorter_than_the_floor_are_dropped(self):
+        """Short chunks are almost always PDF artifacts — page numbers, labels."""
+        chunker = TextChunker(chunk_size=64, chunk_overlap=0, strategy="fixed")
+        assert chunker.chunk(self._doc("109")) == []
+
+    def test_a_chunk_exactly_at_the_floor_is_kept(self):
+        chunker = TextChunker(chunk_size=64, chunk_overlap=0, strategy="fixed")
+        chunks = chunker.chunk(self._doc("x" * TextChunker.MIN_CHUNK_LENGTH))
+        assert len(chunks) == 1
+
+    def test_table_of_contents_dot_leaders_are_dropped(self):
+        """PDF contents pages extract as dot-filled lines and match everything."""
+        chunker = TextChunker(chunk_size=512, chunk_overlap=0, strategy="fixed")
+        toc = "Introduction . . . . . . . . . . . . . . . . . . . . . . . . 42"
+        assert chunker.chunk(self._doc(toc)) == []
+
+    def test_ordinary_prose_with_full_stops_survives(self):
+        """Content is ~5% dots; a contents page is >20% — the filter sits between."""
+        chunker = TextChunker(chunk_size=512, chunk_overlap=0, strategy="fixed")
+        prose = (
+            "Retrieval augmented generation works in two steps. First it "
+            "retrieves. Then it generates. This is a normal paragraph."
+        )
+        assert len(chunker.chunk(self._doc(prose))) == 1
+
+
+class TestSemanticStrategy:
+    """The third chunking tier, which no test constructed before."""
+
+    def _doc(self, content: str) -> Document:
+        return Document(content=content, metadata={})
+
+    def test_semantic_is_an_accepted_strategy(self):
+        assert TextChunker(strategy="semantic").strategy == "semantic"
+
+    def test_it_produces_chunks_and_labels_them(self):
+        chunker = TextChunker(chunk_size=120, chunk_overlap=20, strategy="semantic")
+        text = " ".join(
+            f"This is sentence number {i} about retrieval augmented generation."
+            for i in range(12)
+        )
+        chunks = chunker.chunk(self._doc(text))
+        assert chunks
+        assert all(c.metadata["chunk_strategy"] == "semantic" for c in chunks)
+
+    def test_it_respects_the_chunk_size_budget(self):
+        chunker = TextChunker(chunk_size=150, chunk_overlap=20, strategy="semantic")
+        text = " ".join(f"Sentence {i} carries some content." for i in range(20))
+        for chunk in chunker.chunk(self._doc(text)):
+            assert len(chunk.content) <= 300, "a chunk should not run far past the budget"
+
+    def test_an_unknown_strategy_is_rejected(self):
+        with pytest.raises(ValueError, match="strategy must be"):
+            TextChunker(strategy="nonsense")
+
+
+class TestWordOverlap:
+    """The overlap helper whose docstring documents a specific bug it fixes."""
+
+    def test_overlap_does_not_split_a_word(self):
+        chunker = TextChunker(chunk_size=80, chunk_overlap=20, strategy="recursive")
+        pieces = ["alpha beta gamma delta epsilon", "zeta eta theta iota kappa"]
+        overlapped = chunker._apply_word_overlap(pieces)
+        assert len(overlapped) == 2
+        # every token in the result must be a whole word from the input
+        words = set(" ".join(pieces).split())
+        assert all(tok in words for tok in overlapped[1].split())
+
+    def test_the_first_chunk_is_never_prefixed(self):
+        chunker = TextChunker(chunk_size=80, chunk_overlap=20, strategy="recursive")
+        pieces = ["alpha beta gamma", "delta epsilon zeta"]
+        assert chunker._apply_word_overlap(pieces)[0] == "alpha beta gamma"
+
+    def test_a_single_chunk_is_returned_unchanged(self):
+        chunker = TextChunker(chunk_size=80, chunk_overlap=20, strategy="recursive")
+        assert chunker._apply_word_overlap(["only one"]) == ["only one"]
+
+    def test_zero_overlap_leaves_chunks_alone(self):
+        chunker = TextChunker(chunk_size=80, chunk_overlap=0, strategy="recursive")
+        pieces = ["alpha beta", "gamma delta"]
+        assert chunker._apply_word_overlap(pieces) == pieces
+
+
+class TestChunkerValidation:
+    def test_chunk_size_must_be_positive(self):
+        with pytest.raises(ValueError, match="chunk_size must be positive"):
+            TextChunker(chunk_size=0)
+
+    def test_overlap_must_be_smaller_than_the_chunk(self):
+        with pytest.raises(ValueError, match="chunk_overlap must be"):
+            TextChunker(chunk_size=100, chunk_overlap=100)
+
+    def test_overlap_cannot_be_negative(self):
+        with pytest.raises(ValueError, match="chunk_overlap must be"):
+            TextChunker(chunk_size=100, chunk_overlap=-1)

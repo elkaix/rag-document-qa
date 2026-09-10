@@ -370,3 +370,59 @@ class TestDuplicateIdsWithinOneBatch:
         )
         chunks = store.get_by_doc_id("a")
         assert [c["content"] for c in chunks] == ["first"]
+
+
+EMBEDDING_DIM = 384  # matches tests/conftest.py's deterministic embedder
+
+
+class TestQueryArgumentGuards:
+    """The two guard clauses, and the branch production actually takes.
+
+    The suite exercised only `query_embedding=`, while production calls
+    `query_text=` through DenseRetriever — so the shipped branch was covered
+    only indirectly, and neither guard was covered at all.
+    """
+
+    def test_neither_argument_is_rejected(self, populated_vector_store):
+        with pytest.raises(ValueError):
+            populated_vector_store.query()
+
+    def test_both_arguments_are_rejected(self, populated_vector_store):
+        with pytest.raises(ValueError):
+            populated_vector_store.query(
+                query_text="hello", query_embedding=[0.1] * EMBEDDING_DIM
+            )
+
+    def test_query_text_uses_the_collection_embedder(self):
+        """The branch DenseRetriever takes in production."""
+        import chromadb
+
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore.open(
+            chromadb.EphemeralClient(), "query_text_branch"
+        )
+        store.upsert(
+            ids=["a", "b"],
+            documents=[
+                "Retrieval augmented generation combines retrieval and generation.",
+                "Baking sourdough requires a mature starter culture.",
+            ],
+            metadatas=[{"doc_id": "d1"}, {"doc_id": "d2"}],
+        )
+
+        results = store.query(query_text="retrieval augmented generation", top_k=2)
+
+        # The assertion is that the text branch embeds and ranks at all — which
+        # document a real embedder prefers is a model property, not a contract.
+        assert [r.doc_id for r in results] == ["d1", "d2"]
+        assert all(0.0 <= r.score <= 1.0 for r in results)
+
+    def test_scores_are_similarities_not_distances(self, populated_vector_store):
+        """Higher must mean better, so composing retrievers never has to ask."""
+        results = populated_vector_store.query(
+            query_embedding=[0.1] * EMBEDDING_DIM, top_k=3
+        )
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True)
+        assert all(0.0 <= s <= 1.0 for s in scores)

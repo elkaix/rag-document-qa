@@ -1,234 +1,36 @@
-"""
-Document loading and chunking module for RAG pipeline.
+"""Chunking strategies — how a document becomes retrievable slices.
 
-Supports PDF, DOCX, TXT, MD, HTML, CSV, JSON formats with
-fixed-size, recursive, and semantic chunking strategies.
+RAG Pipeline Position:
+    Document -> [CHUNKING] -> Chunk -> Embedding -> Vector Store
+                    ^^^
+
+What concept it teaches:
+    Chunking is a retrieval-quality lever, not a formatting detail. Too small
+    and a chunk loses the context that makes it answerable; too large and the
+    embedding averages several topics into one vector that matches none of them
+    well. Three tiers are offered so the trade-off can be measured rather than
+    assumed.
+
+Why this is separate from loading:
+    Parsing and chunking shared a 504-line module and nothing else — not a
+    function call in either direction, only the value types. They change for
+    entirely different reasons: adding a format touches parsing, tuning
+    retrieval quality touches chunking.
+
+Design Decision:
+    Quality filters (a minimum length, a table-of-contents detector) live with
+    chunking rather than with parsing, because what counts as a useless chunk
+    depends on the chunk size, not on the source format.
 """
 
 from __future__ import annotations
 
-import csv
-import json
 import logging
-import re
-from pathlib import Path
-from typing import Any, Dict, List
+from typing import List, Optional
 
 from src.domain import Chunk, Document
 
 logger = logging.getLogger(__name__)
-
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".html", ".htm", ".csv", ".json"}
-
-
-class DocumentLoader:
-    """Loads documents from files or directories into Document objects."""
-
-    def load(self, file_path: str | Path) -> Document:
-        """Load a single file and return a Document.
-
-        Args:
-            file_path: Path to the file to load.
-
-        Returns:
-            Document with content and metadata.
-
-        Raises:
-            ValueError: If file type is unsupported.
-            FileNotFoundError: If file does not exist.
-        """
-        path = Path(file_path)
-        if not path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-
-        ext = path.suffix.lower()
-        if ext not in SUPPORTED_EXTENSIONS:
-            raise ValueError(f"Unsupported file type: {ext}. Supported: {SUPPORTED_EXTENSIONS}")
-
-        logger.info("Loading document: %s", path)
-
-        base_metadata: Dict[str, Any] = {
-            "filename": path.name,
-            "file_path": str(path.resolve()),
-            "file_type": ext.lstrip("."),
-            "file_size_bytes": path.stat().st_size,
-        }
-
-        loaders = {
-            ".pdf": self._load_pdf,
-            ".docx": self._load_docx,
-            ".txt": self._load_text,
-            ".md": self._load_text,
-            ".html": self._load_html,
-            ".htm": self._load_html,
-            ".csv": self._load_csv,
-            ".json": self._load_json,
-        }
-
-        content, extra_meta = loaders[ext](path)
-        base_metadata.update(extra_meta)
-        doc = Document(content=content, metadata=base_metadata)
-        logger.debug("Loaded document %s (%d chars)", path.name, len(content))
-        return doc
-
-    def load_directory(
-        self,
-        directory: str | Path,
-        recursive: bool = True,
-        extensions: Optional[List[str]] = None,
-    ) -> List[Document]:
-        """Load all supported documents from a directory.
-
-        Args:
-            directory: Path to the directory.
-            recursive: Whether to search subdirectories.
-            extensions: Optional list of extensions to filter (e.g. ['.pdf', '.txt']).
-
-        Returns:
-            List of Document objects.
-        """
-        dir_path = Path(directory)
-        if not dir_path.is_dir():
-            raise NotADirectoryError(f"Not a directory: {dir_path}")
-
-        allowed = {e.lower() for e in (extensions or SUPPORTED_EXTENSIONS)}
-        pattern = "**/*" if recursive else "*"
-        files = [p for p in dir_path.glob(pattern) if p.is_file() and p.suffix.lower() in allowed]
-
-        logger.info("Found %d files in %s", len(files), dir_path)
-
-        documents: List[Document] = []
-        for file in files:
-            try:
-                doc = self.load(file)
-                documents.append(doc)
-            except Exception as exc:
-                logger.warning("Failed to load %s: %s", file, exc)
-
-        logger.info("Successfully loaded %d/%d documents", len(documents), len(files))
-        return documents
-
-    # ------------------------------------------------------------------ #
-    # Private format loaders                                               #
-    # ------------------------------------------------------------------ #
-
-    def _load_text(self, path: Path) -> tuple[str, Dict[str, Any]]:
-        """Load plain text or Markdown file."""
-        text = path.read_text(encoding="utf-8", errors="replace")
-        return text, {"encoding": "utf-8"}
-
-    def _load_pdf(self, path: Path) -> tuple[str, Dict[str, Any]]:
-        """Load PDF file using pypdf.
-
-        WHY: pypdf extracts text with hard line breaks at the PDF column width,
-        producing single '\\n' inside paragraphs. Without normalisation these
-        layout-level newlines cause the recursive chunker to over-fragment text.
-
-        FIX: After joining pages, we normalise single '\\n' → space while
-        preserving real paragraph breaks ('\\n\\n').
-        """
-        try:
-            import pypdf  # type: ignore
-
-            reader = pypdf.PdfReader(str(path))
-            pages: List[str] = []
-            for page in reader.pages:
-                pages.append(page.extract_text() or "")
-            text = "\n\n".join(pages)
-
-            # BEFORE: "Fine-Tuning LLMs from\nBasics to Breakthroughs"
-            # AFTER:  "Fine-Tuning LLMs from Basics to Breakthroughs"
-            # Preserve real paragraph breaks (\n\n) by temporarily replacing
-            # them, then normalise single \n (PDF line wraps) to spaces.
-            text = text.replace("\n\n", "\x00")   # protect paragraph breaks
-            text = text.replace("\n", " ")         # layout line breaks → space
-            text = text.replace("\x00", "\n\n")    # restore paragraph breaks
-
-            # Rejoin hyphenated line breaks: "develop- ment" → "development"
-            # WHY: PDF wraps long words with a hyphen at column boundaries.
-            # After \n→space, these become "word- continuation".  The pattern
-            # hyphen-space-lowercase reliably identifies line-break hyphens
-            # vs real compounds like "self-attention" (no space after hyphen).
-            text = re.sub(r"(\w)- ([a-z])", r"\1\2", text)
-
-            text = re.sub(r" {2,}", " ", text)     # collapse multiple spaces
-
-            meta: Dict[str, Any] = {"page_count": len(reader.pages)}
-            if reader.metadata:
-                for k in ("title", "author", "subject"):
-                    v = getattr(reader.metadata, k, None)
-                    if v:
-                        meta[k] = v
-            return text, meta
-        except ImportError:
-            logger.warning("pypdf not installed; reading PDF as binary text")
-            return path.read_text(errors="replace"), {}
-
-    def _load_docx(self, path: Path) -> tuple[str, Dict[str, Any]]:
-        """Load DOCX file using python-docx."""
-        try:
-            import docx  # type: ignore
-
-            doc = docx.Document(str(path))
-            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-            text = "\n\n".join(paragraphs)
-            props = doc.core_properties
-            meta: Dict[str, Any] = {}
-            for attr in ("author", "title", "subject", "created", "modified"):
-                val = getattr(props, attr, None)
-                if val:
-                    meta[attr] = str(val)
-            return text, meta
-        except ImportError:
-            logger.warning("python-docx not installed; cannot load DOCX")
-            return "", {"error": "python-docx not installed"}
-
-    def _load_html(self, path: Path) -> tuple[str, Dict[str, Any]]:
-        """Load HTML file using BeautifulSoup."""
-        html = path.read_text(encoding="utf-8", errors="replace")
-        try:
-            from bs4 import BeautifulSoup  # type: ignore
-
-            soup = BeautifulSoup(html, "html.parser")
-            for tag in soup(["script", "style", "nav", "footer", "header"]):
-                tag.decompose()
-            text = soup.get_text(separator="\n", strip=True)
-            title = soup.title.string if soup.title else ""
-            return text, {"html_title": title or ""}
-        except ImportError:
-            logger.warning("beautifulsoup4 not installed; stripping HTML tags naively")
-            import re
-
-            text = re.sub(r"<[^>]+>", " ", html)
-            text = re.sub(r"\s+", " ", text).strip()
-            return text, {}
-
-    def _load_csv(self, path: Path) -> tuple[str, Dict[str, Any]]:
-        """Load CSV file as structured text."""
-        rows: List[List[str]] = []
-        with path.open(newline="", encoding="utf-8", errors="replace") as fh:
-            reader = csv.reader(fh)
-            for row in reader:
-                rows.append(row)
-        if not rows:
-            return "", {"row_count": 0, "column_count": 0}
-        headers = rows[0]
-        lines: List[str] = [", ".join(headers)]
-        for row in rows[1:]:
-            pairs = [f"{h}: {v}" for h, v in zip(headers, row)]
-            lines.append("; ".join(pairs))
-        text = "\n".join(lines)
-        return text, {"row_count": len(rows) - 1, "column_count": len(headers)}
-
-    def _load_json(self, path: Path) -> tuple[str, Dict[str, Any]]:
-        """Load JSON file as pretty-printed text."""
-        raw = path.read_text(encoding="utf-8", errors="replace")
-        try:
-            data = json.loads(raw)
-            text = json.dumps(data, indent=2, ensure_ascii=False)
-            return text, {"json_valid": True}
-        except json.JSONDecodeError:
-            return raw, {"json_valid": False}
 
 
 class TextChunker:
