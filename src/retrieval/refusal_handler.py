@@ -39,18 +39,27 @@ class RefusalHandler:
         """Return True if the pipeline should short-circuit to no-answer text.
 
         Args:
-            candidates: Retrieved chunks ordered by descending similarity.
-                        May be empty.
+            candidates: Retrieved chunks. May be empty. Need not be sorted.
 
         Returns:
-            True when the handler is enabled and the top-1 score is below
-            the threshold (or candidates is empty); False otherwise.
+            True when the handler is enabled and no candidate reaches the
+            threshold (or candidates is empty); False otherwise.
+
+        BUG FIX: this read ``candidates[0].score``, which assumed the retriever
+            returns results in descending-score order. Dense, reranked and
+            multi-query retrieval all do, so the two forms agree there — but
+            hybrid retrieval orders by *fused rank*, and a BM25-only hit at
+            position 0 carries score 0.0 (no comparable dense similarity
+            exists). The gate would then refuse a question the corpus answers
+            well. Asking for the best score in the set is the question the gate
+            actually means, and it does not depend on an ordering the seam
+            never promised.
         """
         if not self._enabled:
             return False
         if not candidates:
             return True
-        return candidates[0].score < self._threshold
+        return max(c.score for c in candidates) < self._threshold
 
     def refuse_response(self) -> tuple[list[SearchResult], str]:
         """Return ([], no_answer_text) — used when should_refuse is True.
