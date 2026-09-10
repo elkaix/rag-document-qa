@@ -288,3 +288,27 @@ def tmp_csv_file(tmp_path: Path) -> Path:
         writer = csv.writer(fh)
         writer.writerows(rows)
     return file
+
+
+# --------------------------------------------------------------------------- #
+# Eval run storage                                                             #
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def tmp_eval_runs(tmp_path: Path, monkeypatch) -> Path:
+    """Point the eval runs directory at a temp dir for the duration of a test.
+
+    Returns the directory itself, so a test can assert against the filesystem.
+
+    BEFORE: three test modules each carried their own copy of this fixture, and
+            every copy set EVAL_RUNS_DIR and then `importlib.reload`ed the
+            storage module — because the directory was a module-level constant
+            bound at import time.
+    AFTER:  storage resolves the directory per call, so setting the variable is
+            enough. Storage functions also take `base_dir=` for callers that
+            prefer injection over an environment variable.
+    """
+    runs = tmp_path / "eval_runs"
+    runs.mkdir()
+    monkeypatch.setenv("EVAL_RUNS_DIR", str(runs))
+    return runs

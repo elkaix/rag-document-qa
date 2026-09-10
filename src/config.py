@@ -21,6 +21,7 @@ Where it fits in the RAG pipeline:
   system.
 """
 import logging
+import os
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -74,8 +75,17 @@ RETRIEVER_STRATEGY: str = "dense"
 
 # WHY 20: the reranked strategy over-fetches this many dense candidates before
 #         the cross-encoder narrows them — wide enough to give the precise
-#         reranker real choice, matching the eval-tuned default.
+#         reranker real choice. The eval harness imports this constant rather
+#         than repeating the number, so the two cannot drift.
 RERANK_OVER_FETCH_N: int = 20
+
+# WHY the refusal defaults live here and not only in the eval config: the gate
+#      is off in production today, but its threshold and its user-facing text
+#      are product decisions. Leaving them in the eval schema meant a *product
+#      string* lived in a benchmarking config, and whoever wired the gate for
+#      production would have picked a second threshold by hand.
+REFUSAL_SIMILARITY_THRESHOLD: float = 0.35
+REFUSAL_NO_ANSWER_TEXT: str = "I don't have enough information to answer that."
 
 # ---------------------------------------------------------------------------
 # API server
@@ -182,6 +192,25 @@ def load_env(dotenv_path: Path | None = None) -> bool:
     except ImportError:
         return False
     return load_dotenv(dotenv_path or (PROJECT_ROOT / ".env"), override=False)
+
+
+def allowed_origins() -> list[str]:
+    """Return the CORS origins the API should accept.
+
+    Returns:
+        The origins parsed from ``$ALLOWED_ORIGINS`` (comma-separated), or
+        ``["*"]`` when the variable is unset or empty.
+
+    SECURITY: an unset value stays open, which is deliberate for local dev
+        against a Vite server on another port. Production must set this — see
+        docker-compose.prod.yml. It is resolved here rather than inline in the
+        app module so a security-relevant setting is discoverable alongside
+        every other configurable value.
+    """
+    raw = os.getenv("ALLOWED_ORIGINS", "").strip()
+    if not raw:
+        return ["*"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
 # ---------------------------------------------------------------------------

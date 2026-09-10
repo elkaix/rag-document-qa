@@ -32,7 +32,6 @@ from typing import Any, Callable
 
 import yaml
 
-from src.eval import storage as _storage
 from src.eval.aggregator import aggregate
 from src.eval.config import EvalConfig
 from src.eval.datasets import ml_papers as ml_papers_ds
@@ -43,7 +42,7 @@ from src.eval.metrics.refusal import refusal_correctness
 from src.eval.metrics.retrieval import mrr_at_k, ndcg_at_k, recall_at_k
 from src.eval.pipeline_factory import build_pipeline
 from src.eval.schemas import EvalQuestion, EvalResult, RunMetadata
-from src.eval.storage import compute_run_id, save_run
+from src.eval.storage import compute_run_id, runs_dir, save_run
 from src.evaluation import (
     evaluate_answer_relevancy,
     evaluate_context_precision,
@@ -215,11 +214,9 @@ class EvalRunner:
         # WHY: If run_id_override is set (from the API route), use it directly.
         # This ensures the registered registry run_id matches the saved directory.
         run_id = self._run_id_override or compute_run_id(config.name, started_at, git_sha)
-        # WHY _storage.EVAL_RUNS_DIR at call time: the fixture reloads storage
-        # after setting EVAL_RUNS_DIR env var, but runner's top-level import
-        # already bound the old value. Reading from the live module attribute
-        # ensures we pick up the reloaded (test-patched) path.
-        run_dir = _storage.EVAL_RUNS_DIR / run_id
+        # The runs directory is resolved per call, so no module state has to be
+        # patched for a run to land somewhere else.
+        run_dir = runs_dir() / run_id
 
         # --- Eval-set version fingerprints ---
         # WHY live attribute read: squad_5 fixture patches DEFAULT_OUTPUT_PATH

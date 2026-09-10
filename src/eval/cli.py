@@ -44,7 +44,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
         from src.eval.datasets import squad_v2 as squad_ds
         squad_ds.DEFAULT_OUTPUT_PATH = Path(env_squad)
     import src.eval.storage as _storage
-    _storage.EVAL_RUNS_DIR = Path(os.getenv("EVAL_RUNS_DIR", "eval_runs"))
 
     from src.eval.config import load_config
     from src.eval.runner import EvalRunner
@@ -79,7 +78,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
 def _cmd_list(args: argparse.Namespace) -> int:
     """Print a table of all eval runs."""
     import src.eval.storage as _storage
-    _storage.EVAL_RUNS_DIR = Path(os.getenv("EVAL_RUNS_DIR", "eval_runs"))
 
     runs = _storage.list_runs()
 
@@ -105,7 +103,6 @@ def _cmd_list(args: argparse.Namespace) -> int:
 def _cmd_show(args: argparse.Namespace) -> int:
     """Print aggregated metrics; optionally write report.html."""
     import src.eval.storage as _storage
-    _storage.EVAL_RUNS_DIR = Path(os.getenv("EVAL_RUNS_DIR", "eval_runs"))
 
     try:
         run = _storage.load_run(args.run_id)
@@ -136,7 +133,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
     if args.html:
         from src.eval.report import render_run_html
         html = render_run_html(run)
-        html_path = _storage.EVAL_RUNS_DIR / args.run_id / "report.html"
+        html_path = _storage.runs_dir() / args.run_id / "report.html"
         html_path.write_text(html)
         print(f"\nHTML report written to: {html_path}")
 
@@ -146,7 +143,6 @@ def _cmd_show(args: argparse.Namespace) -> int:
 def _cmd_compare(args: argparse.Namespace) -> int:
     """Print delta table for two runs; optionally write compare HTML."""
     import src.eval.storage as _storage
-    _storage.EVAL_RUNS_DIR = Path(os.getenv("EVAL_RUNS_DIR", "eval_runs"))
 
     from src.eval.compare import compare_runs
 
@@ -192,7 +188,7 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     if args.html:
         from src.eval.report import render_compare_html
         html = render_compare_html(result)
-        html_path = _storage.EVAL_RUNS_DIR / f"compare_{args.id_a}_{args.id_b}.html"
+        html_path = _storage.runs_dir() / f"compare_{args.id_a}_{args.id_b}.html"
         html_path.write_text(html)
         print(f"\nHTML comparison written to: {html_path}")
 

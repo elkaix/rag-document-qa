@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from src.eval import storage
+
 from src.eval.compare import compare_runs
 from src.eval.schemas import (
     AggregatedMetric,
@@ -42,25 +44,12 @@ def _agg(metric_name: str, dataset: str | None, mean: float, n: int = 10) -> Agg
     )
 
 
-@pytest.fixture
-def tmp_eval_runs(tmp_path, monkeypatch):
-    runs = tmp_path / "eval_runs"
-    runs.mkdir()
-    monkeypatch.setenv("EVAL_RUNS_DIR", str(runs))
-    import importlib
-    import src.eval.storage
-    importlib.reload(src.eval.storage)
-    yield src.eval.storage
-    monkeypatch.delenv("EVAL_RUNS_DIR", raising=False)
-    importlib.reload(src.eval.storage)
-
-
-def _save_synthetic_run(storage, run_id: str, results: list[EvalResult],
+def _save_synthetic_run(base_dir, run_id: str, results: list[EvalResult],
                         aggregated: list[AggregatedMetric],
                         versions: dict[str, str] | None = None) -> None:
     meta = _make_metadata(run_id, versions=versions)
     storage.save_run(
-        storage.EVAL_RUNS_DIR / run_id, meta, results, aggregated,
+        base_dir / run_id, meta, results, aggregated,
         {"total_usd": 0.0, "mean_usd_per_query": 0.0},
         f"name: {run_id}\n",
     )

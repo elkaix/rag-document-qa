@@ -33,7 +33,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.backend import RAGBackend
 from src.vector_store import ChromaVectorStore
-from src.config import CHROMA_COLLECTION, CHROMA_PATH, SQLITE_URL, load_env
+from src.config import (
+    CHROMA_COLLECTION,
+    CHROMA_PATH,
+    SQLITE_URL,
+    allowed_origins,
+    load_env,
+)
 from src.database import create_db_and_tables, get_engine
 from src.api.routes import (
     conversations_router,
@@ -100,7 +106,9 @@ async def lifespan(app: FastAPI):
     #      (env var absent) uses the function's built-in default endpoint.
     # TRADE-OFF: We don't gate on env var presence. The function handles None
     #            correctly and doing the check here would duplicate its logic.
-    init_observability(otlp_endpoint=os.getenv("OTLP_ENDPOINT"))
+    # WHY no os.getenv here: init_observability resolves OTLP_ENDPOINT itself.
+    #      Reading it at both sites meant two places to change one setting.
+    init_observability()
 
     yield
 
@@ -117,18 +125,11 @@ app = FastAPI(
 # BUG FIX: CORS used to allow all origins in the same app baked into the
 #          production Docker image. In dev we still want to hit the API from
 #          a Vite dev server on a different port, but production should
-#          restrict. ALLOWED_ORIGINS is a comma-separated env var; an
-#          empty/unset value stays open for dev ergonomics. Set it to your
-#          actual frontend origin in docker-compose.prod.yml.
-_origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
-_allowed_origins = (
-    [o.strip() for o in _origins_env.split(",") if o.strip()]
-    if _origins_env
-    else ["*"]
-)
+#          restrict. The parsing rule lives in src/config.py so a
+#          security-relevant setting sits with the rest of configuration.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins,
+    allow_origins=allowed_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

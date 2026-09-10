@@ -119,6 +119,32 @@ def build_adapter(
     )
 
 
+# Environment variable names, spelled once. Provider credentials are resolved
+# lazily at client-construction time rather than at import, so a missing key
+# only matters when that provider is actually selected.
+API_KEY_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "glm": "GLM_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+
+
+def resolve_api_key(provider: str, api_key: str | None = None) -> str | None:
+    """Return the API key for a provider: explicit argument, else environment.
+
+    Args:
+        provider: One of ``openai``, ``glm``, ``anthropic``.
+        api_key: An explicitly supplied key, which always wins.
+
+    Returns:
+        The key, or None when neither source has one.
+    """
+    if api_key:
+        return api_key
+    env_name = API_KEY_ENV.get(provider)
+    return os.getenv(env_name) if env_name else None
+
+
 def _openai_client_factory(provider: str, api_key: str | None) -> Callable[[], object]:
     """Build a factory for an OpenAI-SDK client, redirected to GLM when needed.
 
@@ -130,12 +156,12 @@ def _openai_client_factory(provider: str, api_key: str | None) -> Callable[[], o
         if _openai_module is None:
             raise ProviderUnavailableError("openai package not installed")
         if provider == "glm":
-            key = api_key or os.getenv("GLM_API_KEY")
+            key = resolve_api_key("glm", api_key)
             if not key:
                 raise ProviderUnavailableError("GLM_API_KEY not set")
             base_url = os.getenv("GLM_BASE_URL", GLM_DEFAULT_BASE_URL)
             return _openai_module.OpenAI(api_key=key, base_url=base_url)
-        return _openai_module.OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        return _openai_module.OpenAI(api_key=resolve_api_key("openai", api_key))
 
     return factory
 
@@ -145,7 +171,9 @@ def _anthropic_client_factory(api_key: str | None) -> Callable[[], object]:
     def factory() -> object:
         if _anthropic_module is None:
             raise ProviderUnavailableError("anthropic package not installed")
-        return _anthropic_module.Anthropic(api_key=api_key or os.getenv("ANTHROPIC_API_KEY"))
+        return _anthropic_module.Anthropic(
+            api_key=resolve_api_key("anthropic", api_key)
+        )
 
     return factory
 
@@ -178,7 +206,7 @@ def _openai_list_models(api_key: str | None) -> list[str]:
     if _openai_module is None:
         return list(OPENAI_MODELS)
     try:
-        client = _openai_module.OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        client = _openai_module.OpenAI(api_key=resolve_api_key("openai", api_key))
         models = client.models.list()
         return [m.id for m in models.data if "gpt" in m.id]
     except Exception as exc:

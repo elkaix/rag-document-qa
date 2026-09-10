@@ -18,13 +18,16 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
 - [x] D4 `src/eval/doubles.py`: public `DummyEvalLLM` + one env dispatch.
 - [x] D5 empty leftover dirs removed.
 
-## Tranche 2 — C3 value types off the vendor
-- [ ] Move `SearchResult` + `Document`/`Chunk` to a leaf value-types module
-- [ ] Vector store owns the cosine invariant (stop re-asserting at 9 sites)
+## Tranche 2 — C3 value types off the vendor  ✔ (ADR 0005)
+- [x] `src/domain.py` leaf module; `content_hash` parity verified before moving
+- [x] `ChromaVectorStore.open()` owns cosine; 9 sites → 1
 
-## Tranche 3 — C6 configuration
-- [ ] Centralise env reads; `EVAL_RUNS_DIR` injectable not monkeypatched
-- [ ] Single-source rerank widths + refusal defaults
+## Tranche 3 — C6 configuration  ✔
+- [x] `storage.runs_dir()` resolved per call + `base_dir=` on every function;
+      cross-module global mutation and 3 duplicated reload-fixtures deleted
+- [x] `resolve_api_key()` in providers; duplicate OTLP read removed;
+      `allowed_origins()` moved to config with tests
+- [x] Rerank widths + refusal defaults single-sourced from `src/config.py`
 
 ## Tranche 4 — C1 retrieval composition
 - [ ] Characterization test for current composition rule

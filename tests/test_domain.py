@@ -60,3 +60,31 @@ class TestSeamIsVendorFree:
     def test_search_result_carries_a_similarity_not_a_distance(self):
         r = SearchResult(content="c", metadata={}, score=1.0, doc_id="d", chunk_id="c1")
         assert 0.0 <= r.score <= 1.0
+
+
+class TestAllowedOrigins:
+    """CORS parsing — a security-relevant setting, so it gets direct tests."""
+
+    def test_unset_stays_open_for_local_dev(self, monkeypatch):
+        from src.config import allowed_origins
+
+        monkeypatch.delenv("ALLOWED_ORIGINS", raising=False)
+        assert allowed_origins() == ["*"]
+
+    def test_blank_is_treated_as_unset(self, monkeypatch):
+        from src.config import allowed_origins
+
+        monkeypatch.setenv("ALLOWED_ORIGINS", "   ")
+        assert allowed_origins() == ["*"]
+
+    def test_parses_and_strips_a_comma_separated_list(self, monkeypatch):
+        from src.config import allowed_origins
+
+        monkeypatch.setenv("ALLOWED_ORIGINS", " https://a.example , https://b.example ")
+        assert allowed_origins() == ["https://a.example", "https://b.example"]
+
+    def test_drops_empty_entries(self, monkeypatch):
+        from src.config import allowed_origins
+
+        monkeypatch.setenv("ALLOWED_ORIGINS", "https://a.example,,")
+        assert allowed_origins() == ["https://a.example"]

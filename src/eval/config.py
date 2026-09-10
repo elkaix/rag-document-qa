@@ -31,6 +31,9 @@ from src.config import (
     DEFAULT_MODEL,
     EVAL_MODEL,
     REASONING_MODEL,
+    REFUSAL_NO_ANSWER_TEXT,
+    REFUSAL_SIMILARITY_THRESHOLD,
+    RERANK_OVER_FETCH_N,
     TOP_K_RESULTS,
 )
 
@@ -109,8 +112,12 @@ class RerankerCfg(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     model: Literal["ms_marco_minilm_l6_v2"] | None = None
-    rerank_top_n: int = 20
-    final_top_k: int = 5
+    # SINGLE SOURCE: these were independent literals that happened to equal
+    #   production's values. A comment asserted they matched; nothing enforced
+    #   it, so tuning either side would have silently made eval measure a
+    #   different pipeline than the one shipped.
+    rerank_top_n: int = RERANK_OVER_FETCH_N
+    final_top_k: int = TOP_K_RESULTS
 
 
 class QueryRewriterCfg(BaseModel):
@@ -137,8 +144,10 @@ class RefusalHandlerCfg(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
-    similarity_threshold: float = 0.35
-    no_answer_text: str = "I don't have enough information to answer that."
+    # SINGLE SOURCE: the threshold and the user-facing text are product
+    #   decisions; they live in src/config.py so production and eval agree.
+    similarity_threshold: float = REFUSAL_SIMILARITY_THRESHOLD
+    no_answer_text: str = REFUSAL_NO_ANSWER_TEXT
 
 
 class PipelineCfg(BaseModel):

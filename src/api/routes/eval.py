@@ -90,11 +90,6 @@ def _run_eval_in_background(
     runs the full EvalRunner lifecycle, then marks the run done/failed
     in the registry.
     """
-    # WHY live import of storage: the tmp_eval_runs fixture reloads
-    # src.eval.storage after setting EVAL_RUNS_DIR. Importing at call time
-    # ensures we see the reloaded module attribute value.
-    import src.eval.storage as _storage
-
     cfg_path = CONFIGS_DIR / f"{config_name}.yaml"
     cfg = load_config(cfg_path)
 
@@ -225,9 +220,6 @@ def list_eval_runs() -> list[RunSummaryDTO]:
     metrics so they aren't useful in the list view. The status endpoint covers
     in-flight monitoring.
     """
-    # WHY live import of list_runs: called via the function (which reads
-    # EVAL_RUNS_DIR from the module global at call time), so the reloaded
-    # module attribute is always used correctly.
     runs = list_runs()
     result: list[RunSummaryDTO] = []
     for meta in runs:

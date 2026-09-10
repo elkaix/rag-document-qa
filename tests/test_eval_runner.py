@@ -11,6 +11,7 @@ from src.eval.config import EvalConfig
 from src.eval.runner import EvalRunner, _score_question
 from src.eval.schemas import EvalQuestion
 from src.domain import SearchResult
+from src.eval import storage
 
 
 class DummyLLM:
@@ -51,19 +52,6 @@ def _baseline_config() -> EvalConfig:
             "bootstrap_n": 100, "permutation_n": 100, "seed": 42,
         },
     })
-
-
-@pytest.fixture
-def tmp_eval_runs(tmp_path, monkeypatch):
-    runs = tmp_path / "eval_runs"
-    runs.mkdir()
-    monkeypatch.setenv("EVAL_RUNS_DIR", str(runs))
-    import importlib
-    import src.eval.storage
-    importlib.reload(src.eval.storage)
-    yield src.eval.storage
-    monkeypatch.delenv("EVAL_RUNS_DIR", raising=False)
-    importlib.reload(src.eval.storage)
 
 
 @pytest.fixture
@@ -175,13 +163,13 @@ class TestEvalRunner:
         assert meta.config_name == "test"
 
         # Verify run dir contains all expected files
-        run_dir = tmp_eval_runs.EVAL_RUNS_DIR / meta.run_id
+        run_dir = tmp_eval_runs / meta.run_id
         for f in ["metadata.json", "questions.jsonl", "metrics.json",
                   "cost.json", "config.yaml"]:
             assert (run_dir / f).exists()
 
         # Reload via storage
-        loaded = tmp_eval_runs.load_run(meta.run_id)
+        loaded = storage.load_run(meta.run_id)
         assert len(loaded["results"]) == 5
         assert loaded["aggregated"], "aggregated metrics should be non-empty"
 
