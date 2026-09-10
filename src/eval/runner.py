@@ -33,7 +33,7 @@ from typing import Any
 import yaml
 
 from src.eval.aggregator import aggregate
-from src.eval.config import EvalConfig
+from src.eval.config import DatasetName, EvalConfig
 from src.eval.datasets import ml_papers as ml_papers_ds
 from src.eval.datasets import squad_v2 as squad_ds
 from src.eval.metrics.generation import answer_correctness, context_recall
@@ -146,9 +146,7 @@ def _score_question(
         metrics["judge_context_precision"] = cp_score
         details["judge_context_precision"] = _judge_details(cp_reasoning, cp_json)
 
-        ar_score, ar_reasoning = evaluate_answer_relevancy(
-            question.question, answer, judge_llm
-        )
+        ar_score, ar_reasoning = evaluate_answer_relevancy(question.question, answer, judge_llm)
         metrics["judge_answer_relevancy"] = ar_score
         details["judge_answer_relevancy"] = {"reasoning": ar_reasoning}
 
@@ -165,9 +163,7 @@ class SpendCeilingExceeded(RuntimeError):
     """Raised when a run's cumulative cost passes its configured ceiling."""
 
 
-def assert_within_spend_ceiling(
-    results: list[EvalResult], ceiling_usd: float | None
-) -> None:
+def assert_within_spend_ceiling(results: list[EvalResult], ceiling_usd: float | None) -> None:
     """Abort a run whose cumulative spend has passed its ceiling.
 
     Args:
@@ -265,7 +261,7 @@ class EvalRunner:
         # WHY pre-load: the progress callback needs total before the first
         # on_progress(1, total) call. Eager load also surfaces missing files
         # before any pipeline work starts.
-        dataset_questions: dict[str, list[EvalQuestion]] = {}
+        dataset_questions: dict[DatasetName, list[EvalQuestion]] = {}
         for dataset_name in config.eval.datasets:
             qs = self._load_questions(dataset_name)
             dataset_questions[dataset_name] = qs
@@ -291,9 +287,7 @@ class EvalRunner:
                     all_results.append(result)
                     if self._on_progress is not None:
                         self._on_progress(len(all_results), total_questions)
-                    assert_within_spend_ceiling(
-                        all_results, config.eval.spend_ceiling_usd
-                    )
+                    assert_within_spend_ceiling(all_results, config.eval.spend_ceiling_usd)
             finally:
                 # WHY finally: ensures teardown even if a question raises
                 # an unhandled exception outside the per-question try block.

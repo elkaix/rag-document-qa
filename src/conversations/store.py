@@ -24,7 +24,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from src.conversations.shaping import (
     conversation_detail,
@@ -81,7 +81,7 @@ class ConversationStore:
         with self._session() as session:
             convs = session.exec(
                 select(Conversation).order_by(
-                    Conversation.pinned.desc(), Conversation.updated_at.desc()
+                    col(Conversation.pinned).desc(), col(Conversation.updated_at).desc()
                 )
             ).all()
             return [conversation_summary(c) for c in convs]
@@ -103,7 +103,7 @@ class ConversationStore:
             messages = session.exec(
                 select(Message)
                 .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at)
+                .order_by(col(Message.created_at))
             ).all()
 
             shaped = []
@@ -186,10 +186,10 @@ class ConversationStore:
             #     messages returns one row per matching message, so a thread
             #     with three hits would appear three times.
             by_title = session.exec(
-                select(Conversation.id).where(Conversation.title.contains(query))
+                select(Conversation.id).where(col(Conversation.title).contains(query))
             ).all()
             by_message = session.exec(
-                select(Message.conversation_id).where(Message.content.contains(query))
+                select(Message.conversation_id).where(col(Message.content).contains(query))
             ).all()
 
             matching_ids = set(by_title) | set(by_message)
@@ -198,8 +198,8 @@ class ConversationStore:
 
             convs = session.exec(
                 select(Conversation)
-                .where(Conversation.id.in_(matching_ids))
-                .order_by(Conversation.updated_at.desc())
+                .where(col(Conversation.id).in_(matching_ids))
+                .order_by(col(Conversation.updated_at).desc())
             ).all()
             return [conversation_summary(c) for c in convs]
 

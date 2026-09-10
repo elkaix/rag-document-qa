@@ -32,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from src.evaluation.judges import (
     evaluate_answer_relevancy,
@@ -66,9 +66,7 @@ class Judges:
 
     faithfulness: Callable[..., tuple[float, str, str | None]] = evaluate_faithfulness
     answer_relevancy: Callable[..., tuple[float, str]] = evaluate_answer_relevancy
-    context_precision: Callable[..., tuple[float, str, str | None]] = (
-        evaluate_context_precision
-    )
+    context_precision: Callable[..., tuple[float, str, str | None]] = evaluate_context_precision
 
 
 @dataclass(frozen=True)
@@ -112,9 +110,7 @@ class MessageEvaluator:
     # Realtime path                                                       #
     # ------------------------------------------------------------------ #
 
-    def score_realtime(
-        self, message_id: str, answer: str, contexts: list[str]
-    ) -> dict:
+    def score_realtime(self, message_id: str, answer: str, contexts: list[str]) -> dict:
         """Score faithfulness immediately after generation and persist it.
 
         Called at the end of a streamed answer, while the retrieved contexts are
@@ -135,16 +131,12 @@ class MessageEvaluator:
             the answer to the user.
         """
         try:
-            score, reasoning, details = self._judges.faithfulness(
-                answer, contexts, self._judge_llm
-            )
+            score, reasoning, details = self._judges.faithfulness(answer, contexts, self._judge_llm)
             self._persist(message_id, FAITHFULNESS, score, reasoning, details)
             logger.info("Faithfulness score for message %s: %.3f", message_id, score)
             return {"metric": FAITHFULNESS, "score": score, "reasoning": reasoning}
         except Exception as exc:
-            logger.error(
-                "score_realtime failed for message %s: %s", message_id, exc
-            )
+            logger.error("score_realtime failed for message %s: %s", message_id, exc)
             return {"metric": FAITHFULNESS, "score": 0.0, "reasoning": str(exc)}
 
     # ------------------------------------------------------------------ #
@@ -191,9 +183,7 @@ class MessageEvaluator:
         """
         with self._session() as session:
             rows = session.exec(
-                select(MessageEvaluation).where(
-                    MessageEvaluation.message_id == message_id
-                )
+                select(MessageEvaluation).where(MessageEvaluation.message_id == message_id)
             ).all()
             return [
                 {
@@ -246,15 +236,11 @@ class MessageEvaluator:
             }
         if not msg.question:
             return None
-        score, reasoning = self._judges.answer_relevancy(
-            msg.question, msg.answer, self._judge_llm
-        )
+        score, reasoning = self._judges.answer_relevancy(msg.question, msg.answer, self._judge_llm)
         self._persist(message_id, ANSWER_RELEVANCY, score, reasoning, None)
         return {"metric": ANSWER_RELEVANCY, "score": score, "reasoning": reasoning}
 
-    def _context_precision(
-        self, message_id: str, msg: _MessageUnderTest
-    ) -> dict | None:
+    def _context_precision(self, message_id: str, msg: _MessageUnderTest) -> dict | None:
         existing = self._existing(message_id, CONTEXT_PRECISION)
         if existing is not None:
             return {
@@ -295,7 +281,7 @@ class MessageEvaluator:
                     Message.role == "user",
                     Message.created_at < msg.created_at,
                 )
-                .order_by(Message.created_at.desc())
+                .order_by(col(Message.created_at).desc())
             ).first()
 
             return _MessageUnderTest(

@@ -23,7 +23,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from src.config import MAX_TITLE_LENGTH, SLIDING_WINDOW_SIZE
 from src.models.conversation import Conversation
@@ -130,7 +130,7 @@ class ConversationHistory:
             messages = session.exec(
                 select(Message)
                 .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at)
+                .order_by(col(Message.created_at))
             ).all()
 
             # WHY inside the session scope: building the window touches message
@@ -144,7 +144,7 @@ class ConversationHistory:
                 else:
                     i += 1
 
-            window = paired[-(max_pairs * 2):]
+            window = paired[-(max_pairs * 2) :]
             return [{"role": m.role, "content": m.content} for m in window]
 
     def auto_title(self, conversation_id: str, first_query: str) -> None:

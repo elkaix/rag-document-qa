@@ -47,3 +47,32 @@ ignore_missing_imports = true
 # WHY not strict: SQLModel's table classes and ChromaDB's client are untyped at
 #      the edges. The project rule that matters — no `Any`, no `type: ignore` to
 #      silence a design problem — is enforced in review, not by a flag.
+
+# WHY this exception exists — read before removing it.
+#
+# The three real provider adapters receive their SDK client through an injected
+# zero-arg factory typed `Callable[[], object]` (see docs/adr/0002). `object` is
+# the honest type: the adapter is handed whatever the factory built, and the
+# factory's job is precisely that the SDK may be absent.
+#
+# Two better-looking fixes were tried and rejected:
+#   1. Naming the real client types under TYPE_CHECKING (`openai.OpenAI`,
+#      `anthropic.Anthropic`). This works for the attribute access, but the SDKs
+#      then reject the adapters' `**dict[str, object]` request kwargs against
+#      their own overloads. Those kwargs are assembled dynamically on purpose —
+#      `temperature` is dropped for constrained models, `system` is added only
+#      when present — so satisfying the overloads means rebuilding the SDKs'
+#      TypedDicts here.
+#   2. Structural Protocols for the client *and* every response object the
+#      adapters read. Around twenty types per provider to describe a response
+#      tree we neither own nor control, with `create()` returning a response in
+#      one call and an iterable of chunks in the other.
+#
+# So the exception is scoped to `attr-defined` in the adapters package, written
+# down once, rather than `Any` in a signature or `# type: ignore` at six call
+# sites — both of which the project rules forbid, and rightly: they hide the
+# boundary instead of naming it. Every adapter's behaviour is covered by
+# tests/test_llm_adapters.py with injected fakes.
+[[tool.mypy.overrides]]
+module = "src.llm_handler.adapters.*"
+disable_error_code = ["attr-defined"]

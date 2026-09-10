@@ -90,17 +90,41 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
       autouse fixture in `conftest.py` now points both at tmp, with a test
       asserting the invariant directly.
 
+## Tranche 10 — formatting and the type checker  ✔
+- [x] **black applied**: 83 of 138 files reformatted, in one deliberate commit
+      so the diff is legible as formatting and nothing else. `black --check`
+      and `ruff check` both clean; 515 tests unchanged.
+- [x] **mypy 36 → 0**, four root causes, each fixed in the code rather than
+      silenced:
+      - SQLModel descriptor gap (9): `Model.field.desc()/.contains()/.in_()`
+        made mypy see the *value* type. `sqlmodel.col()` is the documented
+        answer and reads no worse. This was the item deferred as "the known
+        SQLModel typing gap" — it had a real fix after all.
+      - Optional SDK imports (3): three identical try/except blocks where
+        `import x as _x` rebound an annotated name. Collapsed into one
+        `_optional_module()` helper — DRY, and the redefinition goes away.
+      - WebSocket stream bridge (16): an `object()` sentinel widened
+        `run_in_executor`'s result to `object`, so `(event_type, data)` could
+        not unpack and the whole dispatch lost its types. Replaced with a typed
+        `_next_event()` returning `BackendStreamEvent | None`; the three
+        string-payload branches then collapse into one.
+      - Dataset name literal (1): `DatasetName` alias in `src/eval/config.py`,
+        so config and runner key the same closed set.
+- [x] **One scoped exception, written down**: `attr-defined` off for
+      `src.llm_handler.adapters.*`. Two better fixes were tried first (real SDK
+      types under TYPE_CHECKING; structural Protocols for client and responses)
+      and both are recorded in `pyproject.toml` with why they fail. Config, not
+      `Any` in a signature and not `# type: ignore` at six call sites.
+
 ## Out of scope / deferred
-- **black**: would reformat 83 of 138 files. The repo was never
-  black-formatted; running it now would bury this work's diff. `pyproject.toml`
-  records line-length so a future `black .` is one deliberate commit.
-- **mypy**: ~19 remaining errors are the known SQLModel/SQLAlchemy typing gap
-  (`Model.field.desc()`, `.contains()`, `.in_()` — mypy sees the field's value
-  type, not the InstrumentedAttribute). Pre-existing pattern, unchanged by this
-  work. The two errors this work introduced (duplicated Protocols in
-  `composition.py`) are fixed.
-- Pushing to PR #21 (outward-facing; ask first)
-- CI workflow changes (shared infrastructure)
+- **`hybrid` and `multi_query` retrieval strategies** stay deferred per
+  ADR 0004: `hybrid` needs a BM25 corpus kept in sync with ingestion and
+  deletion, which is a feature, not a refactor.
+- **CI workflow changes** (shared infrastructure). Verified read-only that the
+  new `pyproject.toml` does not affect it: CI installs with
+  `uv pip install --system -r requirements.txt`, which ignores the file.
+- **`ALLOWED_ORIGINS` in `docker-compose.prod.yml`** defaults to the nginx
+  origin. A deployment on any other host must set it.
 
 ## Review
 Thirteen commits, each with tests green. Four user-visible defects fixed that

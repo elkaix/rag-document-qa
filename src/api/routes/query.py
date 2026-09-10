@@ -12,15 +12,41 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Iterator
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.api.dependencies import BackendDep
 from src.api.models import QueryRequest, QueryResponse, SourceInfo
+from src.backend import BackendStreamEvent
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["query"])
+
+# Events whose payload is a display string and whose label is echoed to the
+# client unchanged. Named so an unrecognised label is dropped rather than
+# forwarded — the old per-label branches had that property and it is worth
+# keeping: the client should never receive an event type nobody designed.
+_PASSTHROUGH_EVENTS = frozenset({"status", "reasoning", "token"})
+
+
+def _next_event(gen: Iterator[BackendStreamEvent]) -> BackendStreamEvent | None:
+    """Advance a stream_query generator by one event, or None when exhausted.
+
+    WHY a named helper and not `next(gen, sentinel)`: an `object()` sentinel
+        widens the result to `object`, which cannot be unpacked into
+        `(event_type, data)` — the type checker loses the event shape for the
+        whole dispatch below. `None` is a safe terminator here because the
+        generator only ever yields tuples, and it keeps the return type honest.
+
+    Args:
+        gen: The generator returned by ``RAGBackend.stream_query``.
+
+    Returns:
+        The next event, or None once the generator is exhausted.
+    """
+    return next(gen, None)
 
 
 @router.post(
@@ -114,16 +140,20 @@ async def chat_websocket(websocket: WebSocket) -> None:
             try:
                 top_k = int(raw_top_k)
             except (TypeError, ValueError):
-                await websocket.send_json({
-                    "type": "error",
-                    "content": f"Invalid top_k: {raw_top_k!r}",
-                })
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "content": f"Invalid top_k: {raw_top_k!r}",
+                    }
+                )
                 continue
             if not (1 <= top_k <= 50):
-                await websocket.send_json({
-                    "type": "error",
-                    "content": "top_k must be between 1 and 50.",
-                })
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "content": "top_k must be between 1 and 50.",
+                    }
+                )
                 continue
             model = payload.get("model")
 
@@ -143,10 +173,11 @@ async def chat_websocket(websocket: WebSocket) -> None:
             #      immediately.
             loop = asyncio.get_running_loop()
             gen = backend.stream_query(
-                query_text, top_k=top_k, model=model,
+                query_text,
+                top_k=top_k,
+                model=model,
                 conversation_id=conversation_id,
             )
-            _sentinel = object()
 
             # Accumulate answer tokens and retrieved contexts so we can run
             # faithfulness evaluation after the stream completes without
@@ -157,31 +188,32 @@ async def chat_websocket(websocket: WebSocket) -> None:
 
             try:
                 while True:
-                    item = await loop.run_in_executor(
-                        None, next, gen, _sentinel
-                    )
-                    if item is _sentinel:
+                    item = await loop.run_in_executor(None, _next_event, gen)
+                    if item is None:
                         break
                     event_type, data = item
 
-                    if event_type == "token":
-                        full_answer_parts.append(data)
-                        await websocket.send_json({"type": "token", "content": data})
-                    elif event_type == "reasoning":
-                        await websocket.send_json({"type": "reasoning", "content": data})
-                    elif event_type == "status":
-                        await websocket.send_json({"type": "status", "content": data})
-                    elif event_type == "done":
+                    # The stream splits by payload, not just by label: status,
+                    # reasoning and token carry a display string and forward
+                    # verbatim; done and telemetry carry a dict this route
+                    # reshapes. Checking the payload type is what lets the three
+                    # string events collapse into one branch — they differed only
+                    # in the label they echo back.
+                    if event_type in _PASSTHROUGH_EVENTS and isinstance(data, str):
+                        if event_type == "token":
+                            full_answer_parts.append(data)
+                        await websocket.send_json({"type": event_type, "content": data})
+                    elif event_type == "done" and isinstance(data, dict):
                         done_data = data
-                        retrieved_contexts = [
-                            s.get("excerpt", "") for s in data.get("sources", [])
-                        ]
-                        await websocket.send_json({
-                            "type": "done",
-                            "sources": data.get("sources", []),
-                            "message_id": data.get("message_id"),
-                            "conversation_id": data.get("conversation_id"),
-                        })
+                        retrieved_contexts = [s.get("excerpt", "") for s in data.get("sources", [])]
+                        await websocket.send_json(
+                            {
+                                "type": "done",
+                                "sources": data.get("sources", []),
+                                "message_id": data.get("message_id"),
+                                "conversation_id": data.get("conversation_id"),
+                            }
+                        )
                     elif event_type == "telemetry":
                         # WHY: stream_query yields ("telemetry", StageTelemetry.model_dump())
                         #      after the done event. Forward it verbatim so the frontend
@@ -189,9 +221,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         await websocket.send_json({"type": "telemetry", "content": data})
             except Exception as exc:
                 logger.error("Streaming error: %s", exc)
-                await websocket.send_json(
-                    {"type": "error", "content": f"Streaming error: {exc}"}
-                )
+                await websocket.send_json({"type": "error", "content": f"Streaming error: {exc}"})
             finally:
                 gen.close()
 
@@ -211,10 +241,12 @@ async def chat_websocket(websocket: WebSocket) -> None:
                         full_answer,
                         retrieved_contexts,
                     )
-                    await websocket.send_json({
-                        "type": "evaluation",
-                        "content": eval_result,
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "evaluation",
+                            "content": eval_result,
+                        }
+                    )
                 except Exception as exc:
                     logger.warning("Real-time faithfulness evaluation failed: %s", exc)
 

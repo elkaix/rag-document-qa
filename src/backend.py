@@ -32,11 +32,12 @@ Where it fits in the RAG pipeline:
 import hashlib
 import logging
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Engine
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from .api.schemas.telemetry import StageTelemetry
 from .config import (
@@ -89,6 +90,14 @@ def _source_dict(result: SearchResult) -> dict[str, Any]:
         "excerpt": result.content[:300],
         "chunk_index": result.metadata.get("chunk_index"),
     }
+
+
+# One event streamed out of RAGBackend.stream_query: a label plus either a
+# display string (status/reasoning/token) or a payload dict (done/telemetry).
+# WHY named here and not reused from query_engine: the engine's terminal event
+#      carries a StreamResult, which this facade consumes rather than forwards.
+#      The two shapes are deliberately different, so they get different names.
+BackendStreamEvent = tuple[str, "str | dict"]
 
 
 class RAGBackend:
@@ -171,9 +180,7 @@ class RAGBackend:
         # PATTERN: The evaluation cluster is its own module. The facade keeps
         #          the three public methods so routes are unaffected, but the
         #          skip/dedup decisions and their tests now live in one place.
-        self.evaluator = MessageEvaluator(
-            session_factory=self._session, judge_llm=self.eval_llm
-        )
+        self.evaluator = MessageEvaluator(session_factory=self._session, judge_llm=self.eval_llm)
 
         # PATTERN: The QueryEngine owns retrieve->generate for both the sync and
         #          streaming paths. The Retriever is selected from config
@@ -200,7 +207,11 @@ class RAGBackend:
         logger.info(
             "RAGBackend initialised (engine=%s, answer_model=%s, reasoning_model=%s, "
             "eval_model=%s, retriever=%s)",
-            engine.url, DEFAULT_MODEL, REASONING_MODEL, EVAL_MODEL, RETRIEVER_STRATEGY,
+            engine.url,
+            DEFAULT_MODEL,
+            REASONING_MODEL,
+            EVAL_MODEL,
+            RETRIEVER_STRATEGY,
         )
 
     # ------------------------------------------------------------------ #
@@ -317,7 +328,9 @@ class RAGBackend:
 
         logger.info(
             "Ingested '%s' -> doc_id=%s (%d chunks)",
-            filename, document.doc_id, len(chunks),
+            filename,
+            document.doc_id,
+            len(chunks),
         )
         return {
             "doc_id": document.doc_id,
@@ -411,9 +424,7 @@ class RAGBackend:
         #          when there are no results (empty index or a refusal).
         top_scores = [r.score for r in results[: min(3, len(results))]]
         confidence = (
-            round(max(0.0, min(1.0, sum(top_scores) / len(top_scores))), 4)
-            if top_scores
-            else 0.0
+            round(max(0.0, min(1.0, sum(top_scores) / len(top_scores))), 4) if top_scores else 0.0
         )
 
         return (
@@ -427,7 +438,7 @@ class RAGBackend:
         top_k: int | None = None,
         model: str | None = None,
         conversation_id: str | None = None,
-    ):
+    ) -> Iterator[BackendStreamEvent]:
         """Retrieve context and stream reasoning + answer with chain-of-thought events.
 
         Event stream shape (in order):
@@ -492,18 +503,24 @@ class RAGBackend:
         if conversation_id and results:
             self._save_message(conversation_id, "user", question)
             assistant_msg_id = self._save_message(
-                conversation_id, "assistant", "".join(answer_parts),
-                model=result.model, sources=sources,
+                conversation_id,
+                "assistant",
+                "".join(answer_parts),
+                model=result.model,
+                sources=sources,
             )
             # WHY: Auto-title on the first turn so the sidebar shows something
             #      meaningful; message_id + conversation_id let the frontend
             #      update local state without re-fetching.
             self._auto_title(conversation_id, question)
-            yield ("done", {
-                "sources": sources,
-                "message_id": assistant_msg_id,
-                "conversation_id": conversation_id,
-            })
+            yield (
+                "done",
+                {
+                    "sources": sources,
+                    "message_id": assistant_msg_id,
+                    "conversation_id": conversation_id,
+                },
+            )
         else:
             yield ("done", {"sources": sources})
 
@@ -555,7 +572,7 @@ class RAGBackend:
         """
         with self._session() as session:
             records = session.exec(
-                select(DocumentRecord).order_by(DocumentRecord.upload_date.desc())
+                select(DocumentRecord).order_by(col(DocumentRecord.upload_date).desc())
             ).all()
             return [
                 {

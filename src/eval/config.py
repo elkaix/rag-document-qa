@@ -168,6 +168,12 @@ class PipelineCfg(BaseModel):
     refusal_handler: RefusalHandlerCfg = Field(default_factory=RefusalHandlerCfg)
 
 
+# The labelled gold sets a run may evaluate against. Named once so the runner
+# can key its per-dataset maps by the same closed set the config validates —
+# without the alias, the two loops over those names disagree on the key type.
+DatasetName = Literal["squad_v2_dev_200", "ml_papers_v1"]
+
+
 class EvalCfg(BaseModel):
     """Evaluation harness parameters.
 
@@ -176,7 +182,7 @@ class EvalCfg(BaseModel):
     Why seed: reproducibility across runs and machines.
     """
 
-    datasets: list[Literal["squad_v2_dev_200", "ml_papers_v1"]]
+    datasets: list[DatasetName]
     judge_model: str = EVAL_MODEL
     bootstrap_n: int = 1000
     permutation_n: int = 10000

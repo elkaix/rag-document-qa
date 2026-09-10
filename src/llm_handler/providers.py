@@ -11,6 +11,7 @@ and stays under the line ceiling.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 from collections.abc import Callable
@@ -27,23 +28,34 @@ logger = logging.getLogger(__name__)
 # Optional SDK availability (checked once at import, no hard dependency)       #
 # --------------------------------------------------------------------------- #
 
-_openai_module: ModuleType | None
-try:
-    import openai as _openai_module
-except ImportError:
-    _openai_module = None
 
-_anthropic_module: ModuleType | None
-try:
-    import anthropic as _anthropic_module
-except ImportError:
-    _anthropic_module = None
+def _optional_module(name: str) -> ModuleType | None:
+    """Import a provider SDK by name, or return None when it is not installed.
 
-_requests_module: ModuleType | None
-try:
-    import requests as _requests_module
-except ImportError:
-    _requests_module = None
+    Args:
+        name: Top-level module name, e.g. ``"openai"``.
+
+    Returns:
+        The imported module, or None when the SDK is absent.
+
+    WHY a helper rather than three try/except blocks: the blocks were identical
+        apart from the name, and `import x as _x` inside a try counts as a
+        second binding of an already-annotated name, which is a real
+        redefinition rather than a typing quirk. Importing by name assigns once.
+    """
+    try:
+        return importlib.import_module(name)
+    except ImportError:
+        return None
+
+
+# WHY resolved at import and not per call: absence is a property of the
+#      installation, not of the request. A provider whose SDK is missing raises
+#      ProviderUnavailableError at client-construction time and falls back to
+#      the dummy adapter — see _openai_client_factory below.
+_openai_module = _optional_module("openai")
+_anthropic_module = _optional_module("anthropic")
+_requests_module = _optional_module("requests")
 
 
 # --------------------------------------------------------------------------- #
@@ -114,9 +126,7 @@ def build_adapter(
         )
     if provider == "anthropic":
         return AnthropicAdapter(model, max_tokens, _anthropic_client_factory(api_key))
-    return OllamaAdapter(
-        model, temperature, max_tokens, ollama_base_url, _ollama_client_factory()
-    )
+    return OllamaAdapter(model, temperature, max_tokens, ollama_base_url, _ollama_client_factory())
 
 
 # Environment variable names, spelled once. Provider credentials are resolved
@@ -152,6 +162,7 @@ def _openai_client_factory(provider: str, api_key: str | None) -> Callable[[], o
     ProviderUnavailableError. A missing OpenAI key is left to the SDK, which
     raises its own error that propagates (unchanged behaviour).
     """
+
     def factory() -> object:
         if _openai_module is None:
             raise ProviderUnavailableError("openai package not installed")
@@ -168,18 +179,18 @@ def _openai_client_factory(provider: str, api_key: str | None) -> Callable[[], o
 
 def _anthropic_client_factory(api_key: str | None) -> Callable[[], object]:
     """Build a factory for an Anthropic-SDK client (missing SDK -> unavailable)."""
+
     def factory() -> object:
         if _anthropic_module is None:
             raise ProviderUnavailableError("anthropic package not installed")
-        return _anthropic_module.Anthropic(
-            api_key=resolve_api_key("anthropic", api_key)
-        )
+        return _anthropic_module.Anthropic(api_key=resolve_api_key("anthropic", api_key))
 
     return factory
 
 
 def _ollama_client_factory() -> Callable[[], object]:
     """Build a factory returning the HTTP client for Ollama (the requests module)."""
+
     def factory() -> object:
         if _requests_module is None:
             raise ProviderUnavailableError("requests package not installed")
@@ -188,9 +199,7 @@ def _ollama_client_factory() -> Callable[[], object]:
     return factory
 
 
-def list_models(
-    provider: str, model: str, api_key: str | None, ollama_base_url: str
-) -> list[str]:
+def list_models(provider: str, model: str, api_key: str | None, ollama_base_url: str) -> list[str]:
     """Return available model names for a provider (out of scope; preserved)."""
     if provider == "openai":
         return _openai_list_models(api_key)
