@@ -65,3 +65,48 @@ def test_malformed_llm_response_falls_back_to_passthrough():
     assert queries == ["What is RAG?"]
     # Cost is still charged because the call did happen.
     assert cost > 0.0
+
+
+def test_a_raising_llm_call_falls_back_to_the_original_query(caplog):
+    """A provider outage must narrow retrieval, not fail the user's question.
+
+    Only the JSON parse was guarded before, so a rate limit, an expired key, or
+    a timeout raised straight out of retrieval. Expansion is a recall
+    optimisation: without it the pipeline still answers.
+    """
+    import logging
+
+    from src.retrieval import QueryRewriter
+
+    class _ExplodingLLM:
+        def generate_with_usage(self, prompt, system_prompt=None):
+            raise ConnectionError("provider unreachable")
+
+    rw = QueryRewriter(model="gpt-4.1-nano", max_expansions=3, llm=_ExplodingLLM())
+    with caplog.at_level(logging.ERROR):
+        queries, cost, p_t, c_t = rw.expand("What is RAG?")
+
+    assert queries == ["What is RAG?"]
+    # Nothing was billed, because nothing completed.
+    assert (cost, p_t, c_t) == (0.0, 0, 0)
+    assert "Query expansion failed" in caplog.text
+
+
+def test_multi_query_retrieval_survives_a_failing_rewriter():
+    """The fallback reaches the seam: retrieval still runs on the original query."""
+    from src.domain import SearchResult
+    from src.retrieval import MultiQueryRetriever, QueryRewriter
+
+    class _ExplodingLLM:
+        def generate_with_usage(self, prompt, system_prompt=None):
+            raise TimeoutError("took too long")
+
+    class _Inner:
+        def retrieve(self, query, top_k=5):
+            return [SearchResult(content=query, metadata={}, score=0.5, doc_id="d", chunk_id=query)]
+
+    adapter = MultiQueryRetriever(
+        inner=_Inner(),
+        rewriter=QueryRewriter(model="gpt-4.1-nano", max_expansions=3, llm=_ExplodingLLM()),
+    )
+    assert [r.chunk_id for r in adapter.retrieve("What is RAG?", top_k=5)] == ["What is RAG?"]

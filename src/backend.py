@@ -191,11 +191,15 @@ class RAGBackend:
         #      engine ends up with, so the count is part of the composition
         #      rather than a constant the caller supplies alongside it. This
         #      rule used to exist only on the eval side.
+        # WHY the answer handler is passed in: the multi_query strategy expands
+        #      the user's query with an LLM call, and the facade already owns a
+        #      configured handler. Every other strategy ignores the argument.
         plan = build_retrieval_plan(
             RETRIEVER_STRATEGY,
             self.vector_store,
             top_k=TOP_K_RESULTS,
             rerank_over_fetch_n=RERANK_OVER_FETCH_N,
+            llm=self.llm,
         )
         self.query_engine = QueryEngine(
             retriever=plan.retriever,

@@ -30,6 +30,10 @@ from src.config import (
     CHUNK_SIZE,
     DEFAULT_MODEL,
     EVAL_MODEL,
+    HYBRID_BM25_TOP_K,
+    HYBRID_DENSE_TOP_K,
+    HYBRID_RRF_K,
+    MAX_QUERY_EXPANSIONS,
     REASONING_MODEL,
     REFUSAL_NO_ANSWER_TEXT,
     REFUSAL_SIMILARITY_THRESHOLD,
@@ -97,9 +101,12 @@ class HybridCfg(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
-    bm25_top_k: int = 20
-    dense_top_k: int = 20
-    rrf_k: int = 60
+    # SINGLE SOURCE: these were literals here while production could not build
+    #   the hybrid strategy at all. ADR 0009 wired it, so the numbers now drive
+    #   a shipped pipeline and must be the ones eval measures.
+    bm25_top_k: int = HYBRID_BM25_TOP_K
+    dense_top_k: int = HYBRID_DENSE_TOP_K
+    rrf_k: int = HYBRID_RRF_K
 
 
 class RerankerCfg(BaseModel):
@@ -130,7 +137,9 @@ class QueryRewriterCfg(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     model: str | None = None
-    max_expansions: int = 3
+    # SINGLE SOURCE: production reads the same cap (ADR 0009), so an eval run
+    #   that tunes expansion breadth is tuning the shipped breadth.
+    max_expansions: int = MAX_QUERY_EXPANSIONS
 
 
 class RefusalHandlerCfg(BaseModel):

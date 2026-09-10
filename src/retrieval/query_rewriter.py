@@ -9,15 +9,18 @@ Two collaborators live here:
   (gpt-4.1-nano — cheap, so this lever doesn't dominate the cost ledger). Expansion
   raises recall when the user's phrasing diverges from the corpus phrasing.
 - `MultiQueryRetriever` presents the `Retriever` interface by *composing* an inner
-  Retriever: it fans the expansions out, unions the results, and dedups by
-  chunk_id keeping each chunk's best score. The "compose rather than conform"
-  adapter from ADR 0004.
+  Retriever: it fans the expansions out and fuses the per-expansion rankings
+  with RRF, keeping each chunk's best observed score for downstream consumers.
+  The "compose rather than conform" adapter from ADR 0004.
 
 The rewriter reports its own token cost, but the pure `Retriever` interface has
-no cost channel, so it is dropped at this seam. This was deliberate in step 4c:
-the eval harness's old `rewriter_cost_usd` field had zero readers (verified), so
-convergence dropped it rather than plumb a cost path nothing consumed. A cost
-channel can be added if a consumer ever needs multi-query spend broken out.
+no cost channel, so it is *logged* at this seam rather than returned. This was
+deliberate in step 4c: the eval harness's old `rewriter_cost_usd` field had zero
+readers (verified), so convergence dropped it rather than plumb a cost path
+nothing consumed. Wiring the strategy for production (ADR 0009) did not change
+that arithmetic — it only meant an operator now needs to *see* the spend, which
+a log line does without every adapter growing a field. A structured channel can
+replace the log the day a consumer exists to read one.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from typing import Protocol
 
 from src.domain import SearchResult
 from src.retrieval.base import Retriever
+from src.retrieval.fusion import reciprocal_rank_fusion
 from src.telemetry import pricing
 
 logger = logging.getLogger(__name__)
@@ -89,10 +93,26 @@ class QueryRewriter:
             f"Return a JSON array of up to {self._max_expansions} alternative "
             f"phrasings of this query. Do NOT include the original."
         )
-        raw, p_t, c_t = self._llm.generate_with_usage(
-            user_prompt,
-            system_prompt=self.SYSTEM_PROMPT,
-        )
+        # BUG FIX: only the JSON parse was guarded, so a provider outage, an
+        #          expired key, a rate limit, or a timeout raised straight out
+        #          of retrieval and failed the user's whole question. Query
+        #          expansion is a recall *optimisation*: without it retrieval
+        #          still works, it is just narrower. Degrading to the original
+        #          query is strictly better than answering nothing, so the one
+        #          place this lever can reach the network is where it is caught.
+        # WHY a broad except: the raising types are whichever SDK the configured
+        #          provider happens to use — openai, anthropic, requests, each
+        #          with its own exception tree. Enumerating them would couple
+        #          this module to every provider and still miss the next one.
+        #          The failure is logged with its traceback, not swallowed.
+        try:
+            raw, p_t, c_t = self._llm.generate_with_usage(
+                user_prompt,
+                system_prompt=self.SYSTEM_PROMPT,
+            )
+        except Exception:
+            logger.exception("Query expansion failed — retrieving with the original query only.")
+            return [query], 0.0, 0, 0
         cost = pricing.cost_usd(self._model, p_t, c_t)
 
         expansions = self._parse_expansions(raw)
@@ -145,26 +165,55 @@ class MultiQueryRetriever:
         self._rewriter = rewriter
 
     def retrieve(self, query: str, top_k: int = 5) -> list[SearchResult]:
-        """Retrieve for every expansion, union, dedup by chunk_id, rank best-first.
+        """Retrieve for every expansion, then fuse the rankings by RRF.
 
         Args:
             query: The original user query.
-            top_k: Number of results to return after the union is ranked. Each
-                expansion is itself retrieved at `top_k` before the union.
+            top_k: Number of results to return after fusion. Each expansion is
+                itself retrieved at `top_k` before the rankings are fused.
 
         Returns:
-            Up to `top_k` SearchResults ordered by descending score. When a chunk
-            surfaces under several expansions, its highest score wins (dense
-            similarities share the embedding space, so they compare directly).
+            Up to `top_k` SearchResults in fused-rank order — a chunk that ranks
+            well under several phrasings beats one that ranks highest under a
+            single phrasing. Each result keeps the best score it was seen with,
+            for consumers that read the field.
+
+        BUG FIX: this ranked the union by ``score`` and truncated. That is only
+            correct when every inner result's score lives in one comparable
+            space, which stops being true the moment the inner retriever is
+            ``BM25HybridRetriever`` — its sparse-only hits carry 0.0 because no
+            cosine similarity exists for them. Every eval config from
+            phase2e onward stacks multi-query over hybrid, so the adapter was
+            sorting exactly the results hybrid exists to contribute to the
+            bottom of the list and then cutting them off. Fusing by rank
+            removes the comparability assumption instead of documenting it —
+            the same fix ``RefusalHandler`` needed for the same reason.
         """
-        # expand() also reports rewrite cost/tokens; the pure Retriever interface
-        # has no cost channel, so only the query list is used here (see step 4c).
-        expansions, *_cost_and_tokens = self._rewriter.expand(query)
+        # WHY the cost is logged rather than returned: `retrieve(query, top_k)`
+        #     is the whole Retriever seam, and widening it with a spend channel
+        #     would make every adapter and every caller carry a field that one
+        #     lever produces and nothing consumes — the same verified-zero-
+        #     readers reasoning that retired the eval harness's
+        #     `rewriter_cost_usd`. Logging surfaces the spend for the operator
+        #     who turns this strategy on; a structured channel can replace the
+        #     log the day a consumer exists to read one.
+        expansions, cost_usd, prompt_tokens, completion_tokens = self._rewriter.expand(query)
+        if cost_usd or prompt_tokens or completion_tokens:
+            logger.info(
+                "Query expansion: %d queries, %d+%d tokens, $%.6f",
+                len(expansions),
+                prompt_tokens,
+                completion_tokens,
+                cost_usd,
+            )
         best: dict[str, SearchResult] = {}
+        rankings: list[list[str]] = []
         for expansion in expansions:
-            for result in self._inner.retrieve(expansion, top_k=top_k):
+            results = self._inner.retrieve(expansion, top_k=top_k)
+            rankings.append([r.chunk_id for r in results])
+            for result in results:
                 current = best.get(result.chunk_id)
                 if current is None or result.score > current.score:
                     best[result.chunk_id] = result
-        ranked = sorted(best.values(), key=lambda r: r.score, reverse=True)
-        return ranked[:top_k]
+        fused = reciprocal_rank_fusion(rankings)[:top_k]
+        return [best[chunk_id] for chunk_id in fused]

@@ -95,17 +95,20 @@ def test_hybrid_retriever_conforms_to_protocol():
     """BM25HybridRetriever already exposes retrieve() — it conforms directly."""
     from src.retrieval import BM25HybridRetriever
 
-    store = _chroma_store()
-    retriever = BM25HybridRetriever(
-        vector_store=store,
-        documents={"d1": "Paris is the capital of France."},
-    )
+    retriever = BM25HybridRetriever(vector_store=_chroma_store())
     assert isinstance(retriever, Retriever)
 
 
 # --------------------------------------------------------------------------- #
 # Slice 3 — RerankingRetriever composes inner + reranker (over-fetch)         #
 # --------------------------------------------------------------------------- #
+
+
+class _StubLLM:
+    """Minimal generate_with_usage stand-in — never called by these tests."""
+
+    def generate_with_usage(self, prompt, system_prompt=None):
+        return "[]", 0, 0
 
 
 class _FakeReranker:
@@ -175,8 +178,8 @@ def test_multi_query_retriever_conforms_to_protocol():
     assert isinstance(adapter, Retriever)
 
 
-def test_multi_query_fans_out_dedups_and_ranks_best_first():
-    """Expansions are retrieved, deduped by chunk_id (keeping the best score), ranked."""
+def test_multi_query_fans_out_and_fuses_the_rankings_by_rank():
+    """Expansions are retrieved, then fused by RRF — consensus beats one high score."""
     from src.retrieval import MultiQueryRetriever
 
     inner = _FakeRetriever(
@@ -191,9 +194,34 @@ def test_multi_query_fans_out_dedups_and_ranks_best_first():
 
     # Both expansions were retrieved.
     assert {c[0] for c in inner.calls} == {"q", "q2"}
-    # c2 was deduped to its higher score (0.7), the union ranked best-first,
-    # then truncated to top_k: c1(0.9), c3(0.8) win over c2(0.7).
-    assert [r.chunk_id for r in out] == ["c1", "c3"]
+    # c2 placed second under both phrasings, so its two 1/62 contributions beat
+    # c1's and c3's single 1/61 — the point of fusing by rank rather than by a
+    # score whose scale the seam never promised.
+    assert [r.chunk_id for r in out] == ["c2", "c1"]
+    # Each survivor still carries the best score it was seen with.
+    assert out[0].score == 0.7
+
+
+def test_multi_query_does_not_discard_results_that_score_zero():
+    """The hybrid-under-multi-query case every eval config from phase2e stacks.
+
+    BM25-only hits carry score 0.0 because no comparable cosine similarity
+    exists for them. Ranking the union by score sorted exactly those to the
+    bottom and truncated them away — deleting what hybrid was added to
+    contribute.
+    """
+    from src.retrieval import MultiQueryRetriever
+
+    inner = _FakeRetriever(
+        {
+            "q": [_scored("sparse-only", 0.0), _scored("dense-hit", 0.6)],
+            "q2": [_scored("sparse-only", 0.0), _scored("other", 0.5)],
+        }
+    )
+    adapter = MultiQueryRetriever(inner=inner, rewriter=_FakeRewriter(["q", "q2"]))
+
+    out = adapter.retrieve("q", top_k=2)
+    assert "sparse-only" in [r.chunk_id for r in out]
 
 
 # --------------------------------------------------------------------------- #
@@ -217,9 +245,48 @@ def test_build_retriever_reranked_composes_dense_and_a_reranker(monkeypatch):
     assert isinstance(retriever, RerankingRetriever)
 
 
-@pytest.mark.parametrize("strategy", ["hybrid", "multi_query", "totally-bogus"])
-def test_build_retriever_rejects_unwired_or_unknown_strategies(strategy):
+def test_build_retriever_hybrid_fuses_sparse_and_dense():
+    """hybrid is a wired strategy, not a deferred name (ADR 0009)."""
+    from src.retrieval import BM25HybridRetriever, build_retrieval_plan
+
+    retriever = build_retrieval_plan("hybrid", _chroma_store()).retriever
+    assert isinstance(retriever, BM25HybridRetriever)
+
+
+def test_build_retriever_multi_query_composes_a_rewriter(monkeypatch):
+    """multi_query is wired once a rewriter model is configured (ADR 0009)."""
+    from src.retrieval import MultiQueryRetriever, build_retrieval_plan
+
+    monkeypatch.setattr("src.retrieval.composition.QUERY_REWRITER_MODEL", "gpt-4.1-nano")
+    retriever = build_retrieval_plan("multi_query", _chroma_store(), llm=_StubLLM()).retriever
+    assert isinstance(retriever, MultiQueryRetriever)
+
+
+@pytest.mark.parametrize("strategy", ["totally-bogus", "", "Dense"])
+def test_build_retriever_rejects_unknown_strategies(strategy):
     from src.retrieval import build_retrieval_plan
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Unknown retriever strategy"):
         build_retrieval_plan(strategy, _chroma_store())
+
+
+def test_build_retriever_multi_query_without_a_model_fails_loudly(monkeypatch):
+    """An unconfigured rewriter must not silently degrade to dense retrieval.
+
+    QueryRewriter(model=None) is a legal pass-through, so the composed chain
+    would run, expand nothing, and look exactly like dense — a deployment
+    believing it had recall it did not have.
+    """
+    from src.retrieval import build_retrieval_plan
+
+    monkeypatch.setattr("src.retrieval.composition.QUERY_REWRITER_MODEL", None)
+    with pytest.raises(ValueError, match="QUERY_REWRITER_MODEL"):
+        build_retrieval_plan("multi_query", _chroma_store(), llm=_StubLLM())
+
+
+def test_build_retriever_multi_query_without_an_llm_fails_loudly(monkeypatch):
+    from src.retrieval import build_retrieval_plan
+
+    monkeypatch.setattr("src.retrieval.composition.QUERY_REWRITER_MODEL", "gpt-4.1-nano")
+    with pytest.raises(ValueError, match="LLM handler"):
+        build_retrieval_plan("multi_query", _chroma_store())

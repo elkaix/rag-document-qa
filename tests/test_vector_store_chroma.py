@@ -285,20 +285,69 @@ class TestGetByDocId:
         assert store.get_by_doc_id("nonexistent") == []
 
 
-class TestAllChunkTexts:
+class TestAllChunks:
     """The corpus accessor a sparse retriever needs, on the store's interface."""
 
     def test_returns_every_chunk_keyed_by_id(self, populated_vector_store):
-        corpus = populated_vector_store.all_chunk_texts()
+        corpus = populated_vector_store.all_chunks()
         stats = populated_vector_store.get_stats()
         assert len(corpus) == stats["total_chunks"]
-        assert all(isinstance(text, str) and text for text in corpus.values())
+        assert all(chunk.content for chunk in corpus.values())
+
+    def test_each_chunk_carries_its_metadata_and_doc_id(self, populated_vector_store):
+        """The text-only shape is what made hybrid retrieval drop citations."""
+        corpus = populated_vector_store.all_chunks()
+        for chunk_id, chunk in corpus.items():
+            assert chunk.chunk_id == chunk_id
+            assert chunk.doc_id == chunk.metadata.get("doc_id", "")
+            assert chunk.doc_id
 
     def test_empty_collection_returns_empty_mapping(self, chroma_collection):
         from src.vector_store import ChromaVectorStore
 
         store = ChromaVectorStore(collection=chroma_collection)
-        assert store.all_chunk_texts() == {}
+        assert store.all_chunks() == {}
+
+
+class TestRevision:
+    """The write counter derived indexes use to notice a stale corpus."""
+
+    def test_starts_at_zero(self, chroma_collection):
+        from src.vector_store import ChromaVectorStore
+
+        assert ChromaVectorStore(collection=chroma_collection).revision == 0
+
+    def test_upsert_advances_it(self, chroma_collection):
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore(collection=chroma_collection)
+        store.upsert(
+            ids=["c1"],
+            documents=["Doc1 chunk1"],
+            metadatas=[{"doc_id": "doc1"}],
+            embeddings=[VEC_A],
+        )
+        assert store.revision == 1
+
+    def test_delete_advances_it_even_when_nothing_matched(self, chroma_collection):
+        """A no-op delete still counts: the corpus must not trust a stale cache.
+
+        Chroma's delete() is a filtered scan, so "nothing matched" is a fact
+        about the query, not a guarantee the collection is unchanged from the
+        derived index's point of view. Counting it is the cheap, safe side.
+        """
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore(collection=chroma_collection)
+        store.delete_by_doc_id("never-ingested")
+        assert store.revision == 1
+
+    def test_reads_do_not_advance_it(self, populated_vector_store):
+        before = populated_vector_store.revision
+        populated_vector_store.query(query_text="anything", top_k=1)
+        populated_vector_store.all_chunks()
+        populated_vector_store.get_stats()
+        assert populated_vector_store.revision == before
 
 
 class TestCosineInvariantOwnership:
