@@ -190,7 +190,7 @@ Two callables live here alongside the constants, both called only by
 
 The central orchestrator, and a **facade only** — it implements no algorithm
 itself and owns no persistence logic beyond wiring. Every cluster it once
-contained now lives in a module it delegates to (see [ADR 0007](docs/adr/0007-backend-facade-split.md)):
+contained now lives in a module it delegates to (see [ADR 0007](docs/adr/0007-backend-split.md)):
 
 - **`ingest_file()`** / **`ingest_bytes()`** — parse (`src/ingestion/`) → chunk → ChromaDB upsert → SQLite metadata
 - **`query()`** / **`query_with_telemetry()`** / **`stream_query()`** — delegated to `QueryEngine` (`src/query_engine/`), which owns retrieve → generate for both the sync and the streaming path
@@ -256,7 +256,13 @@ Wrapper over a ChromaDB Collection that owns the cosine-space invariant:
   on purpose
 - **`upsert()`** — idempotent insert/update; auto-embeds via all-MiniLM-L6-v2 when no explicit embeddings provided. Chunk ids are content-addressed, so a document with repeated text (a boilerplate footer, a disclaimer page, a CSV with duplicate rows) produces the same id twice within one batch; the store keeps the first occurrence of each id rather than letting Chroma reject the whole upload
 - **`all_chunks()`** — every stored chunk as a `Chunk` (text + metadata + doc_id), for BM25 corpus construction. Carrying metadata is what lets a sparse-only hit render a citation
-- **`revision`** (property) — a counter bumped by every `upsert` / `delete_by_doc_id`. Derived indexes compare it to the one they were built at instead of every mutation site remembering to invalidate them — [ADR 0009](docs/adr/0009-wire-hybrid-and-multi-query.md)
+- **`revision`** (property) — a counter bumped by every `upsert` and by every
+  `delete_by_doc_id` that actually removed something (a delete matching nothing
+  changes no chunk, so invalidating derived indexes for it only bought a wasted
+  rebuild on the ordinary 404 and retry paths). Each mutation holds a write lock
+  across the Chroma call *and* the increment, so the counter cannot be lost to a
+  racing write and "this delete matched nothing" is still true when the counter
+  decides not to move — the API serves retrieval from more than one thread. Derived indexes compare it to the one they were built at instead of every mutation site remembering to invalidate them — [ADR 0009](docs/adr/0009-wire-hybrid-and-multi-query.md)
 - **`query()`** — accepts `query_text` (production, auto-embedded) or `query_embedding` (tests, explicit); converts ChromaDB cosine distance `[0,2]` to similarity score `[0,1]`
 - **`delete_by_doc_id()`** — removes all chunks for a document via metadata WHERE clause
 - **`get_stats()`** — returns chunk count, backend name, collection name
@@ -303,7 +309,27 @@ failure and falls back to the original query. See
 fuses a sparse ranking with a dense one; `MultiQueryRetriever` fuses one
 expansion's ranking with another's. Both combine lists whose *scores* live in
 incomparable spaces but whose *ranks* always compare — which is why neither
-adapter sorts by `score` any more.
+adapter sorts by `score` any more. Two documented caveats: an id repeated
+inside one ranking counts once at its best rank, and ties resolve toward the
+list passed first (hybrid passes sparse first), because with no common scale
+there is no principled tie-break.
+
+**`sparse_index.py` owns the BM25 half.** Building the index and scoring a
+query against it are pure — a `CorpusSnapshot` in, ranked ids out, no store and
+no I/O — so they are testable without a retriever, an embedder or a vector
+store. It also owns the degradation rule: `BM25Okapi` divides by the corpus
+size and by the term count, so an empty collection (a fresh deployment's normal
+state) and an all-whitespace one both raised `ZeroDivisionError`; the index
+reports "not defined for this corpus" instead, and hybrid falls back to
+dense-only.
+
+**What the `Retriever` seam does and does not promise.** `retrieve` returns
+results ordered by descending *relevance*, never by descending `score`. Each
+strategy scores in its own space — dense reports cosine similarity in `[0, 1]`,
+the reranker a raw cross-encoder logit, hybrid `0.0` for a sparse-only hit — so
+a caller asking "how good is the best match?" must read `max(r.score for r in
+results)`. Both `RefusalHandler.should_refuse` and `RAGBackend`'s `confidence`
+had been reading position 0 and were corrected.
 
 ### `src/query_engine/` — QueryEngine
 
@@ -316,7 +342,7 @@ runs the reasoning pass, so the sync path keeps its single LLM call.
 
 ### `src/conversations/` — Conversation Persistence
 
-Split out of the backend facade ([ADR 0007](docs/adr/0007-backend-facade-split.md)):
+Split out of the backend facade ([ADR 0007](docs/adr/0007-backend-split.md)):
 
 - **`store.py`** — `ConversationStore`: create, list, get, update, delete,
   search, export-as-Markdown, share tokens. Takes a `session_factory`, opening
@@ -768,7 +794,8 @@ docker compose --profile observability up
 | Document ID | Content-hash (SHA-256, full digest) | Idempotent re-ingestion |
 | Value types | Vendor-free leaf module (`src/domain.py`) | Nothing depends upward on ChromaDB or SQLModel — [ADR 0005](docs/adr/0005-domain-value-types.md) |
 | Retrieval composition | One rule, one owner (`src/retrieval/composition.py`) | Production and eval compose levers identically by construction — [ADR 0006](docs/adr/0006-one-retrieval-composition-rule.md) |
-| Backend shape | Facade that delegates, never implements | Conversation, evaluation and query clusters are testable without the facade — [ADR 0007](docs/adr/0007-backend-facade-split.md) |
+| Backend shape | Facade that delegates, never implements | Conversation, evaluation and query clusters are testable without the facade — [ADR 0007](docs/adr/0007-backend-split.md) |
 | Format support | Registry keyed by extension | Adding a parser is one entry; `SUPPORTED_EXTENSIONS` derives from it — [ADR 0008](docs/adr/0008-ingestion-parsing-seam.md) |
 | Configuration | Injected, never globally mutated | `.env` is loaded once, at the entry point; libraries stay credential-free on import |
+| Retrieval score semantics | The seam orders by *relevance*; `score` is strategy-specific and not cross-comparable | A caller asking "how good is the best match?" reads `max(...)`, never position 0 — [ADR 0010](docs/adr/0010-score-contract-and-retrieval-hardening.md) |
 | Sparse-index freshness | Store publishes a revision; indexes ask | A new mutation site cannot forget to invalidate, because the counter lives with the write — [ADR 0009](docs/adr/0009-wire-hybrid-and-multi-query.md) |

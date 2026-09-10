@@ -1,5 +1,8 @@
 # Phase 2 RAG Quality Matrix — Implementation Plan
 
+> ⚠️ **Historical record — do not read as current behaviour.** Dated 2026-04-27. The hybrid, multi-query and refusal levers it describes were rewritten when they were wired for production: the BM25 corpus now tracks the store's revision instead of freezing at construction, multi-query fuses by RRF instead of unioning and sorting by score, and the refusal gate reads the best score in the set instead of position 0. See [ADR 0009](../../adr/0009-wire-hybrid-and-multi-query.md) for what actually ships.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Land a layered RAG ablation matrix that measures the lift each major architectural lever buys on top of the Phase 1 SQuAD-200 baseline, then ship a portfolio writeup attributing the lift to mechanism.
@@ -2671,8 +2674,8 @@ Create `docs/PHASE2_RESULTS.md`:
 # Phase 2 — RAG Quality Matrix Results
 
 > Layered ablation of seven RAG architectural levers on the Phase 1 SQuAD-200 baseline.
-> Spec: [`docs/superpowers/specs/2026-04-27-phase2-rag-quality-matrix-design.md`](superpowers/specs/2026-04-27-phase2-rag-quality-matrix-design.md)
-> Plan: [`docs/superpowers/plans/2026-04-27-phase2-rag-quality-matrix.md`](superpowers/plans/2026-04-27-phase2-rag-quality-matrix.md)
+> Spec: [`docs/superpowers/specs/2026-04-27-phase2-rag-quality-matrix-design.md`](../specs/2026-04-27-phase2-rag-quality-matrix-design.md)
+> Plan: [`docs/superpowers/plans/2026-04-27-phase2-rag-quality-matrix.md`](../plans/2026-04-27-phase2-rag-quality-matrix.md)
 
 ## Methodology
 

@@ -1,5 +1,16 @@
 # RAG Best Practices 2026 — Deep-Scan Analysis & Upgrade Report
 
+> ⚠️ **Superseded snapshot — dated 2026-07-12, kept for the reasoning, not the grades.**
+> Its central P0 finding — that hybrid, reranking and query rewriting exist only in
+> `src/eval/` and are never called by the production `RAGBackend` — has been acted on.
+> All four retrieval strategies now ship behind `RETRIEVER_STRATEGY`
+> ([ADR 0004](../docs/adr/0004-retriever-seam-and-query-engine.md),
+> [ADR 0009](../docs/adr/0009-wire-hybrid-and-multi-query.md)), so the
+> "Dense-only, no fusion, no rerank" grade no longer describes this repo.
+> The module paths it cites (`src/eval/retrievers/`, `src/evaluation.py`) also predate
+> ADR 0004's move into `src/retrieval/` and ADR 0007's backend split.
+
+
 **Repo:** `rag-qa` · **Branch:** `feature/eval-harness-1d` · **Date:** 2026-07-12
 **Method:** Online deep scan (Tavily, 2025-06 → 2026-07 sources) + full codebase map (`Architecture.md` + `src/` trace).
 **Scope:** Retrieval efficiency, agentic patterns, context engineering, and evaluation quality — mapped to *this* system's actual code.

@@ -131,7 +131,7 @@ class QueryRewriterCfg(BaseModel):
     """LLM-based query expansion. None = no rewrite (current behavior).
 
     Phase 2 lever 2e: ask an LLM to produce up to N alternative phrasings of the user
-    query, retrieve against each, then deduplicate. Costs one LLM call per question;
+    query, retrieve against each, then fuse the rankings with RRF. Costs one LLM call per question;
     captured in the cost ledger under the 'rewriter' bucket.
     """
 
@@ -145,7 +145,7 @@ class QueryRewriterCfg(BaseModel):
 class RefusalHandlerCfg(BaseModel):
     """Answerability gate. enabled=False = current behavior.
 
-    Phase 2 lever 2g: when the top-1 retrieval similarity falls below `similarity_threshold`,
+    Phase 2 lever 2g: when the best retrieval similarity falls below `similarity_threshold`,
     short-circuit to `no_answer_text` instead of calling the generator. This trades
     answer_correctness on borderline-answerable questions for refusal_correctness on
     truly unanswerable ones — exactly the trade-off the SQuAD v2 dev set surfaces.

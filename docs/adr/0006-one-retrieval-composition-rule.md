@@ -1,6 +1,6 @@
 # ADR 0006 — One owner for the retrieval composition rule
 
-- **Status:** Accepted
+- **Status:** Accepted; the deferral bullet in Consequences is superseded by [ADR 0009](0009-wire-hybrid-and-multi-query.md)
 - **Sequencing:** Follow-up to ADR 0004, from the 2026-09-09 architecture review. Top recommendation of that review.
 - **Date:** 2026-09-09
 
@@ -27,7 +27,7 @@ The top-k travels with the retriever because reranking changes it. A caller that
 
 `compose_retrieval` takes an already-built **base Retriever**, not a vector store. It therefore composes without touching storage, an embedder, or a cross-encoder — which is what makes the rule unit-testable.
 
-**Production strategy names become presets.** `build_retrieval_plan(strategy, vector_store, ...)` maps `dense` / `reranked` onto `compose_retrieval` and keeps ADR 0004's deferral of `hybrid` and `multi_query`, error message and all. `src/retrieval/factory.py` is deleted rather than kept as a shim, following the ADR 0003/0004 precedent.
+**Production strategy names become presets.** `build_retrieval_plan(strategy, vector_store, ...)` maps `dense` / `reranked` onto `compose_retrieval` and keeps ADR 0004's deferral of `hybrid` and `multi_query`, error message and all. *(Superseded by [ADR 0009](0009-wire-hybrid-and-multi-query.md): all four names are now presets; the deferral branch is gone.)* `src/retrieval/factory.py` is deleted rather than kept as a shim, following the ADR 0003/0004 precedent.
 
 Both callers converge: `RAGBackend` builds a plan and feeds both halves to the engine; `EvalPipeline._get_engine` calls `compose_retrieval` with its lever objects.
 

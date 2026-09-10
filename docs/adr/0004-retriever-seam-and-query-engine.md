@@ -32,6 +32,10 @@ conform directly or compose an inner Retriever:
   re-scores with a cross-encoder.
 - `MultiQueryRetriever` composes an inner Retriever: fans rewritten queries out,
   unions, and dedups by chunk_id keeping each chunk's best score.
+  *(Superseded by [ADR 0009](0009-wire-hybrid-and-multi-query.md): the union is
+  now fused by RRF, because a union sorted by score is only meaningful when
+  every inner result scores in one space — which a hybrid inner retriever
+  breaks.)*
 
 The four eval-proven levers were **promoted from `src/eval/` to a core
 `src/retrieval/` package** (via `git mv`, no shims — same dependency-direction
@@ -54,6 +58,7 @@ planning pass, so sync keeps its single LLM call. The engine owns:
 **Production selects a strategy by config** (`RETRIEVER_STRATEGY`, default
 `dense`) through a `build_retriever` factory: `dense` and `reranked` are wired;
 `hybrid` and `multi_query` are recognised but **deferred** (see Consequences).
+*(Superseded by [ADR 0009](0009-wire-hybrid-and-multi-query.md): both are wired.)*
 `RAGBackend` delegates `query`/`query_with_telemetry`/`stream_query` to the
 engine and owns only conversation persistence.
 
@@ -86,7 +91,8 @@ to the shipped prompt and context builders.
   the dead `rewriter_cost_usd` field is dropped (verified: zero readers); and
   multi-query dedup shifts from first-seen to best-score-and-truncate (the
   *shipped* `MultiQueryRetriever` semantics) — a retrieval-metric shift that is
-  correct-by-definition once eval measures production. And because the gate is
+  correct-by-definition once eval measures production. (That semantics shifted
+  once more, to RRF fusion, in [ADR 0009](0009-wire-hybrid-and-multi-query.md).) And because the gate is
   checked before the no-documents branch, an eval run with an **empty index and
   no refusal handler** now returns the no-documents sentinel instead of
   generating from empty context (the old eval path) — latent, since eval always
