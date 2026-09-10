@@ -365,3 +365,76 @@ class TestSlidingWindow:
         assert window[2]["content"] == "Question 4"
         assert window[3]["role"] == "assistant"
         assert window[3]["content"] == "Answer 4"
+
+
+class TestConversationCharacterization:
+    """Behaviours the conversation cluster owns that had no direct test.
+
+    Pinned before that cluster was extracted from the facade so the extraction
+    could be proven behaviour-preserving rather than merely compiling.
+    """
+
+    def test_auto_title_only_replaces_the_placeholder(self, backend: RAGBackend):
+        conv_id = backend.create_conversation("New Chat")["id"]
+        backend._auto_title(conv_id, "What is retrieval augmented generation?")
+        titled = backend.get_conversation(conv_id)["title"]
+        assert titled != "New Chat"
+
+        backend._auto_title(conv_id, "A completely different question")
+        assert backend.get_conversation(conv_id)["title"] == titled, (
+            "a user-visible title must not be overwritten by a later turn"
+        )
+
+    def test_auto_title_truncates_on_a_word_boundary(self, backend: RAGBackend):
+        conv_id = backend.create_conversation()["id"]
+        backend._auto_title(conv_id, "supercalifragilistic " * 12)
+        title = backend.get_conversation(conv_id)["title"]
+        assert not title.rstrip(".").endswith("supercalifragilisti")
+
+    def test_save_message_returns_an_id_usable_after_commit(self, backend: RAGBackend):
+        """The id is captured before commit; SQLAlchemy expires attributes after."""
+        conv_id = backend.create_conversation()["id"]
+        msg_id = backend._save_message(conv_id, "user", "hello")
+        assert msg_id
+        assert any(
+            m["id"] == msg_id for m in backend.get_conversation(conv_id)["messages"]
+        )
+
+    def test_save_message_persists_sources_and_bumps_the_conversation(
+        self, backend: RAGBackend
+    ):
+        conv_id = backend.create_conversation()["id"]
+        before = backend.get_conversation(conv_id)["updated_at"]
+        msg_id = backend._save_message(
+            conv_id, "assistant", "answer", model="m",
+            sources=[{
+                "doc_id": "d", "chunk_id": "c", "filename": "f.txt",
+                "score": 0.5, "excerpt": "e",
+            }],
+        )
+        conv = backend.get_conversation(conv_id)
+        message = next(m for m in conv["messages"] if m["id"] == msg_id)
+        assert len(message["sources"]) == 1
+        assert conv["updated_at"] >= before
+
+    def test_search_matches_titles_and_message_bodies_without_duplicates(
+        self, backend: RAGBackend
+    ):
+        conv_id = backend.create_conversation("kangaroo notes")["id"]
+        backend._save_message(conv_id, "user", "tell me about kangaroo biology")
+
+        hits = backend.search_conversations("kangaroo")
+
+        assert [c["id"] for c in hits].count(conv_id) == 1, (
+            "a conversation matching on both title and body must appear once"
+        )
+
+    def test_list_conversations_puts_pinned_first(self, backend: RAGBackend):
+        first = backend.create_conversation("older")["id"]
+        second = backend.create_conversation("newer")["id"]
+        backend.update_conversation(first, pinned=True)
+
+        listed = [c["id"] for c in backend.list_conversations()]
+
+        assert listed[0] == first
+        assert second in listed
