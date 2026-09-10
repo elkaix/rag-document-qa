@@ -424,9 +424,29 @@ class RAGBackend:
 
         sources = [_source_dict(r) for r in results]
 
-        # PATTERN: Confidence = clamped average of top-3 similarity scores; 0.0
-        #          when there are no results (empty index or a refusal).
-        top_scores = [r.score for r in results[: min(3, len(results))]]
+        # PATTERN: Confidence = clamped average of the three best similarity
+        #          scores; 0.0 when there are no results (empty index or a
+        #          refusal).
+        # BUG FIX: this read ``results[:3]`` — the first three *positions*, not
+        #          the three best *scores*. The two are the same list only while
+        #          the retriever returns results in descending-score order.
+        #          Dense, reranked and multi-query retrieval do; hybrid
+        #          retrieval does not — it orders by fused RRF rank, and a
+        #          BM25-only hit carries score 0.0 because no cosine similarity
+        #          exists for it. With the default top_k of 5, a hybrid answer
+        #          led by two sparse-only hits reported roughly a third of its
+        #          real confidence — [0.0, 0.0, 0.88, 0.85, 0.80] scored 0.293
+        #          instead of 0.843, because the slice kept the two zeroes and
+        #          discarded the two strongest chunks. The frontend renders
+        #          that number to the user. (At three results or fewer the two
+        #          forms agree, which is why this survived the first pass.)
+        # WHY sort rather than require ordering at the seam: ``retrieve``
+        #          promises descending *relevance*, not descending *score* —
+        #          each strategy scores in its own space, and hybrid's is not
+        #          monotone in rank. The same conflation is what
+        #          ``RefusalHandler.should_refuse`` had to shed (ADR 0009).
+        #          Asking for the best scores is the question this metric means.
+        top_scores = sorted((r.score for r in results), reverse=True)[:3]
         confidence = (
             round(max(0.0, min(1.0, sum(top_scores) / len(top_scores))), 4) if top_scores else 0.0
         )
