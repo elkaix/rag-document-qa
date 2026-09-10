@@ -32,8 +32,6 @@ Where it fits in the RAG pipeline:
 import hashlib
 import logging
 import tempfile
-import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -46,23 +44,20 @@ from .config import (
     CHUNK_SIZE,
     DEFAULT_MODEL,
     EVAL_MODEL,
-    MAX_TITLE_LENGTH,
     REASONING_MODEL,
     RERANK_OVER_FETCH_N,
     RETRIEVER_STRATEGY,
     SLIDING_WINDOW_SIZE,
     TOP_K_RESULTS,
 )
+from .conversations import ConversationHistory, ConversationStore
 from .document_loader import DocumentLoader, TextChunker
+from .domain import SearchResult
 from .evaluation import MessageEvaluator
 from .llm_handler import LLMHandler
-from .models.conversation import Conversation
 from .models.document import DocumentRecord
-from .models.evaluation import MessageEvaluation
-from .models.message import Message, MessageSource
 from .query_engine import QueryEngine, StreamResult
 from .retrieval import build_retrieval_plan
-from .domain import SearchResult
 from .vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
@@ -165,6 +160,13 @@ class RAGBackend:
         #      model (gpt-4.1-mini by default) is cheap enough for real-time checks
         #      while strong enough to catch factual errors.
         self.eval_llm = LLMHandler(model=EVAL_MODEL, max_tokens=4096)
+
+        # PATTERN: Conversation persistence is its own module, depending only
+        #          on the session factory. The facade keeps its public methods
+        #          so routes are unaffected, but conversation bugs and their
+        #          tests now concentrate in one place.
+        self.conversations = ConversationStore(session_factory=self._session)
+        self.history = ConversationHistory(session_factory=self._session)
 
         # PATTERN: The evaluation cluster is its own module. The facade keeps
         #          the three public methods so routes are unaffected, but the
@@ -594,55 +596,27 @@ class RAGBackend:
         }
 
     # ------------------------------------------------------------------ #
-    # Conversation CRUD                                                    #
+    # Conversation CRUD — delegated to ConversationStore                   #
     # ------------------------------------------------------------------ #
 
     def create_conversation(self, title: str = "New Chat") -> dict[str, Any]:
-        """Create a new conversation in SQLite.
+        """Create a conversation.
 
         Args:
-            title: Human-readable conversation title.
+            title: Human-readable title.
 
         Returns:
-            Dict with id, title, created_at.
+            The conversation summary.
         """
-        conv = Conversation(title=title)
-        with self._session() as session:
-            session.add(conv)
-            session.commit()
-            session.refresh(conv)
-            return {
-                "id": conv.id,
-                "title": conv.title,
-                "pinned": conv.pinned,
-                "created_at": conv.created_at.isoformat(),
-                "updated_at": conv.updated_at.isoformat(),
-            }
+        return self.conversations.create(title)
 
     def list_conversations(self) -> list[dict[str, Any]]:
-        """Return all conversations, pinned first, then by updated_at descending.
-
-        WHY pinned first: Users pin important conversations so they stay at the
-        top of the sidebar regardless of when they were last updated.
+        """Return every conversation in sidebar order (pinned first).
 
         Returns:
-            List of conversation summary dicts.
+            Conversation summaries.
         """
-        with self._session() as session:
-            convs = session.exec(
-                select(Conversation)
-                .order_by(Conversation.pinned.desc(), Conversation.updated_at.desc())
-            ).all()
-            return [
-                {
-                    "id": c.id,
-                    "title": c.title,
-                    "pinned": c.pinned,
-                    "created_at": c.created_at.isoformat(),
-                    "updated_at": c.updated_at.isoformat(),
-                }
-                for c in convs
-            ]
+        return self.conversations.list_all()
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
         """Return a conversation with its messages and their sources.
@@ -651,55 +625,9 @@ class RAGBackend:
             conversation_id: UUID of the conversation.
 
         Returns:
-            Dict with id, title, messages (each with sources), or None if not found.
+            The detail shape, or None when not found.
         """
-        with self._session() as session:
-            conv = session.get(Conversation, conversation_id)
-            if conv is None:
-                return None
-
-            # WHY: Eagerly load messages ordered by creation time so the
-            #      frontend can render them in chronological order.
-            messages = session.exec(
-                select(Message)
-                .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at)
-            ).all()
-
-            msg_dicts = []
-            for msg in messages:
-                # Load sources for each message
-                sources = session.exec(
-                    select(MessageSource)
-                    .where(MessageSource.message_id == msg.id)
-                ).all()
-
-                msg_dicts.append({
-                    "id": msg.id,
-                    "role": msg.role,
-                    "content": msg.content,
-                    "model": msg.model,
-                    "created_at": msg.created_at.isoformat(),
-                    "sources": [
-                        {
-                            "doc_id": s.doc_id,
-                            "chunk_id": s.chunk_id,
-                            "filename": s.filename,
-                            "score": s.score,
-                            "excerpt": s.excerpt,
-                        }
-                        for s in sources
-                    ],
-                })
-
-            return {
-                "id": conv.id,
-                "title": conv.title,
-                "pinned": conv.pinned,
-                "created_at": conv.created_at.isoformat(),
-                "updated_at": conv.updated_at.isoformat(),
-                "messages": msg_dicts,
-            }
+        return self.conversations.get(conversation_id)
 
     def update_conversation(
         self,
@@ -707,179 +635,72 @@ class RAGBackend:
         title: str | None = None,
         pinned: bool | None = None,
     ) -> dict[str, Any] | None:
-        """Update a conversation's title and/or pinned status.
+        """Change a conversation's title and/or pinned state.
 
         Args:
             conversation_id: UUID of the conversation.
-            title: New title (if provided).
-            pinned: New pinned status (if provided).
+            title: New title, when supplied.
+            pinned: New pinned state, when supplied.
 
         Returns:
-            Updated conversation dict, or None if not found.
+            The updated summary, or None when not found.
         """
-        with self._session() as session:
-            conv = session.get(Conversation, conversation_id)
-            if conv is None:
-                return None
-
-            if title is not None:
-                conv.title = title
-            if pinned is not None:
-                conv.pinned = pinned
-
-            conv.updated_at = datetime.now(timezone.utc)
-            session.add(conv)
-            session.commit()
-            session.refresh(conv)
-
-            return {
-                "id": conv.id,
-                "title": conv.title,
-                "pinned": conv.pinned,
-                "created_at": conv.created_at.isoformat(),
-                "updated_at": conv.updated_at.isoformat(),
-            }
+        return self.conversations.update(conversation_id, title=title, pinned=pinned)
 
     def delete_conversation(self, conversation_id: str) -> bool:
-        """Delete a conversation and all its messages and sources (cascade).
-
-        WHY cascade: ON DELETE CASCADE in the FK definitions means deleting
-        the Conversation row automatically removes all child Messages and
-        grandchild MessageSources. The PRAGMA foreign_keys=ON listener in
-        database.py ensures this works in SQLite.
+        """Delete a conversation with its messages and sources.
 
         Args:
             conversation_id: UUID of the conversation.
 
         Returns:
-            True if deleted, False if not found.
+            True when deleted, False when not found.
         """
-        with self._session() as session:
-            conv = session.get(Conversation, conversation_id)
-            if conv is None:
-                return False
-            session.delete(conv)
-            session.commit()
-        return True
+        return self.conversations.delete(conversation_id)
 
     def search_conversations(self, query: str) -> list[dict[str, Any]]:
-        """Search conversations by title or message content.
-
-        Uses SQL LIKE for simple substring matching. For a portfolio project
-        this is adequate; production would use full-text search (FTS5).
+        """Find conversations by title or message content.
 
         Args:
             query: Search string.
 
         Returns:
-            List of matching conversation summary dicts.
+            Matching conversation summaries.
         """
-        with self._session() as session:
-            # WHY: Two separate queries then union the IDs. This avoids a
-            #      complex JOIN that could return duplicate rows.
-            matching_by_title = session.exec(
-                select(Conversation.id).where(Conversation.title.contains(query))
-            ).all()
-
-            matching_by_message = session.exec(
-                select(Message.conversation_id)
-                .where(Message.content.contains(query))
-            ).all()
-
-            # Combine and deduplicate
-            matching_ids = set(matching_by_title) | set(matching_by_message)
-
-            if not matching_ids:
-                return []
-
-            convs = session.exec(
-                select(Conversation)
-                .where(Conversation.id.in_(matching_ids))
-                .order_by(Conversation.updated_at.desc())
-            ).all()
-
-            return [
-                {
-                    "id": c.id,
-                    "title": c.title,
-                    "pinned": c.pinned,
-                    "created_at": c.created_at.isoformat(),
-                    "updated_at": c.updated_at.isoformat(),
-                }
-                for c in convs
-            ]
+        return self.conversations.search(query)
 
     def export_conversation(self, conversation_id: str) -> str | None:
-        """Export a conversation as a Markdown string.
-
-        Format:
-          # {title}
-          ---
-          **User:** {message}
-          **Assistant:** {message}
+        """Render a conversation as Markdown.
 
         Args:
             conversation_id: UUID of the conversation.
 
         Returns:
-            Markdown string, or None if conversation not found.
+            A Markdown transcript, or None when not found.
         """
-        data = self.get_conversation(conversation_id)
-        if data is None:
-            return None
-
-        lines = [f"# {data['title']}", "---", ""]
-        for msg in data["messages"]:
-            role_label = "User" if msg["role"] == "user" else "Assistant"
-            lines.append(f"**{role_label}:** {msg['content']}")
-            lines.append("")
-
-        return "\n".join(lines)
+        return self.conversations.export_markdown(conversation_id)
 
     def create_share_token(self, conversation_id: str) -> str | None:
-        """Generate a share token for read-only public access.
-
-        WHY UUID4: Opaque, unguessable tokens. Anyone with the token can
-        view the conversation, so it must not be sequential or predictable.
+        """Mint a read-only share token for a conversation.
 
         Args:
             conversation_id: UUID of the conversation.
 
         Returns:
-            UUID4 token string, or None if conversation not found.
+            The token, or None when not found.
         """
-        token = str(uuid.uuid4())
-        with self._session() as session:
-            conv = session.get(Conversation, conversation_id)
-            if conv is None:
-                return None
-            conv.share_token = token
-            session.add(conv)
-            session.commit()
-        return token
+        return self.conversations.create_share_token(conversation_id)
 
     def get_shared_conversation(self, token: str) -> dict[str, Any] | None:
-        """Retrieve a conversation by its share token.
+        """Return the conversation a share token points at.
 
         Args:
-            token: The share token string.
+            token: The share token.
 
         Returns:
-            Conversation dict with messages, or None if token is invalid.
+            The detail shape, or None when the token matches nothing.
         """
-        with self._session() as session:
-            conv = session.exec(
-                select(Conversation).where(Conversation.share_token == token)
-            ).first()
-            if conv is None:
-                return None
-            # WHY: Capture the ID inside the session scope to avoid detached
-            #      instance errors when get_conversation opens a new session.
-            conv_id = conv.id
-
-        # WHY: Reuse get_conversation to build the full response dict with
-        #      messages and sources, avoiding code duplication.
-        return self.get_conversation(conv_id)
+        return self.conversations.get_by_share_token(token)
 
     # ------------------------------------------------------------------ #
     # Evaluation                                                          #
@@ -927,7 +748,7 @@ class RAGBackend:
         return self.evaluator.scores_for(message_id)
 
     # ------------------------------------------------------------------ #
-    # Internal helpers                                                     #
+    # Internal helpers — delegated to ConversationHistory                   #
     # ------------------------------------------------------------------ #
 
     def _save_message(
@@ -938,148 +759,19 @@ class RAGBackend:
         model: str | None = None,
         sources: list[dict[str, Any]] | None = None,
     ) -> str:
-        """Persist a message (and optional sources) to SQLite.
-
-        Also updates the parent conversation's updated_at timestamp so that
-        list_conversations() sorts by most-recently-active.
-
-        Args:
-            conversation_id: UUID of the parent conversation.
-            role: "user" or "assistant".
-            content: Message text.
-            model: LLM model name (only for assistant messages).
-            sources: List of source dicts from retrieval (only for assistant).
-
-        Returns:
-            The UUID string of the newly created Message.
-        """
-        msg = Message(
-            conversation_id=conversation_id,
-            role=role,
-            content=content,
-            model=model,
+        """Persist one message and its sources. See ConversationHistory."""
+        return self.history.save_message(
+            conversation_id, role, content, model=model, sources=sources
         )
-
-        # WHY: Capture the ID before entering the session scope. Message.id is
-        #      set by default_factory at construction time (uuid4), so it's
-        #      available immediately. After session.commit(), SQLAlchemy expires
-        #      all attributes — accessing msg.id outside the session would
-        #      trigger a DetachedInstanceError.
-        msg_id = msg.id
-
-        with self._session() as session:
-            session.add(msg)
-
-            # WHY: Save sources as separate MessageSource rows rather than
-            #      embedding them in a JSON column. This keeps the schema
-            #      normalized and enables per-source queries.
-            if sources:
-                for src in sources:
-                    source = MessageSource(
-                        message_id=msg_id,
-                        doc_id=src.get("doc_id", ""),
-                        chunk_id=src.get("chunk_id", ""),
-                        filename=src.get("filename"),
-                        score=src.get("score", 0.0),
-                        excerpt=src.get("excerpt", ""),
-                    )
-                    session.add(source)
-
-            # Update conversation's updated_at timestamp
-            conv = session.get(Conversation, conversation_id)
-            if conv:
-                conv.updated_at = datetime.now(timezone.utc)
-                session.add(conv)
-
-            session.commit()
-
-        return msg_id
 
     def _get_sliding_window(
         self,
         conversation_id: str,
         max_pairs: int = SLIDING_WINDOW_SIZE,
     ) -> list[dict[str, str]]:
-        """Return the last N completed exchange pairs for LLM context.
+        """Return the last N completed exchanges. See ConversationHistory."""
+        return self.history.sliding_window(conversation_id, max_pairs=max_pairs)
 
-        CRITICAL: Only return COMPLETED pairs — a user message followed by an
-        assistant message. A user message with no assistant reply is NOT a
-        complete pair and must be excluded.
-
-        WHY exclude unpaired: the window is built from PRIOR completed pairs and
-        fed to the answer prompt, which appends the current question as its own
-        user turn. A dangling user message — e.g. a prior turn whose generation
-        failed before its assistant reply was persisted — must not leak in, or
-        the LLM would see a question with no answer and may repeat or get
-        confused. (Since step 4c the current turn is persisted only AFTER
-        generation, so the live question is never in the window regardless.)
-
-        Args:
-            conversation_id: UUID of the conversation.
-            max_pairs: Maximum number of user/assistant pairs to return.
-
-        Returns:
-            List of {"role": str, "content": str} dicts representing the
-            last max_pairs completed exchanges, in chronological order.
-        """
-        with self._session() as session:
-            messages = session.exec(
-                select(Message)
-                .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at)
-            ).all()
-
-            # Build completed pairs only (inside session scope to prevent
-            # DetachedInstanceError if a future change adds a commit above).
-            # WHY: We walk the message list looking for consecutive user->assistant
-            #      pairs. Any other pattern (user->user, assistant->assistant,
-            #      standalone messages) is skipped.
-            pairs: list[Message] = []
-            i = 0
-            while i < len(messages) - 1:
-                if messages[i].role == "user" and messages[i + 1].role == "assistant":
-                    pairs.append(messages[i])
-                    pairs.append(messages[i + 1])
-                    i += 2
-                else:
-                    i += 1
-
-            # Take the last max_pairs * 2 messages (each pair = 2 messages)
-            window = pairs[-(max_pairs * 2):]
-            return [{"role": m.role, "content": m.content} for m in window]
-
-    def _auto_title(
-        self,
-        conversation_id: str,
-        first_query: str,
-    ) -> None:
-        """Set the conversation title from the first user query if still "New Chat".
-
-        Truncates at a word boundary to avoid cutting mid-word, with a maximum
-        length of MAX_TITLE_LENGTH characters from config.
-
-        Args:
-            conversation_id: UUID of the conversation.
-            first_query: The user's first question text.
-        """
-        with self._session() as session:
-            conv = session.get(Conversation, conversation_id)
-            if conv is None or conv.title != "New Chat":
-                return
-
-            # Truncate at word boundary
-            title = first_query.strip()
-            if len(title) > MAX_TITLE_LENGTH:
-                # Find the last space before the limit
-                truncated = title[:MAX_TITLE_LENGTH]
-                last_space = truncated.rfind(" ")
-                if last_space > 0:
-                    title = truncated[:last_space] + "..."
-                else:
-                    # Single long word — hard truncate
-                    title = truncated + "..."
-
-            conv.title = title
-            conv.updated_at = datetime.now(timezone.utc)
-            session.add(conv)
-            session.commit()
+    def _auto_title(self, conversation_id: str, first_query: str) -> None:
+        """Name an untitled thread after its first question. See ConversationHistory."""
+        self.history.auto_title(conversation_id, first_query)

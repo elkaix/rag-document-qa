@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
+
+from src.api.dependencies import BackendDep
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,7 @@ router = APIRouter(prefix="/api", tags=["evaluation"])
     "/messages/{message_id}/evaluate",
     summary="Run full evaluation on a message",
 )
-def evaluate_message(message_id: str, request: Request):
+def evaluate_message(message_id: str, backend: BackendDep):
     """Trigger all three evaluation metrics for a stored assistant message.
 
     Runs faithfulness (if not already scored), answer_relevancy, and
@@ -46,7 +48,6 @@ def evaluate_message(message_id: str, request: Request):
     Returns:
         List of score dicts, or 404 if message not found / no results.
     """
-    backend = request.app.state.backend
     results = backend.evaluate_message(message_id)
     if not results:
         raise HTTPException(status_code=404, detail="Message not found or evaluation failed.")
@@ -57,11 +58,10 @@ def evaluate_message(message_id: str, request: Request):
     "/messages/{message_id}/evaluation",
     summary="Get existing evaluation scores for a message",
 )
-def get_evaluation(message_id: str, request: Request):
+def get_evaluation(message_id: str, backend: BackendDep):
     """Retrieve previously computed evaluation scores for a message.
 
     Returns:
         List of score dicts (may be empty if not yet evaluated).
     """
-    backend = request.app.state.backend
     return backend.get_evaluation(message_id)

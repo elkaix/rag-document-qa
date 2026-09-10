@@ -52,6 +52,17 @@ behaviour behind a small interface), **seam** (a boundary you can substitute at)
   telemetry assembly — all in one place. Both `RAGBackend` and the eval harness
   call it, so eval measures the shipped pipeline. See
   [ADR 0004](docs/adr/0004-retriever-seam-and-query-engine.md).
+- **ConversationStore** / **ConversationHistory** (`src/conversations/`) — the
+  two modules owning chat-thread persistence. The store handles the thread
+  lifecycle, search, export and share tokens; the history handles message
+  writes, the completed-pairs sliding window fed to the next prompt, and the
+  auto-title rule. Both take the session factory and nothing else. Wire shapes
+  live in `shaping.py`. See [ADR 0007](docs/adr/0007-backend-split.md).
+- **MessageEvaluator** (`src/evaluation/`) — orchestration around the judges:
+  load a persisted message, find the question it answered, score what has not
+  been scored yet, persist. The pure scoring functions live beside it in
+  `judges.py`. Judges are injected via a `Judges` struct so they can be
+  substituted without patching a module. See [ADR 0007](docs/adr/0007-backend-split.md).
 - **RefusalHandler** — an answerability gate (not a Retriever): refuses when the
   top-1 similarity is below a threshold (or nothing was retrieved). Applied
   inside the QueryEngine; off by default in production.

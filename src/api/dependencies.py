@@ -22,7 +22,9 @@ Why this approach over alternatives:
 
 from __future__ import annotations
 
-from fastapi import Request
+from typing import Annotated
+
+from fastapi import Depends, Request
 
 from src.backend import RAGBackend
 
@@ -45,3 +47,15 @@ def get_backend(request: Request) -> RAGBackend:
     stays in RAGBackend.
     """
     return request.app.state.backend
+
+
+# PATTERN: One annotated dependency, declared once and imported by every route
+#          module. A route writes `backend: BackendDep` and gets the shared
+#          facade; a test overrides get_backend and every route follows.
+#
+# BEFORE: only conversations.py used this seam, and it declared BackendDep
+#         locally. query.py, documents.py, upload.py and evaluation.py each read
+#         request.app.state.backend directly, so overriding the dependency in a
+#         test changed the behaviour of one route module out of five.
+# AFTER:  every route obtains the backend the same way.
+BackendDep = Annotated[RAGBackend, Depends(get_backend)]

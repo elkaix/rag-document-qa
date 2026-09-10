@@ -28,12 +28,12 @@ Where it fits in the RAG pipeline:
 from __future__ import annotations
 
 import logging
-from typing import Annotated, List
+from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
 
-from src.api.dependencies import get_backend
+from src.api.dependencies import BackendDep
 from src.api.models import (
     ConversationCreate,
     ConversationDetail,
@@ -42,19 +42,12 @@ from src.api.models import (
     MessageInfo,
     SourceInfo,
 )
-from src.backend import RAGBackend
 
 logger = logging.getLogger(__name__)
 
 # WHY: prefix="/api" groups all conversation routes under /api/conversations.
 #      tags=["conversations"] groups them in the OpenAPI docs sidebar.
 router = APIRouter(prefix="/api", tags=["conversations"])
-
-# PATTERN: Annotated dependency — the modern FastAPI way to declare dependencies.
-#          Instead of `backend = Depends(get_backend)` as a default param, we use
-#          Annotated[RAGBackend, Depends(get_backend)] which is clearer in type
-#          checkers and avoids the "mutable default argument" anti-pattern.
-BackendDep = Annotated[RAGBackend, Depends(get_backend)]
 
 
 # --------------------------------------------------------------------------- #

@@ -13,8 +13,9 @@ import json
 import logging
 import time
 
-from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
+from src.api.dependencies import BackendDep
 from src.api.models import QueryRequest, QueryResponse, SourceInfo
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ router = APIRouter(prefix="/api", tags=["query"])
     response_model=QueryResponse,
     summary="Ask a question against indexed documents",
 )
-async def query(request_body: QueryRequest, request: Request) -> QueryResponse:
+async def query(request_body: QueryRequest, backend: BackendDep) -> QueryResponse:
     """Submit a question and receive a RAG-generated answer with source citations.
 
     - **query**: The user question.
@@ -36,7 +37,6 @@ async def query(request_body: QueryRequest, request: Request) -> QueryResponse:
     """
     start = time.perf_counter()
 
-    backend = request.app.state.backend
     # WHY query_with_telemetry: replaces the plain query() call so we get
     #     per-stage timing and token-cost numbers in the response. The
     #     result_dict has the same shape as before — only telemetry is new.
