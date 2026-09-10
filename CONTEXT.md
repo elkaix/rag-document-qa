@@ -49,10 +49,33 @@ behaviour behind a small interface), **seam** (a boundary you can substitute at)
   `retrieve(query, top_k) -> list[SearchResult]`. Implementations either conform
   directly (`DenseRetriever`, `BM25HybridRetriever`) or *compose* an inner
   Retriever (`RerankingRetriever` over-fetches then cross-encodes;
-  `MultiQueryRetriever` fans rewritten queries out and dedups). Live in
+  `MultiQueryRetriever` fans rewritten queries out and fuses the per-expansion
+  rankings with RRF). Live in
   `src/retrieval/`; composed for both production and eval by
   `compose_retrieval` (`src/retrieval/composition.py`). See
   [ADR 0004](docs/adr/0004-retriever-seam-and-query-engine.md).
+- **ChunkCorpus** / **CorpusSnapshot** (`src/retrieval/corpus.py`) — the module
+  owning the freshness rule for anything derived from the whole corpus. A
+  snapshot is an immutable `{chunk_id: Chunk}` map tagged with the store
+  revision it was read at; `ChunkCorpus` re-reads only when
+  `ChromaVectorStore.revision` has moved. This is what let the BM25 half of
+  `BM25HybridRetriever` ship: its index used to freeze at construction, so
+  documents ingested afterwards were invisible and deleted ones still matched.
+  See [ADR 0009](docs/adr/0009-wire-hybrid-and-multi-query.md).
+- **SparseIndex** (`src/retrieval/sparse_index.py`) — the BM25 half of hybrid
+  retrieval, as pure functions: build an index over a `CorpusSnapshot`, score a
+  query against it, return ranked chunk ids. It owns the degradation rule —
+  BM25 is undefined over an empty or untokenizable corpus (a fresh deployment's
+  normal state), so the index reports that instead of raising and hybrid falls
+  back to dense-only. Split out of `hybrid.py` so that module owns one thing:
+  fusing two rankings. See [ADR 0010](docs/adr/0010-score-contract-and-retrieval-hardening.md).
+- **Reciprocal Rank Fusion** (`reciprocal_rank_fusion`, `src/retrieval/fusion.py`)
+  — merges several ranked id lists into one by rank rather than by score:
+  `score(d) = Σ 1/(rrf_k + rank_r(d))`. Used wherever the lists being merged
+  score in incomparable spaces — `BM25HybridRetriever` (sparse vs. dense) and
+  `MultiQueryRetriever` (one ranking per expansion). Extracted from `hybrid.py`
+  when the second caller arrived. See
+  [ADR 0009](docs/adr/0009-wire-hybrid-and-multi-query.md).
 - **QueryEngine** (`src/query_engine/`) — the deep module owning retrieve→generate
   for both the sync (`ask`) and streaming (`ask_stream`) paths: one Markdown
   answer prompt, filename-prefixed context, an optional refusal gate, and
@@ -70,6 +93,8 @@ behaviour behind a small interface), **seam** (a boundary you can substitute at)
   been scored yet, persist. The pure scoring functions live beside it in
   `judges.py`. Judges are injected via a `Judges` struct so they can be
   substituted without patching a module. See [ADR 0007](docs/adr/0007-backend-split.md).
-- **RefusalHandler** — an answerability gate (not a Retriever): refuses when the
-  top-1 similarity is below a threshold (or nothing was retrieved). Applied
+- **RefusalHandler** — an answerability gate (not a Retriever): refuses when no
+  candidate's similarity reaches a threshold (or nothing was retrieved). It reads
+  the best score in the set rather than position 0, because hybrid retrieval
+  orders by fused rank — [ADR 0009](docs/adr/0009-wire-hybrid-and-multi-query.md). Applied
   inside the QueryEngine; off by default in production.

@@ -133,12 +133,30 @@ class TestCompositionParity:
     def test_tuning_the_shared_constant_moves_both_sides_together(self):
         """The literals are single-sourced, so they cannot drift apart."""
         from src.config import (
+            HYBRID_BM25_TOP_K,
+            HYBRID_DENSE_TOP_K,
+            HYBRID_RRF_K,
+            MAX_QUERY_EXPANSIONS,
             REFUSAL_NO_ANSWER_TEXT,
             REFUSAL_SIMILARITY_THRESHOLD,
             RERANK_OVER_FETCH_N,
             TOP_K_RESULTS,
         )
-        from src.eval.config import RefusalHandlerCfg, RerankerCfg
+        from src.eval.config import (
+            HybridCfg,
+            QueryRewriterCfg,
+            RefusalHandlerCfg,
+            RerankerCfg,
+        )
+
+        # ADR 0009 wired the hybrid and multi-query strategies for production,
+        # so their tuning constants stopped being eval-only literals.
+        hybrid = HybridCfg()
+        assert hybrid.bm25_top_k == HYBRID_BM25_TOP_K
+        assert hybrid.dense_top_k == HYBRID_DENSE_TOP_K
+        assert hybrid.rrf_k == HYBRID_RRF_K
+
+        assert QueryRewriterCfg().max_expansions == MAX_QUERY_EXPANSIONS
 
         reranker = RerankerCfg()
         assert reranker.rerank_top_n == RERANK_OVER_FETCH_N

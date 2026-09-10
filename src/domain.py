@@ -105,7 +105,14 @@ class SearchResult:
     Attributes:
         content: The raw chunk text shown to the LLM as context.
         metadata: Source facts — filename, page, chunk_index.
-        score: Similarity in [0, 1]; 1 is identical, 0 is unrelated.
+        score: Relevance, oriented so higher is better. The *scale* is the
+            producing strategy's own and is NOT comparable across
+            strategies: dense retrieval reports a cosine similarity in
+            [0, 1], the cross-encoder reranker reports a raw logit
+            (roughly -11..+11), and hybrid retrieval reports 0.0 for a
+            sparse-only hit because no cosine similarity exists for one.
+            See ``Retriever.retrieve`` for what the seam does and does not
+            guarantee about ordering.
         doc_id: The document this chunk came from.
         chunk_id: This chunk's identifier.
 

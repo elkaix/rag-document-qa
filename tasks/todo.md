@@ -116,10 +116,114 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
       and both are recorded in `pyproject.toml` with why they fail. Config, not
       `Any` in a signature and not `# type: ignore` at six call sites.
 
+## Tranche 11 — wire the last two strategies  ✔ (ADR 0009)
+The two levers ADR 0004 left recognised-but-unbuildable, plus the robustness
+each one was deferred *for*. Closes the last open items of issue #16.
+
+- [x] E1 `ChromaVectorStore.revision` — a write counter, bumped by `upsert` and
+      `delete_by_doc_id`. The rejected alternative was explicit invalidation
+      from every mutation site, which is correct only until someone adds a
+      mutation site.
+- [x] E2 `ChunkCorpus` (`src/retrieval/corpus.py`) — materialises the whole
+      collection lazily, re-reads it when the revision moves, and returns the
+      same snapshot object while nothing has changed so the BM25 index can
+      cache on identity. Cold start deliberately starts at `None`, not at an
+      empty snapshot: a persistent collection restored from disk is at
+      revision 0 *and* non-empty.
+- [x] E3 `all_chunk_texts()` → `all_chunks() -> dict[str, Chunk]`. The
+      text-only shape is what made hybrid drop citations — a sparse-only hit
+      had no filename to show. ADR 0004 accepted that "while the lever is off
+      by default"; wiring it is when that expires.
+- [x] E4 `BM25HybridRetriever` takes the store, not a snapshot. Degrades to
+      dense-only instead of raising `ZeroDivisionError` on an empty or
+      untokenizable corpus (an empty index is the normal state of a fresh
+      deployment), and drops zero-score BM25 candidates so a corpus smaller
+      than `bm25_top_k` does not hand every chunk to the generator.
+- [x] E5 `RefusalHandler.should_refuse` reads the best score, not
+      `candidates[0]`. Hybrid orders by fused rank; a BM25-only hit carries
+      0.0, so the gate would have refused answerable questions. Identical
+      behaviour for dense / reranked / multi-query, all of which sort.
+- [x] E6 `QueryRewriter.expand` catches every provider failure and falls back
+      to the original query. Only `JSONDecodeError` was guarded, so a rate
+      limit failed the user's whole question over a *recall optimisation*.
+- [x] E7 Rewrite spend is logged at the `MultiQueryRetriever` seam rather than
+      returned — the seam stays `retrieve(query, top_k)`, on the same
+      verified-zero-readers reasoning that retired `rewriter_cost_usd`.
+- [x] E8 `build_retrieval_plan` wires all four strategies and raises when
+      `multi_query` has no configured model or handler. `QueryRewriter(None)`
+      is a legal pass-through, so the alternative is a deployment that thinks
+      it has recall it does not have.
+- [x] E9 `RETRIEVER_STRATEGY` and `QUERY_REWRITER_MODEL` read from the
+      environment; hybrid constants and `MAX_QUERY_EXPANSIONS` single-sourced
+      into `src/config.py`. ADR 0004 claimed promotion "by configuration, not
+      a code change" while the selector was a tracked literal.
+- [x] E10 Eval harness simplified: hybrid is built in `build_pipeline` like
+      every other lever, and the two divergent corpus-construction sites in
+      `ingest()` are gone.
+
+## Tranche 12 — audit the wired strategies, fix what it found ✔ (ADR 0010)
+
+Full read of `src/retrieval/`, `src/vector_store.py`, `src/domain.py` plus a
+docs-vs-code sweep, after ADR 0009 put both new strategies in the request path.
+
+- [x] F1 The seam promised an ordering one implementation does not provide.
+      `Retriever.retrieve` now promises descending *relevance*; `score` is
+      documented as strategy-specific and not cross-comparable. ADR 0009's
+      claim that the seam "never promised" ordering was simply wrong.
+- [x] F2 `RAGBackend` confidence averaged `results[:3]` — the first three
+      *positions*, not the three best *scores*. Under hybrid at the default
+      top_k of 5, `[0.0, 0.0, 0.88, 0.85, 0.80]` reported 0.293 instead of
+      0.843, and the frontend renders that number.
+- [x] F3 Thread safety. `RAGBackend` is a lifespan singleton and the websocket
+      path runs `retrieve()` on executor threads, so every cache ADR 0009 added
+      was written as if single-threaded: the revision counter, `ChunkCorpus`,
+      and the hybrid index cache (which returned the attribute, not the local
+      it had just built) are now locked or made tear-free.
+- [x] F4 A delete matching nothing no longer moves the revision — it forced a
+      full corpus re-read and BM25 rebuild on the ordinary 404 and retry paths.
+      The write lock spans the count and the delete, so a count of 0 is a real
+      guarantee.
+- [x] F5 `top_k` is a floor on the over-fetch. `POST /api/query` allows 50
+      while the widths default to 20, so `top_k=50` silently returned ≤20
+      (reranked) or ≤40 (hybrid).
+- [x] F6 RRF counts a repeated id once at its best rank; the false "ties keep
+      first-seen order" claim is replaced by the real caveats (float
+      non-associativity, and the argument-order bias hybrid inherits).
+- [x] F7 `QueryRewriter`'s expansion cap checked after the append, so
+      `max_expansions=0` returned two queries.
+- [x] F8 `sparse_index.py` split out of `hybrid.py`: BM25 build + scoring is
+      pure, so it tests without a store; `hybrid.py` owns fusing.
+- [x] F9 Docs resynced — stale "top-1 similarity" and "unions and dedups"
+      claims in `CONTEXT.md`, `refusal_handler`, `query_rewriter` and
+      `src/eval/config.py`; README config table (which had drifted to 500/50
+      against the real 512/64) and env table; three broken ADR 0007 links in
+      `Architecture.md`; superseded pointers on ADRs 0004 and 0006; historical
+      headers on the dated `docs/superpowers/` plans and the 2026-07 practices
+      report, whose central "nothing is wired" finding this work retired.
+- [x] F10 Module ceiling raised 250 → 350 (soft mark 300), with an explicit
+      rule that teaching comments are never shaved to fit. Prose trimmed under
+      the old limit earlier in this tranche was restored.
+
 ## Out of scope / deferred
-- **`hybrid` and `multi_query` retrieval strategies** stay deferred per
-  ADR 0004: `hybrid` needs a BM25 corpus kept in sync with ingestion and
-  deletion, which is a feature, not a refactor.
+- **`reranked` confidence is uninformative.** The cross-encoder writes a raw
+  logit into `SearchResult.score`, which the backend clamps to `[0, 1]`, so
+  confidence saturates at exactly 1.0 or 0.0. The fix is a sigmoid (monotonic,
+  so ranking survives) but it changes what `reranked` *reports* — moving
+  `RefusalHandler`'s 0.35 threshold and making stored eval runs incomparable to
+  new ones. Needs a scoring decision, not a patch. See ADR 0010.
+- **Five modules exceed even the new 350-line ceiling:** `backend.py` (818),
+  `vector_store.py` (505), `eval/pipeline_factory.py` (480),
+  `api/routes/eval.py` (421), `eval/runner.py` (391). Pre-existing; splitting
+  them is its own tranche.
+- **`Document.doc_id` / `Chunk.chunk_id` hashing.** `content_hash(content +
+  doc_id)` is not an injective encoding, so `("ab","c")` and `("a","bc")`
+  collide; and `Document.doc_id` ignores metadata, so the same text uploaded
+  under two filenames is one document and the surviving citation names
+  whichever upload ran last. Pre-existing, `src/domain.py:74,98`.
+- **`frontend` npm audit: 10 high, 5 moderate, 4 low.** All transitive except
+  `vite` and `react-router`. Dependency bumps want their own change.
+- **`docs/superpowers/plans/2026-04-27-...md` links `docs/PHASE2_RESULTS.md`,**
+  which does not exist. Historical plan; left as written.
 - **CI workflow changes** (shared infrastructure). Verified read-only that the
   new `pyproject.toml` does not affect it: CI installs with
   `uv pip install --system -r requirements.txt`, which ignores the file.

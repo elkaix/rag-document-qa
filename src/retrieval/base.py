@@ -37,9 +37,25 @@ class Retriever(Protocol):
 
         Args:
             query: Natural-language query.
-            top_k: Maximum number of results to return, best first.
+            top_k: Maximum number of results to return, most relevant first.
 
         Returns:
-            SearchResult list ordered by descending relevance (possibly empty).
+            SearchResult list ordered by descending *relevance*, possibly empty.
+
+        The ordering guarantee is deliberately about relevance and not about
+        ``SearchResult.score``. Every implementation ranks its results, but each
+        one scores them in its own space: ``DenseRetriever`` reports cosine
+        similarity, ``RerankingRetriever`` reports a cross-encoder logit, and
+        ``BM25HybridRetriever`` orders by fused RRF rank and reports ``0.0`` for
+        a sparse-only hit, because no cosine similarity exists for one. So
+        ``results[0]`` is the most relevant chunk, but ``results[0].score`` is
+        not necessarily the largest score in the list, and scores from two
+        different strategies do not compare at all.
+
+        A caller asking "how similar is the best match?" must therefore read
+        ``max(r.score for r in results)`` rather than index position 0 — the
+        distinction that ``RefusalHandler.should_refuse`` and ``RAGBackend``'s
+        confidence metric both had to be corrected for (ADR 0009). Callers that
+        only need the ranking can rely on list order as before.
         """
         ...

@@ -313,6 +313,9 @@ src/
 ├── retrieval/
 │   ├── base.py                   # The Retriever Protocol (the seam)
 │   ├── dense.py, hybrid.py       # Adapters: vector search, BM25 hybrid
+│   ├── corpus.py                 # ChunkCorpus — the BM25 corpus, kept in sync
+│   ├── fusion.py                 # Reciprocal Rank Fusion — merge rankings by rank
+│   ├── sparse_index.py           # BM25 index build + scoring (pure, no store)
 │   ├── reranker.py               # Cross-encoder reranking adapter
 │   ├── query_rewriter.py         # Multi-query rewriting adapter
 │   ├── refusal_handler.py        # Answerability gate
@@ -365,9 +368,15 @@ All settings are centralized in `src/config.py`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `CHUNK_SIZE` | 500 | Characters per chunk |
-| `CHUNK_OVERLAP` | 50 | Overlap between adjacent chunks |
+| `CHUNK_SIZE` | 512 | Characters per chunk |
+| `CHUNK_OVERLAP` | 64 | Overlap between adjacent chunks |
 | `TOP_K_RESULTS` | 5 | Number of chunks retrieved per query |
+| `RETRIEVER_STRATEGY` | `dense` | Which retrieval composition to build — `dense`, `hybrid`, `reranked`, `multi_query`. Env-overridable; an unknown name fails at startup |
+| `RERANK_OVER_FETCH_N` | 20 | Candidates the `reranked` strategy fetches before the cross-encoder narrows them |
+| `HYBRID_BM25_TOP_K` / `HYBRID_DENSE_TOP_K` | 20 / 20 | Candidates each half of `hybrid` contributes before RRF |
+| `HYBRID_RRF_K` | 60 | RRF damping constant |
+| `QUERY_REWRITER_MODEL` | unset | Model that expands queries under `multi_query`. Env-overridable; unset means the strategy refuses to build |
+| `MAX_QUERY_EXPANSIONS` | 3 | Alternative phrasings `multi_query` asks for |
 | `DEFAULT_MODEL` | `gpt-5-mini` | Default answer generation model |
 | `REASONING_MODEL` | `gpt-4.1-nano` | Chain-of-thought model (lightweight) |
 | `EVAL_MODEL` | `gpt-4.1-mini` | Evaluation judge model |
@@ -422,6 +431,9 @@ All optional. The system runs fully without any keys using local ChromaDB embedd
 |----------|---------|
 | `OPENAI_API_KEY` | OpenAI models (GPT-5, GPT-4.1, o-series) |
 | `ANTHROPIC_API_KEY` | Anthropic models (Claude Opus, Sonnet, Haiku) |
+| `GLM_API_KEY` / `GLM_BASE_URL` | GLM / Zhipu models; the base URL is an optional endpoint override |
+| `RETRIEVER_STRATEGY` | Retrieval composition: `dense` (default), `hybrid`, `reranked`, `multi_query` |
+| `QUERY_REWRITER_MODEL` | Required *only* for `RETRIEVER_STRATEGY=multi_query`; costs one extra LLM call per question |
 
 ---
 

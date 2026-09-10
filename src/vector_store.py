@@ -26,11 +26,12 @@ TRADE-OFF: ChromaDB stores data on disk by default (PersistentClient). For unit
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, ClassVar
 
 import chromadb
 
-from src.domain import SearchResult
+from src.domain import Chunk, SearchResult
 
 # Sentinel: "argument not supplied", distinct from an explicit None.
 _UNSET: Any = object()
@@ -126,10 +127,58 @@ class ChromaVectorStore:
             collection: A ChromaDB Collection configured for cosine space.
         """
         self._collection = collection
+        # WHY a write counter: a sparse (BM25) index is built from the *whole*
+        #      corpus, so it goes stale the moment a document is ingested or
+        #      deleted. Rather than make every mutation site remember to notify
+        #      every derived index, the store publishes a monotonic revision and
+        #      derived indexes compare it to the one they were built at. One
+        #      integer, one owner, and a new mutation method cannot forget it —
+        #      every write already goes through this class.
+        # TRADE-OFF: the counter is per-process and per-*instance*. The
+        #      per-process half is exactly as strong as ChromaDB's own
+        #      single-writer constraint (see the module header): production runs
+        #      one uvicorn worker. The per-instance half is the sharper edge —
+        #      a write issued through a *different* ChromaVectorStore wrapping
+        #      the same collection does not move this counter, so a derived
+        #      index would not learn about it. Production is safe because the
+        #      lifespan hands one store's collection to the one RAGBackend
+        #      (src/api/main.py), and every production write goes through that
+        #      backend; the eval harness owns its own store and its own indexes.
+        # WHY a lock: the single uvicorn worker is not single-*threaded*. The
+        #      websocket path drives retrieval through
+        #      ``loop.run_in_executor`` (src/api/routes/query.py), so ingest and
+        #      query can be inside this object on different threads. ``+= 1`` is
+        #      a read-modify-write, and two writes racing it net one increment —
+        #      which would leave a derived index recording a revision that
+        #      already covers a write it never saw: permanently stale, and
+        #      convinced it is fresh. The lock is held across the whole
+        #      mutation — the Chroma call *and* the increment — not just the
+        #      increment, so that "this delete matched nothing" stays true
+        #      through to the moment the counter decides not to move. Writes
+        #      already serialise at ChromaDB's single-writer constraint, so
+        #      this costs no throughput that was available anyway.
+        self._revision = 0
+        self._write_lock = threading.RLock()
         logger.debug(
             "ChromaVectorStore initialised with collection '%s'",
             collection.name,
         )
+
+    @property
+    def revision(self) -> int:
+        """Number of writes applied to this collection through this store.
+
+        Starts at 0 and increases by one per successful ``upsert`` or
+        ``delete_by_doc_id``. Derived indexes (the BM25 corpus) cache the
+        revision they were built at and rebuild when it moves, so they never
+        serve a corpus stale with respect to *this store's* writes. A delete
+        that matched nothing does not move it, because nothing changed.
+
+        Returns:
+            The current revision. Only equality against a previously observed
+            value is meaningful — the absolute number carries no information.
+        """
+        return self._revision
 
     @property
     def collection(self) -> chromadb.Collection:
@@ -200,7 +249,9 @@ class ChromaVectorStore:
             # to ChromaDB triggers auto-embedding via the collection's embedding function.
             kwargs["embeddings"] = [embeddings[i] for i in keep]
 
-        self._collection.upsert(**kwargs)
+        with self._write_lock:
+            self._collection.upsert(**kwargs)
+            self._revision += 1
         logger.debug("Upserted %d chunks into '%s'", len(keep), self._collection.name)
 
     # ---------------------------------------------------------------------- #
@@ -335,30 +386,46 @@ class ChromaVectorStore:
             for i, chunk_id in enumerate(raw["ids"])
         ]
 
-    def all_chunk_texts(self) -> dict[str, str]:
-        """Return every indexed chunk as ``{chunk_id: text}``.
+    def all_chunks(self) -> dict[str, Chunk]:
+        """Return every indexed chunk as ``{chunk_id: Chunk}``.
 
         WHY this method exists: a sparse retriever (BM25) needs the whole corpus
-        as text keyed by chunk id, which it cannot get from a similarity search.
-        The eval pipeline used to reach into ``vector_store._collection`` and
-        call ChromaDB's ``get()`` itself — twice, redundantly — parsing the raw
+        keyed by chunk id, which it cannot get from a similarity search. The
+        eval pipeline used to reach into ``vector_store._collection`` and call
+        ChromaDB's ``get()`` itself — twice, redundantly — parsing the raw
         batch-response shape at the call site. That is the same seam breach
         ``get_by_doc_id`` was added to close.
 
+        WHY ``Chunk`` and not ``{chunk_id: text}``: the text-only shape is what
+        made hybrid retrieval drop citations. ``BM25HybridRetriever`` could only
+        emit empty ``metadata``/``doc_id`` for any chunk the dense side did not
+        also return, so the filename a source card shows went missing exactly
+        for the results sparse retrieval contributed. Carrying the whole chunk
+        removes the possibility rather than documenting it.
+
         Returns:
-            Mapping of chunk_id to chunk text for the whole collection. Empty
-            when nothing has been indexed yet.
+            Mapping of chunk_id to Chunk for the whole collection. Empty when
+            nothing has been indexed yet.
 
         TRADE-OFF: this materialises the entire collection in memory, which is
             what a BM25 corpus requires. It is a corpus-build call, not a
-            per-query one.
+            per-query one — see ``ChunkCorpus``, which calls it once per store
+            revision rather than once per query.
         """
-        raw = self._collection.get(include=["documents"])
+        raw = self._collection.get(include=["documents", "metadatas"])
         ids = raw.get("ids") or []
         documents = raw.get("documents") or []
-        return {
-            chunk_id: documents[i] if i < len(documents) else "" for i, chunk_id in enumerate(ids)
-        }
+        metadatas = raw.get("metadatas") or []
+        corpus: dict[str, Chunk] = {}
+        for i, chunk_id in enumerate(ids):
+            meta = dict(metadatas[i]) if i < len(metadatas) and metadatas[i] else {}
+            corpus[chunk_id] = Chunk(
+                content=documents[i] if i < len(documents) else "",
+                metadata=meta,
+                chunk_id=chunk_id,
+                doc_id=str(meta.get("doc_id", "")),
+            )
+        return corpus
 
     # ---------------------------------------------------------------------- #
     # Delete operations                                                       #
@@ -386,9 +453,26 @@ class ChromaVectorStore:
         """
         # WHY count-then-delete: Chroma's delete() does not return a count, so
         # we look the matching IDs up first to report an accurate number.
-        matching = self._collection.get(where={"doc_id": doc_id}, include=[])
-        count = len(matching.get("ids", []))
-        self._collection.delete(where={"doc_id": doc_id})
+        # WHY the lock spans both calls: the count is what decides whether the
+        #     revision moves, so it has to still be true when that decision is
+        #     made. Unlocked, a concurrent upsert of this same doc_id could land
+        #     between the get and the delete — the delete would then remove a
+        #     chunk the count of 0 said did not exist, and the revision would
+        #     not move to tell any derived index about it.
+        with self._write_lock:
+            matching = self._collection.get(where={"doc_id": doc_id}, include=[])
+            count = len(matching.get("ids", []))
+            self._collection.delete(where={"doc_id": doc_id})
+            # WHY only on a real deletion: bumping unconditionally made a no-op
+            #     delete (an unknown or already-removed doc_id — the ordinary
+            #     404 path, and any retried delete) invalidate every derived
+            #     index, forcing a full corpus re-read and BM25 rebuild for a
+            #     call that changed nothing. The counter means "the corpus
+            #     differs from what you last saw", not "a write method was
+            #     called". Serialising with upsert above is what makes a count
+            #     of 0 a real guarantee rather than a hopeful one.
+            if count:
+                self._revision += 1
         logger.debug(
             "Deleted %d chunks for doc_id='%s' from '%s'",
             count,

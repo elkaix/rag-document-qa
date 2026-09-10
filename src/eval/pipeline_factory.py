@@ -86,7 +86,12 @@ class EvalPipeline:
 
     # Phase 2 additions — None when the corresponding lever is off. Composed into
     # a single Retriever by _get_engine(); the refusal gate is passed to the engine.
-    hybrid_retriever: Retriever | None = None  # BM25HybridRetriever, set during ingest
+    # WHY the hybrid retriever is no longer built during ingest: it used to take
+    #      a corpus snapshot, so it could only be constructed once chunks
+    #      existed — which is also why production could not have it at all. It
+    #      now tracks the store's revision (ADR 0009), so build_pipeline wires
+    #      it up front like every other lever.
+    hybrid_retriever: Retriever | None = None
     reranker: CrossEncoderReranker | None = None
     rewriter: QueryRewriter | None = None
     refusal_handler: RefusalHandler | None = None
@@ -103,8 +108,8 @@ class EvalPipeline:
     # missing-manifest no-op.
     ml_papers_manifest: Path = field(default=DEFAULT_ML_PAPERS_MANIFEST)
 
-    # Lazily-built QueryEngine, cached after the first query(). Deferred because
-    # the hybrid retriever is only assembled during ingest() (it needs the corpus).
+    # Lazily-built QueryEngine, cached after the first query(). Deferred so a
+    # run that never queries never pays for the cross-encoder download.
     _engine: QueryEngine | None = field(repr=False, default=None)
 
     def ingest(self, questions: list[EvalQuestion]) -> None:
@@ -158,17 +163,6 @@ class EvalPipeline:
             self.vector_store.upsert(ids=ids, documents=documents, metadatas=metadatas)
             logger.info("Ingested %d SQuAD contexts into '%s'.", len(ids), self._collection_name)
 
-            # Phase 2: build the hybrid retriever now that chunks are upserted.
-            # WHY here (lazy): BM25HybridRetriever needs the full chunk corpus at
-            # construction time. build_pipeline() runs before ingest, so we defer.
-            if self.config.pipeline.hybrid.enabled:
-                documents_map = dict(zip(ids, documents, strict=False))
-                self.hybrid_retriever = _build_hybrid_retriever(
-                    self.config.pipeline.hybrid,
-                    self.vector_store,
-                    documents_map,
-                )
-
     def _ingest_ml_papers(self) -> None:
         """Load, chunk, and upsert PDFs listed in corpus_manifest.json.
 
@@ -214,22 +208,6 @@ class EvalPipeline:
             )
             logger.info("Ingested paper %s: %d chunks.", paper.get("id"), len(chunks))
 
-        # Phase 2: build hybrid retriever over all upserted chunks.
-        # WHY after the loop: we need the complete corpus before building BM25.
-        if self.config.pipeline.hybrid.enabled:
-            # BEFORE: two redundant self.vector_store._collection.get() calls,
-            #         unpacking ChromaDB's raw batch shape here.
-            # AFTER:  one call through the store's own interface.
-            # WHY:    reaching past the store contradicted the encapsulation
-            #         rationale stated 120 lines above in this same file.
-            documents_map = self.vector_store.all_chunk_texts()
-            if documents_map:
-                self.hybrid_retriever = _build_hybrid_retriever(
-                    self.config.pipeline.hybrid,
-                    self.vector_store,
-                    documents_map,
-                )
-
     def query(self, question: str) -> tuple[list[SearchResult], str, dict]:
         """Retrieve chunks and generate an answer via the shared QueryEngine.
 
@@ -262,9 +240,9 @@ class EvalPipeline:
     def _get_engine(self) -> QueryEngine:
         """Build (once) and return the QueryEngine composed from the configured levers.
 
-        Built lazily because the hybrid retriever is only available after ingest().
-        The lever composition is the Retriever seam used as designed: multi-query
-        wraps the base retriever, reranking wraps that.
+        Built lazily so the cross-encoder is only downloaded by a run that
+        actually queries. The lever composition is the Retriever seam used as
+        designed: multi-query wraps the base retriever, reranking wraps that.
         """
         if self._engine is not None:
             return self._engine
@@ -386,7 +364,7 @@ def build_pipeline(
         judge_llm=judge_llm,
         config=config,
         dataset_name=dataset_name,
-        hybrid_retriever=None,  # built lazily in _ingest_squad / _ingest_ml_papers
+        hybrid_retriever=_build_hybrid_retriever(config.pipeline.hybrid, vector_store),
         reranker=_build_reranker(config.pipeline.reranker),
         rewriter=_build_rewriter(config.pipeline.query_rewriter, llm=llm),
         refusal_handler=_build_refusal(config.pipeline.refusal_handler),
@@ -423,13 +401,15 @@ def _build_embedding_function(cfg) -> object:
     raise ValueError(f"Unknown embedder name: {cfg.name}")
 
 
-def _build_hybrid_retriever(cfg, vector_store, documents: dict[str, str]):
+def _build_hybrid_retriever(cfg, vector_store):
     """Build BM25HybridRetriever if hybrid is enabled, else return None.
 
     Args:
         cfg: HybridCfg specifying enabled flag and RRF/top-k parameters.
-        vector_store: Dense retriever (Chroma collection wrapper).
-        documents: Mapping of chunk_id → raw document text for BM25 indexing.
+        vector_store: The collection both halves of the retriever read. The
+            retriever mirrors it into a BM25 index and refreshes that index
+            whenever the store's revision moves, so it may be built before
+            anything has been ingested.
 
     Returns:
         BM25HybridRetriever when cfg.enabled, else None.
@@ -440,7 +420,6 @@ def _build_hybrid_retriever(cfg, vector_store, documents: dict[str, str]):
 
     return BM25HybridRetriever(
         vector_store=vector_store,
-        documents=documents,
         bm25_top_k=cfg.bm25_top_k,
         dense_top_k=cfg.dense_top_k,
         rrf_k=cfg.rrf_k,

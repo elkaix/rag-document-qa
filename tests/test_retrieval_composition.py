@@ -142,8 +142,24 @@ class TestStrategyPresets:
         with pytest.raises(ValueError, match="Unknown retriever strategy"):
             build_retrieval_plan("nonsense", populated_vector_store)
 
-    def test_deferred_strategy_explains_itself(self, populated_vector_store):
+    def test_hybrid_is_wired_not_deferred(self, populated_vector_store):
+        """ADR 0009 turned the two recognised-but-unbuildable names into presets."""
+        from src.retrieval.composition import build_retrieval_plan
+        from src.retrieval.hybrid import BM25HybridRetriever
+
+        plan = build_retrieval_plan("hybrid", populated_vector_store)
+        assert isinstance(plan.retriever, BM25HybridRetriever)
+        assert plan.top_k == 5
+
+    def test_multi_query_is_wired_not_deferred(self, populated_vector_store, monkeypatch):
         from src.retrieval.composition import build_retrieval_plan
 
-        with pytest.raises(ValueError, match="ADR 0004"):
-            build_retrieval_plan("hybrid", populated_vector_store)
+        monkeypatch.setattr("src.retrieval.composition.QUERY_REWRITER_MODEL", "gpt-4.1-nano")
+
+        class _LLM:
+            def generate_with_usage(self, prompt, system_prompt=None):
+                return "[]", 0, 0
+
+        plan = build_retrieval_plan("multi_query", populated_vector_store, llm=_LLM())
+        assert isinstance(plan.retriever, MultiQueryRetriever)
+        assert plan.top_k == 5

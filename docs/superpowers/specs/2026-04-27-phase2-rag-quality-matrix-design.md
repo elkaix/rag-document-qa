@@ -1,5 +1,8 @@
 # Phase 2 — RAG Quality Matrix (Design Spec)
 
+> ⚠️ **Historical record — do not read as current behaviour.** Dated 2026-04-27. The hybrid, multi-query and refusal levers it describes were rewritten when they were wired for production: the BM25 corpus now tracks the store's revision instead of freezing at construction, multi-query fuses by RRF instead of unioning and sorting by score, and the refusal gate reads the best score in the set instead of position 0. See [ADR 0009](../../adr/0009-wire-hybrid-and-multi-query.md) for what actually ships.
+
+
 > **Status:** revised 2026-04-27 after spec review. Pending implementation plan via `superpowers:writing-plans`.
 > **Author:** Mohamed Elkholy
 > **Predecessor:** [`2026-04-26-rag-eval-harness-phase-1-design.md`](./2026-04-26-rag-eval-harness-phase-1-design.md) (Phase 1, eval harness)

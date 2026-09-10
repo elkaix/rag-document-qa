@@ -70,15 +70,56 @@ TOP_K_RESULTS: int = 5
 # WHY a strategy selector: the Retriever seam (ADR 0004) makes dense, reranked,
 #      hybrid, and multi-query retrieval interchangeable. Production picks one
 #      here, so an eval-validated chain is promoted by config, not by a rewrite.
-#      "dense" is the behaviour-preserving default; "reranked" is wired;
-#      "hybrid"/"multi_query" are recognised but deferred (see build_retrieval_plan).
-RETRIEVER_STRATEGY: str = "dense"
+#      All four are wired (ADR 0009); "dense" is the behaviour-preserving
+#      default. An unknown name fails loudly at startup rather than falling
+#      back — see build_retrieval_plan.
+# WHY read from the environment: "promoted by configuration, not by a code
+#      change" was ADR 0004's central claim, and a bare literal made it false —
+#      switching strategies meant editing a tracked source file and
+#      redeploying. A deployment now sets RETRIEVER_STRATEGY and restarts.
+RETRIEVER_STRATEGY: str = os.getenv("RETRIEVER_STRATEGY", "").strip() or "dense"
 
 # WHY 20: the reranked strategy over-fetches this many dense candidates before
 #         the cross-encoder narrows them — wide enough to give the precise
 #         reranker real choice. The eval harness imports this constant rather
 #         than repeating the number, so the two cannot drift.
 RERANK_OVER_FETCH_N: int = 20
+
+# ---------------------------------------------------------------------------
+# Hybrid (BM25 + dense) retrieval
+# ---------------------------------------------------------------------------
+
+# WHY these live here rather than only in the eval schema: they were literals in
+#      src/eval/config.py that production had no equivalent of at all, because
+#      the hybrid strategy could not be built for production. Now that it can,
+#      the same numbers must drive both sides or eval stops measuring what ships
+#      — the single-sourcing already done for the reranker and refusal levers.
+# WHY 20/20: each half contributes a candidate pool several times wider than the
+#      final top-k, so fusion has something to disagree about. Narrower pools
+#      make RRF degenerate toward whichever retriever ranked first.
+HYBRID_BM25_TOP_K: int = 20
+HYBRID_DENSE_TOP_K: int = 20
+
+# WHY 60: the constant from the original RRF paper (Cormack et al., 2009) and
+#         the value every published comparison uses. Smaller sharpens the
+#         weight on top ranks; larger flattens the two lists toward equal say.
+HYBRID_RRF_K: int = 60
+
+# ---------------------------------------------------------------------------
+# Multi-query expansion
+# ---------------------------------------------------------------------------
+
+# WHY unset by default and read from the environment: expansion costs one extra
+#      LLM call per question, so turning it on is a spend decision that belongs
+#      to whoever runs the deployment, not to this file. Unset means the
+#      multi_query strategy refuses to build rather than silently degrading to
+#      dense — a strategy that quietly does nothing is worse than one that
+#      won't start.
+QUERY_REWRITER_MODEL: str | None = os.getenv("QUERY_REWRITER_MODEL", "").strip() or None
+
+# WHY 3: the original query plus three rephrasings is where recall gains flatten
+#        in the eval runs, and each extra phrasing is another full retrieval.
+MAX_QUERY_EXPANSIONS: int = 3
 
 # WHY the refusal defaults live here and not only in the eval config: the gate
 #      is off in production today, but its threshold and its user-facing text

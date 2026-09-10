@@ -26,6 +26,12 @@ Why this approach over alternatives:
     and which would have broken the moment either was tuned. This module is the
     one owner; the strategy names become presets over it.
 
+    ADR 0009 finished the job: ``hybrid`` and ``multi_query``, which ADR 0004
+    left recognised-but-unbuildable, are now presets like the other two. Each
+    preset activates one lever; stacking several at once is what calling
+    ``compose_retrieval`` directly is for, and the eval harness does exactly
+    that.
+
 Design Decision:
     ``compose_retrieval`` takes an already-built base Retriever rather than a
     vector store, so it composes without touching storage, an embedder, or a
@@ -41,21 +47,30 @@ from dataclasses import dataclass
 #      an identical local copy is a *different* type to a type checker, so
 #      passing a real QueryRewriter through this module failed to type-check
 #      even though it satisfied the contract.
-from src.config import RERANK_OVER_FETCH_N, TOP_K_RESULTS
+from src.config import (
+    HYBRID_BM25_TOP_K,
+    HYBRID_DENSE_TOP_K,
+    HYBRID_RRF_K,
+    MAX_QUERY_EXPANSIONS,
+    QUERY_REWRITER_MODEL,
+    RERANK_OVER_FETCH_N,
+    TOP_K_RESULTS,
+)
 from src.retrieval.base import Retriever
 from src.retrieval.dense import DenseRetriever
-from src.retrieval.query_rewriter import MultiQueryRetriever, _Rewriter
+from src.retrieval.hybrid import BM25HybridRetriever
+from src.retrieval.query_rewriter import (
+    MultiQueryRetriever,
+    QueryRewriter,
+    _LLMHandler,
+    _Rewriter,
+)
 from src.retrieval.reranker import (
     CrossEncoderReranker,
     RerankingRetriever,
     _Reranker,
 )
 from src.vector_store import ChromaVectorStore
-
-_DEFERRED = {
-    "hybrid": "needs a live BM25 corpus synced with ingestion (a new feature)",
-    "multi_query": "lands with its rewriter-cost surfacing",
-}
 
 
 @dataclass(frozen=True)
@@ -122,48 +137,108 @@ def compose_retrieval(
     )
 
 
+def _production_rewriter(llm: _LLMHandler | None) -> QueryRewriter:
+    """Build the configured query rewriter, or say precisely why it cannot.
+
+    Args:
+        llm: The handler the rewriter calls for expansions.
+
+    Returns:
+        A rewriter wired to ``QUERY_REWRITER_MODEL``.
+
+    Raises:
+        ValueError: If no rewriter model is configured, or no LLM handler was
+            supplied to build one with.
+
+    WHY this raises instead of returning None: ``QueryRewriter(model=None)`` is
+        a legal pass-through, so an unconfigured multi_query strategy would
+        compose a MultiQueryRetriever that expands nothing and behaves exactly
+        like dense retrieval — a deployment believing it had recall it did not
+        have, with no error anywhere. Failing at startup is the whole point of
+        validating at the boundary.
+    """
+    if QUERY_REWRITER_MODEL is None:
+        raise ValueError(
+            "Retriever strategy 'multi_query' needs a rewriter model: set "
+            "QUERY_REWRITER_MODEL (see src/config.py). It is unset, and a "
+            "rewriter without a model expands nothing."
+        )
+    if llm is None:
+        raise ValueError(
+            "Retriever strategy 'multi_query' needs an LLM handler to expand "
+            "queries with; build_retrieval_plan was called without one."
+        )
+    return QueryRewriter(
+        model=QUERY_REWRITER_MODEL,
+        max_expansions=MAX_QUERY_EXPANSIONS,
+        llm=llm,
+    )
+
+
 def build_retrieval_plan(
     strategy: str,
     vector_store: ChromaVectorStore,
     top_k: int = TOP_K_RESULTS,
     rerank_over_fetch_n: int = RERANK_OVER_FETCH_N,
+    llm: _LLMHandler | None = None,
 ) -> RetrievalPlan:
     """Build the production retrieval plan for a configured strategy name.
 
     The strategy names are presets over :func:`compose_retrieval`, so production
-    and the eval harness share one composition rule.
+    and the eval harness share one composition rule. Each preset activates a
+    single lever over the dense baseline; the eval harness stacks several at
+    once by calling :func:`compose_retrieval` directly.
 
     Args:
-        strategy: ``dense`` or ``reranked`` (wired), or ``hybrid`` /
-            ``multi_query`` (recognised but deferred — see ADR 0004).
-        vector_store: The dense index every strategy is built over.
+        strategy: ``dense``, ``hybrid``, ``reranked``, or ``multi_query``.
+        vector_store: The index every strategy is built over.
         top_k: Chunks the engine should end up with.
         rerank_over_fetch_n: Candidate width the reranked strategy over-fetches.
+        llm: Handler the ``multi_query`` strategy expands queries with. Unused
+            by every other strategy.
 
     Returns:
         The composed retriever and its effective top-k.
 
     Raises:
-        ValueError: If the strategy is unknown, or recognised but not yet wired
-            for production.
+        ValueError: If the strategy is unknown, or is known but its required
+            configuration is missing.
     """
-    dense = DenseRetriever(vector_store)
-
     if strategy == "dense":
-        return compose_retrieval(base=dense, top_k=top_k)
+        return compose_retrieval(base=DenseRetriever(vector_store), top_k=top_k)
+
+    if strategy == "hybrid":
+        # WHY the retriever takes the store and not a corpus: it keeps its BM25
+        #     index in step with the store's revision, so documents ingested or
+        #     deleted after startup are reflected on the next query. That
+        #     freshness rule is what ADR 0004 deferred this strategy for; see
+        #     ADR 0009.
+        return compose_retrieval(
+            base=BM25HybridRetriever(
+                vector_store,
+                bm25_top_k=HYBRID_BM25_TOP_K,
+                dense_top_k=HYBRID_DENSE_TOP_K,
+                rrf_k=HYBRID_RRF_K,
+            ),
+            top_k=top_k,
+        )
 
     if strategy == "reranked":
         return compose_retrieval(
-            base=dense,
+            base=DenseRetriever(vector_store),
             reranker=CrossEncoderReranker(),
             top_k=top_k,
             rerank_over_fetch_n=rerank_over_fetch_n,
         )
 
-    if strategy in _DEFERRED:
-        raise ValueError(
-            f"Retriever strategy {strategy!r} is validated in the eval harness but "
-            f"not yet wired for production ({_DEFERRED[strategy]}); see ADR 0004."
+    if strategy == "multi_query":
+        return compose_retrieval(
+            base=DenseRetriever(vector_store),
+            rewriter=_production_rewriter(llm),
+            top_k=top_k,
         )
 
-    raise ValueError(f"Unknown retriever strategy: {strategy!r}")
+    raise ValueError(
+        f"Unknown retriever strategy: {strategy!r}. "
+        "Expected one of: dense, hybrid, reranked, multi_query."
+    )
