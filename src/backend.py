@@ -74,9 +74,20 @@ logger = logging.getLogger(__name__)
 def _source_dict(result: SearchResult) -> dict[str, Any]:
     """Shape one retrieved chunk into the source-citation dict the API returns.
 
-    Returns the fields common to both query paths; the synchronous path attaches
-    ``chunk_index`` on top (the streaming path historically omits it). The two
-    shapes unify under a typed SourceInfo in step 7 of issue #16.
+    This is the single definition of a source citation. Both query paths use it,
+    so a citation carries the same fields whichever endpoint produced it.
+
+    Args:
+        result: One chunk returned by the Retriever.
+
+    Returns:
+        The citation dict the API serialises and the frontend renders.
+
+    BEFORE: the synchronous path spread this dict and added ``chunk_index``;
+            the streaming path used the dict as-is, so the two endpoints
+            returned different field sets for the same concept.
+    AFTER:  ``chunk_index`` lives here, so the shapes cannot drift again.
+    WHY:    one component renders citations from both paths.
     """
     return {
         "doc_id": result.doc_id,
@@ -84,6 +95,7 @@ def _source_dict(result: SearchResult) -> dict[str, Any]:
         "filename": result.metadata.get("filename"),
         "score": round(result.score, 4),
         "excerpt": result.content[:300],
+        "chunk_index": result.metadata.get("chunk_index"),
     }
 
 
@@ -380,10 +392,7 @@ class RAGBackend:
         """
         results, answer, telemetry = self.query_engine.ask(question, top_k=top_k, model=model)
 
-        sources = [
-            {**_source_dict(r), "chunk_index": r.metadata.get("chunk_index")}
-            for r in results
-        ]
+        sources = [_source_dict(r) for r in results]
 
         # PATTERN: Confidence = clamped average of top-3 similarity scores; 0.0
         #          when there are no results (empty index or a refusal).

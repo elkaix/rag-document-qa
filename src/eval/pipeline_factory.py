@@ -208,10 +208,13 @@ class EvalPipeline:
         # Phase 2: build hybrid retriever over all upserted chunks.
         # WHY after the loop: we need the complete corpus before building BM25.
         if self.config.pipeline.hybrid.enabled:
-            all_ids = self.vector_store._collection.get()["ids"]
-            all_docs = self.vector_store._collection.get()["documents"]
-            if all_ids:
-                documents_map = dict(zip(all_ids, all_docs))
+            # BEFORE: two redundant self.vector_store._collection.get() calls,
+            #         unpacking ChromaDB's raw batch shape here.
+            # AFTER:  one call through the store's own interface.
+            # WHY:    reaching past the store contradicted the encapsulation
+            #         rationale stated 120 lines above in this same file.
+            documents_map = self.vector_store.all_chunk_texts()
+            if documents_map:
                 self.hybrid_retriever = _build_hybrid_retriever(
                     self.config.pipeline.hybrid, self.vector_store, documents_map,
                 )

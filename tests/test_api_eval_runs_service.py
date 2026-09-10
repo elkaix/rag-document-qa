@@ -108,3 +108,75 @@ class TestEviction:
         evicted = reg.evict_old(ttl_seconds=0.0)
         assert evicted == 0
         assert reg.get("active") is not None
+
+
+class TestProgressReporting:
+    """Regression tests for the progress defect found in the 2026-09-09 review.
+
+    BEFORE: the route registered every run with n_total=0 and its progress
+            callback discarded the runner's `total` argument, so n_total stayed
+            0 forever and the polling endpoint reported 0.0 for the whole run
+            and then jumped to 1.0. Registry and runner were each unit-tested;
+            the joint between them was not.
+    """
+
+    def test_update_progress_records_total_when_supplied(self):
+        """The runner learns the question count only after loading datasets."""
+        reg = RunRegistry()
+        reg.register("r1", n_total=0)
+        reg.update_progress("r1", 3, n_total=12)
+        s = reg.get("r1")
+        assert s.n_total == 12
+        assert s.n_completed == 3
+
+    def test_update_progress_keeps_known_total_when_omitted(self):
+        reg = RunRegistry()
+        reg.register("r1", n_total=10)
+        reg.update_progress("r1", 4)
+        assert reg.get("r1").n_total == 10
+
+    def test_mark_completed_uses_the_learned_total(self):
+        reg = RunRegistry()
+        reg.register("r1", n_total=0)
+        reg.update_progress("r1", 5, n_total=20)
+        reg.mark_completed("r1")
+        s = reg.get("r1")
+        assert s.n_total == 20
+        assert s.n_completed == 20
+
+
+class TestProgressFraction:
+    """The fraction the status endpoint reports, as a directly testable rule."""
+
+    def test_reports_fraction_while_running(self):
+        from src.api.services.eval_runs import progress_fraction
+
+        reg = RunRegistry()
+        reg.register("r1", n_total=0)
+        reg.update_progress("r1", 3, n_total=12)
+        assert progress_fraction(reg.get("r1")) == pytest.approx(0.25)
+
+    def test_reports_zero_before_the_total_is_known(self):
+        from src.api.services.eval_runs import progress_fraction
+
+        reg = RunRegistry()
+        reg.register("r1", n_total=0)
+        assert progress_fraction(reg.get("r1")) == 0.0
+
+    def test_reports_one_when_completed(self):
+        from src.api.services.eval_runs import progress_fraction
+
+        reg = RunRegistry()
+        reg.register("r1", n_total=0)
+        reg.update_progress("r1", 5, n_total=20)
+        reg.mark_completed("r1")
+        assert progress_fraction(reg.get("r1")) == 1.0
+
+    def test_failed_run_keeps_its_partial_fraction(self):
+        from src.api.services.eval_runs import progress_fraction
+
+        reg = RunRegistry()
+        reg.register("r1", n_total=0)
+        reg.update_progress("r1", 2, n_total=8)
+        reg.mark_failed("r1", "boom")
+        assert progress_fraction(reg.get("r1")) == pytest.approx(0.25)

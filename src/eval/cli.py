@@ -27,21 +27,9 @@ from pathlib import Path
 from typing import Any
 
 from src.config import load_env
+from src.eval.doubles import resolve_llm_overrides
 
 logger = logging.getLogger(__name__)
-
-
-# --------------------------------------------------------------------------- #
-# DummyLLM — test-only, gated behind EVAL_LLM_OVERRIDE_DUMMY=1               #
-# --------------------------------------------------------------------------- #
-
-class _DummyLLM:
-    """Returns canned data for any prompt — used only when EVAL_LLM_OVERRIDE_DUMMY=1."""
-    def generate(self, prompt: str, system_prompt: str | None = None) -> str:
-        if "JSON" in (system_prompt or "") or '"score"' in prompt:
-            return ('{"score": 1.0, "claims": [], "chunks": [], '
-                    '"factual_match": 1.0, "is_refusal": false, "reasoning": "ok"}')
-        return "<dummy>"
 
 
 # --------------------------------------------------------------------------- #
@@ -65,17 +53,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     except (FileNotFoundError, Exception) as exc:
         print(f"Error loading config: {exc}")
         return 1
-    llm_override = None
-    judge_llm_override = None
-    if os.getenv("EVAL_LLM_OVERRIDE_DUMMY") == "1":
-        dummy = _DummyLLM()
-        llm_override = dummy
-        judge_llm_override = dummy
+    overrides = resolve_llm_overrides()
     runner = EvalRunner(
         config,
         config_path=args.config,
-        llm_override=llm_override,
-        judge_llm_override=judge_llm_override,
+        llm_override=overrides.llm,
+        judge_llm_override=overrides.judge_llm,
     )
 
     try:

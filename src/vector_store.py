@@ -274,6 +274,32 @@ class ChromaVectorStore:
             for i, chunk_id in enumerate(raw["ids"])
         ]
 
+    def all_chunk_texts(self) -> dict[str, str]:
+        """Return every indexed chunk as ``{chunk_id: text}``.
+
+        WHY this method exists: a sparse retriever (BM25) needs the whole corpus
+        as text keyed by chunk id, which it cannot get from a similarity search.
+        The eval pipeline used to reach into ``vector_store._collection`` and
+        call ChromaDB's ``get()`` itself — twice, redundantly — parsing the raw
+        batch-response shape at the call site. That is the same seam breach
+        ``get_by_doc_id`` was added to close.
+
+        Returns:
+            Mapping of chunk_id to chunk text for the whole collection. Empty
+            when nothing has been indexed yet.
+
+        TRADE-OFF: this materialises the entire collection in memory, which is
+            what a BM25 corpus requires. It is a corpus-build call, not a
+            per-query one.
+        """
+        raw = self._collection.get(include=["documents"])
+        ids = raw.get("ids") or []
+        documents = raw.get("documents") or []
+        return {
+            chunk_id: documents[i] if i < len(documents) else ""
+            for i, chunk_id in enumerate(ids)
+        }
+
     # ---------------------------------------------------------------------- #
     # Delete operations                                                       #
     # ---------------------------------------------------------------------- #

@@ -33,7 +33,8 @@ from src.api.schemas.eval import (
     RunSubmitResponse,
     RunSummaryDTO,
 )
-from src.api.services.eval_runs import RunRegistry
+from src.api.services.eval_runs import RunRegistry, progress_fraction
+from src.eval.doubles import resolve_llm_overrides
 from src.eval.compare import compare_runs as _compare_runs_impl
 from src.eval.config import load_config
 from src.eval.runner import EvalRunner
@@ -97,22 +98,24 @@ def _run_eval_in_background(
     cfg_path = CONFIGS_DIR / f"{config_name}.yaml"
     cfg = load_config(cfg_path)
 
-    # PATTERN: respect EVAL_LLM_OVERRIDE_DUMMY=1 — same logic as cli._cmd_run.
-    # This makes the test harness fast (no real LLM calls).
-    llm_override = None
-    judge_llm_override = None
-    if os.getenv("EVAL_LLM_OVERRIDE_DUMMY") == "1":
-        from src.eval.cli import _DummyLLM
-        dummy = _DummyLLM()
-        llm_override = dummy
-        judge_llm_override = dummy
+    # BEFORE: this imported a *private* _DummyLLM out of src.eval.cli and
+    #         repeated the CLI's environment dispatch verbatim.
+    # AFTER:  one public resolver owned by the eval package.
+    # WHY:    the HTTP layer must not reach into another module's privates, and
+    #         one decision should not exist in two copies.
+    overrides = resolve_llm_overrides()
 
     runner = EvalRunner(
         cfg,
         config_path=cfg_path,
-        llm_override=llm_override,
-        judge_llm_override=judge_llm_override,
-        on_progress=lambda done, total: registry.update_progress(run_id, done),
+        llm_override=overrides.llm,
+        judge_llm_override=overrides.judge_llm,
+        # WHY forward `total`: the runner learns the question count when it
+        #      loads its datasets, which is after the run was registered.
+        #      Dropping it here left n_total at 0 and froze progress at 0.0.
+        on_progress=lambda done, total: registry.update_progress(
+            run_id, done, n_total=total
+        ),
         # WHY run_id_override: we pre-computed the run_id at submit time so the
         # registry could be populated before the run starts. Passing it here
         # ensures EvalRunner saves to the same directory the status endpoint expects.
@@ -410,15 +413,10 @@ def get_run_status(run_id: str, request: Request) -> RunStatusDTO:
     entry = registry.get(run_id)
 
     if entry is not None:
-        progress = (
-            (entry.n_completed / entry.n_total)
-            if entry.n_total > 0 and entry.status == "completed"
-            else (1.0 if entry.status == "completed" else 0.0)
-        )
         return RunStatusDTO(
             run_id=run_id,
             status=entry.status,
-            progress=progress,
+            progress=progress_fraction(entry),
             n_completed=entry.n_completed,
             n_total=entry.n_total,
             error_message=entry.error_message,

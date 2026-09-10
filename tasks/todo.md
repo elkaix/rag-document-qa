@@ -11,11 +11,12 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
       (opt out with `RAG_QA_LIVE_LLM=1`).  → verify: 327 pass, no env flags.
 
 ## Tranche 1 — pure defects (failing test first)
-- [ ] D1 eval run progress stuck at 0.0 (`api/routes/eval.py:115,201,413`)
-- [ ] D2 `_source_dict` chunk_index present on sync path, absent on streaming
-- [ ] D3 `pipeline_factory.py:211` reaches into `vector_store._collection`
-- [ ] D4 HTTP layer imports private `_DummyLLM` from `src/eval/cli.py`
-- [ ] D5 empty leftover dirs `src/eval/retrievers/`, `src/eval/transforms/`
+- [x] D1 progress: `update_progress` takes `n_total`; `progress_fraction`
+      extracted and tested; route forwards the runner's total.
+- [x] D2 `_source_dict` now owns `chunk_index`; both paths share one shape.
+- [x] D3 `ChromaVectorStore.all_chunk_texts()` added; reach-around deleted.
+- [x] D4 `src/eval/doubles.py`: public `DummyEvalLLM` + one env dispatch.
+- [x] D5 empty leftover dirs removed.
 
 ## Tranche 2 — C3 value types off the vendor
 - [ ] Move `SearchResult` + `Document`/`Chunk` to a leaf value-types module

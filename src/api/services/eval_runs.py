@@ -50,6 +50,32 @@ class RunStatus:
     completed_at: datetime | None = None
 
 
+def progress_fraction(entry: RunStatus) -> float:
+    """Return a run's completion fraction in [0.0, 1.0].
+
+    A completed run is 1.0 by definition. Otherwise the fraction is
+    n_completed / n_total, which is 0.0 until the total is known — a run is
+    registered before its datasets load, so "total not yet known" is a real
+    state rather than an error.
+
+    Args:
+        entry: The registry snapshot to summarise.
+
+    Returns:
+        The fraction of items completed.
+
+    WHY a free function: the rule belongs to the run's lifecycle, not to HTTP.
+        It lived inline in the status route where nothing could test it, which
+        is why the n_total defect survived — both sides of the seam were
+        tested, the joint was not.
+    """
+    if entry.status == "completed":
+        return 1.0
+    if entry.n_total <= 0:
+        return 0.0
+    return min(1.0, entry.n_completed / entry.n_total)
+
+
 class RunRegistry:
     """Thread-safe in-process registry of eval run states.
 
@@ -93,7 +119,9 @@ class RunRegistry:
                 n_total=n_total,
             )
 
-    def update_progress(self, run_id: str, n_completed: int) -> None:
+    def update_progress(
+        self, run_id: str, n_completed: int, n_total: int | None = None
+    ) -> None:
         """Record incremental progress; transitions queued→running on first call.
 
         Only valid when the run is in queued or running state. Silently ignores
@@ -102,6 +130,16 @@ class RunRegistry:
         Args:
             run_id: The run to update.
             n_completed: Number of items completed so far.
+            n_total: Total item count, once the caller knows it. A run is
+                registered before its datasets are loaded, so the total is not
+                known at register() time and arrives with the first progress
+                report. Omitted or None leaves the recorded total untouched.
+
+        BUG FIX: n_total used to be settable only at register(), where the
+            caller passed 0 because the question count was still unknown. The
+            progress callback then discarded the runner's `total`, so n_total
+            stayed 0 for the run's whole life and the status endpoint could
+            only ever report 0.0 or 1.0.
         """
         with self._lock:
             entry = self._runs.get(run_id)
@@ -111,6 +149,8 @@ class RunRegistry:
             #      can distinguish "not started" from "in progress".
             entry.status = "running"
             entry.n_completed = n_completed
+            if n_total is not None:
+                entry.n_total = n_total
 
     def mark_completed(self, run_id: str) -> None:
         """Finalise a run as successfully completed.

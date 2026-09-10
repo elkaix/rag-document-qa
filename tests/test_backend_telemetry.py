@@ -262,3 +262,37 @@ class TestStreamQueryTelemetry:
         assert telemetry_idx > done_idx, (
             "telemetry event must come after done event"
         )
+
+
+class TestSourceShapeParity:
+    """Both query paths must return source citations with the same fields.
+
+    BUG FIX: the synchronous path attached ``chunk_index`` on top of the shared
+        source shape while the streaming path omitted it, so a citation's field
+        set depended on which endpoint the client had called. The frontend
+        renders citations from both paths with one component.
+    """
+
+    def _sync_sources(self, backend: RAGBackend) -> list[dict]:
+        result, _ = backend.query_with_telemetry("What is RAG?")
+        return result["sources"]
+
+    def _stream_sources(self, backend: RAGBackend) -> list[dict]:
+        for event_type, data in backend.stream_query("What is RAG?"):
+            if event_type == "done":
+                return data["sources"]
+        raise AssertionError("stream_query emitted no done event")
+
+    def test_both_paths_return_the_same_source_fields(
+        self, ingested_backend: RAGBackend
+    ):
+        sync = self._sync_sources(ingested_backend)
+        stream = self._stream_sources(ingested_backend)
+        assert sync and stream, "fixture should retrieve at least one chunk"
+        assert set(sync[0]) == set(stream[0])
+
+    def test_streaming_sources_carry_chunk_index(
+        self, ingested_backend: RAGBackend
+    ):
+        stream = self._stream_sources(ingested_backend)
+        assert "chunk_index" in stream[0]

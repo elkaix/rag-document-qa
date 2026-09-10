@@ -286,3 +286,19 @@ class TestGetByDocId:
         )
 
         assert store.get_by_doc_id("nonexistent") == []
+
+
+class TestAllChunkTexts:
+    """The corpus accessor a sparse retriever needs, on the store's interface."""
+
+    def test_returns_every_chunk_keyed_by_id(self, populated_vector_store):
+        corpus = populated_vector_store.all_chunk_texts()
+        stats = populated_vector_store.get_stats()
+        assert len(corpus) == stats["total_chunks"]
+        assert all(isinstance(text, str) and text for text in corpus.values())
+
+    def test_empty_collection_returns_empty_mapping(self, chroma_collection):
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore(collection=chroma_collection)
+        assert store.all_chunk_texts() == {}
