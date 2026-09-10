@@ -41,6 +41,8 @@ from src.api.routes.eval import router as eval_router
 from src.api.services.eval_runs import RunRegistry
 from src.backend import RAGBackend
 from src.config import (
+    API_HOST,
+    API_PORT,
     CHROMA_COLLECTION,
     CHROMA_PATH,
     SQLITE_URL,
@@ -121,10 +123,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# BUG FIX: CORS used to allow all origins in the same app baked into the
-#          production Docker image. In dev we still want to hit the API from
-#          a Vite dev server on a different port, but production should
-#          restrict. The parsing rule lives in src/config.py so a
+# BUG FIX: CORS allowed all origins unconditionally, in the same app baked
+#          into the production Docker image, with no way to narrow it. In dev
+#          we still want to hit the API from a Vite dev server on a different
+#          port, so an unset ALLOWED_ORIGINS still means "*"; what changed is
+#          that production *can* now restrict, and docker-compose.prod.yml
+#          does. The parsing rule lives in src/config.py so a
 #          security-relevant setting sits with the rest of configuration.
 app.add_middleware(
     CORSMiddleware,
@@ -150,3 +154,16 @@ app.include_router(eval_router)
 async def health():
     """Health check endpoint — returns 200 if the server is running."""
     return {"status": "healthy"}
+
+
+# BUG FIX: README.md and CLAUDE.md both document `python -m src.api.main` as the
+#          local-dev command, but this module had no runner — running it imported
+#          the app, built nothing, and exited silently with status 0. The server
+#          only ever started under Docker, which invokes uvicorn directly.
+# WHY the string target instead of passing `app`: uvicorn needs an import string
+#      to support --reload-style re-import; passing the object works today but
+#      closes that door for no gain.
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("src.api.main:app", host=API_HOST, port=API_PORT)

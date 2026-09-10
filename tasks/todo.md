@@ -57,6 +57,32 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
       deliberate exception. Ruff: 231 findings → 0.
 - [x] Ruff caught four spend-ceiling tests of mine written without `assert`.
 
+## Tranche 9 — run it, then say what it is  ✔
+- [x] **Booted the app.** 508 green tests had never executed the lifespan on a
+      real process. `uvicorn src.api.main:app` starts clean; 23 route paths;
+      `/health`, `/api/documents`, `/api/conversations`, `/api/eval/configs`,
+      `/api/eval/runs` all 200; a live upload → list → delete round-trip of a
+      document with repeated text (the tranche-3 crash) succeeds end to end.
+- [x] **`python -m src.api.main` did nothing.** README and CLAUDE.md have
+      documented it as *the* local-dev command for months; the module had no
+      `__main__` guard, so it imported the app and exited 0. Only Docker ever
+      started the server, via uvicorn directly. Added the runner + a test that
+      asserts it calls uvicorn on `API_HOST:API_PORT`.
+- [x] **`docker-compose.prod.yml` shipped CORS wide open.** `allowed_origins()`
+      falls back to `["*"]` when unset (deliberate, for local dev) and the prod
+      compose file never set it — while the docstring claimed it did. Pinned to
+      the nginx origin, overridable via `ALLOWED_ORIGINS`.
+- [x] **`Architecture.md` rewritten.** CLAUDE.md calls it "the source of truth
+      for component boundaries, data flows, and design rationale" and it still
+      described `src/document_loader.py`, `src/evaluation.py`, CORS allowing all
+      origins, `CHUNK_SIZE=500`, `DEFAULT_MODEL=glm-5.1`, a 4-variable env table,
+      and no `src/retrieval/`, `src/query_engine/`, `src/domain.py`,
+      `src/conversations/` or `src/ingestion/` at all. Overview diagram, both
+      pipelines, component sections, endpoint table (27 routes), env table
+      (11 vars), testing table and design decisions all now match the code.
+- [x] **README file tree + project CLAUDE.md paths** refreshed; the "reranking
+      is not yet wired" claim corrected.
+
 ## Out of scope / deferred
 - **black**: would reformat 83 of 138 files. The repo was never
   black-formatted; running it now would bury this work's diff. `pyproject.toml`
@@ -70,6 +96,9 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
 - CI workflow changes (shared infrastructure)
 
 ## Review
-Nine commits, each with tests green. Two user-visible bugs fixed that were not
-in the original review: eval-run progress frozen at 0.0, and ingestion crashing
-on any document containing repeated text. Test count 320 → 508.
+Thirteen commits, each with tests green. Four user-visible defects fixed that
+were not in the original review: eval-run progress frozen at 0.0; ingestion
+crashing on any document containing repeated text; `python -m src.api.main`
+starting nothing; and the production compose file leaving CORS at `*`. The
+architecture doc CLAUDE.md names as the source of truth now describes the
+codebase that exists. Test count 320 → 514.
