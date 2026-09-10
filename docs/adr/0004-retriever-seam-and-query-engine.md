@@ -1,6 +1,6 @@
 # ADR 0004 — Retriever seam and the shared QueryEngine
 
-- **Status:** Accepted
+- **Status:** Accepted; the deferral in Consequences is superseded by [ADR 0009](0009-wire-hybrid-and-multi-query.md)
 - **Sequencing:** Step 4 of the RAG architecture deepening spec ([issue #16](https://github.com/elkaix/rag-document-qa/issues/16)); resolves the Retriever-seam and shared-QueryEngine map tickets.
 - **Date:** 2026-07-12
 
@@ -98,6 +98,11 @@ to the shipped prompt and context builders.
   enabled, `BM25HybridRetriever` emits empty `metadata`/`doc_id` (its corpus is
   `chunk_id -> text`), so citations degrade — acceptable while the lever is off
   by default.
+
+  **Superseded by [ADR 0009](0009-wire-hybrid-and-multi-query.md).** Both
+  strategies are now wired; the corpus tracks the store's revision, and the
+  degraded-citation acceptance above expired with the deferral that justified
+  it.
 - **New coverage:** contract tests across every adapter; engine tests with a
   fake Retriever and fake LLM asserting sync and streaming issue identical
   answer instructions; a factory strategy→type test; and the eval↔production

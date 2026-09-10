@@ -116,10 +116,52 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
       and both are recorded in `pyproject.toml` with why they fail. Config, not
       `Any` in a signature and not `# type: ignore` at six call sites.
 
+## Tranche 11 — wire the last two strategies  ✔ (ADR 0009)
+The two levers ADR 0004 left recognised-but-unbuildable, plus the robustness
+each one was deferred *for*. Closes the last open items of issue #16.
+
+- [x] E1 `ChromaVectorStore.revision` — a write counter, bumped by `upsert` and
+      `delete_by_doc_id`. The rejected alternative was explicit invalidation
+      from every mutation site, which is correct only until someone adds a
+      mutation site.
+- [x] E2 `ChunkCorpus` (`src/retrieval/corpus.py`) — materialises the whole
+      collection lazily, re-reads it when the revision moves, and returns the
+      same snapshot object while nothing has changed so the BM25 index can
+      cache on identity. Cold start deliberately starts at `None`, not at an
+      empty snapshot: a persistent collection restored from disk is at
+      revision 0 *and* non-empty.
+- [x] E3 `all_chunk_texts()` → `all_chunks() -> dict[str, Chunk]`. The
+      text-only shape is what made hybrid drop citations — a sparse-only hit
+      had no filename to show. ADR 0004 accepted that "while the lever is off
+      by default"; wiring it is when that expires.
+- [x] E4 `BM25HybridRetriever` takes the store, not a snapshot. Degrades to
+      dense-only instead of raising `ZeroDivisionError` on an empty or
+      untokenizable corpus (an empty index is the normal state of a fresh
+      deployment), and drops zero-score BM25 candidates so a corpus smaller
+      than `bm25_top_k` does not hand every chunk to the generator.
+- [x] E5 `RefusalHandler.should_refuse` reads the best score, not
+      `candidates[0]`. Hybrid orders by fused rank; a BM25-only hit carries
+      0.0, so the gate would have refused answerable questions. Identical
+      behaviour for dense / reranked / multi-query, all of which sort.
+- [x] E6 `QueryRewriter.expand` catches every provider failure and falls back
+      to the original query. Only `JSONDecodeError` was guarded, so a rate
+      limit failed the user's whole question over a *recall optimisation*.
+- [x] E7 Rewrite spend is logged at the `MultiQueryRetriever` seam rather than
+      returned — the seam stays `retrieve(query, top_k)`, on the same
+      verified-zero-readers reasoning that retired `rewriter_cost_usd`.
+- [x] E8 `build_retrieval_plan` wires all four strategies and raises when
+      `multi_query` has no configured model or handler. `QueryRewriter(None)`
+      is a legal pass-through, so the alternative is a deployment that thinks
+      it has recall it does not have.
+- [x] E9 `RETRIEVER_STRATEGY` and `QUERY_REWRITER_MODEL` read from the
+      environment; hybrid constants and `MAX_QUERY_EXPANSIONS` single-sourced
+      into `src/config.py`. ADR 0004 claimed promotion "by configuration, not
+      a code change" while the selector was a tracked literal.
+- [x] E10 Eval harness simplified: hybrid is built in `build_pipeline` like
+      every other lever, and the two divergent corpus-construction sites in
+      `ingest()` are gone.
+
 ## Out of scope / deferred
-- **`hybrid` and `multi_query` retrieval strategies** stay deferred per
-  ADR 0004: `hybrid` needs a BM25 corpus kept in sync with ingestion and
-  deletion, which is a feature, not a refactor.
 - **CI workflow changes** (shared infrastructure). Verified read-only that the
   new `pyproject.toml` does not affect it: CI installs with
   `uv pip install --system -r requirements.txt`, which ignores the file.

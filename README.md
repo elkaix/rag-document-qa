@@ -313,6 +313,7 @@ src/
 ├── retrieval/
 │   ├── base.py                   # The Retriever Protocol (the seam)
 │   ├── dense.py, hybrid.py       # Adapters: vector search, BM25 hybrid
+│   ├── corpus.py                 # ChunkCorpus — the BM25 corpus, kept in sync
 │   ├── reranker.py               # Cross-encoder reranking adapter
 │   ├── query_rewriter.py         # Multi-query rewriting adapter
 │   ├── refusal_handler.py        # Answerability gate
