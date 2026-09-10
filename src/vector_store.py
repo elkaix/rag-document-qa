@@ -43,6 +43,24 @@ logger = logging.getLogger(__name__)
 # ChromaVectorStore                                                            #
 # --------------------------------------------------------------------------- #
 
+def _first_occurrence_indices(ids: list[str]) -> list[int]:
+    """Return the positions of each id's first appearance, in order.
+
+    Args:
+        ids: Chunk ids, possibly with repeats.
+
+    Returns:
+        Indices to keep so every id appears exactly once, earliest wins.
+    """
+    seen: set[str] = set()
+    keep: list[int] = []
+    for index, chunk_id in enumerate(ids):
+        if chunk_id not in seen:
+            seen.add(chunk_id)
+            keep.append(index)
+    return keep
+
+
 class ChromaVectorStore:
     """
     Vector store backed by a ChromaDB Collection.
@@ -154,20 +172,38 @@ class ChromaVectorStore:
                         auto-embed using the collection's embedding function.
 
         Note:
-            All four lists must have the same length.
+            All four lists must have the same length. Ids repeated *within* one
+            call are collapsed to their first occurrence.
+
+        BUG FIX: chunk ids are content-addressed, so a document containing the
+            same text twice — a repeated boilerplate footer, a disclaimer page,
+            a CSV with duplicate rows — produced the same id twice in a single
+            batch. ChromaDB rejects such a batch with DuplicateIDError, so the
+            whole upload failed rather than storing the document. Two chunks
+            with the same content-addressed id *are* the same chunk, so
+            collapsing them is what the id scheme already means.
         """
+        keep = _first_occurrence_indices(ids)
+        if len(keep) != len(ids):
+            logger.debug(
+                "Collapsed %d repeated chunk id(s) within one upsert batch",
+                len(ids) - len(keep),
+            )
+
         kwargs: dict[str, Any] = {
-            "ids": ids,
-            "documents": documents,
-            "metadatas": metadatas,
+            "ids": [ids[i] for i in keep],
+            "documents": [documents[i] for i in keep],
+            "metadatas": [metadatas[i] for i in keep],
         }
         if embeddings is not None:
             # WHY: only include embeddings key when provided — passing embeddings=None
             # to ChromaDB triggers auto-embedding via the collection's embedding function.
-            kwargs["embeddings"] = embeddings
+            kwargs["embeddings"] = [embeddings[i] for i in keep]
 
         self._collection.upsert(**kwargs)
-        logger.debug("Upserted %d chunks into '%s'", len(ids), self._collection.name)
+        logger.debug(
+            "Upserted %d chunks into '%s'", len(keep), self._collection.name
+        )
 
     # ---------------------------------------------------------------------- #
     # Read operations                                                         #

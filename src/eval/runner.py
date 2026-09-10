@@ -161,6 +161,38 @@ def _score_question(
     return metrics, details
 
 
+class SpendCeilingExceeded(RuntimeError):
+    """Raised when a run's cumulative cost passes its configured ceiling."""
+
+
+def assert_within_spend_ceiling(
+    results: list[EvalResult], ceiling_usd: float | None
+) -> None:
+    """Abort a run whose cumulative spend has passed its ceiling.
+
+    Args:
+        results: Every question scored so far.
+        ceiling_usd: The configured limit, or None for no limit.
+
+    Raises:
+        SpendCeilingExceeded: When cumulative cost is strictly greater than the
+            ceiling. The message names the amount and the question count so an
+            operator can see how far in the run stopped.
+
+    WHY a free function: this is the harness's only guard on real money, and it
+        was written inline inside the per-question loop where nothing could
+        reach it — so it had no test at all.
+    """
+    if ceiling_usd is None:
+        return
+    cumulative = sum(r.cost_usd for r in results)
+    if cumulative > ceiling_usd:
+        raise SpendCeilingExceeded(
+            f"Spend ceiling exceeded: ${cumulative:.4f} > ${ceiling_usd:.4f} "
+            f"after {len(results)} questions. Aborting run."
+        )
+
+
 class EvalRunner:
     """Orchestrates a full end-to-end evaluation run from config to disk.
 
@@ -259,15 +291,9 @@ class EvalRunner:
                     all_results.append(result)
                     if self._on_progress is not None:
                         self._on_progress(len(all_results), total_questions)
-                    # Phase 2: abort if spend ceiling is exceeded.
-                    ceiling = config.eval.spend_ceiling_usd
-                    if ceiling is not None:
-                        cumulative = sum(r.cost_usd for r in all_results)
-                        if cumulative > ceiling:
-                            raise RuntimeError(
-                                f"Spend ceiling exceeded: ${cumulative:.4f} > ${ceiling:.4f} "
-                                f"after {len(all_results)} questions. Aborting run."
-                            )
+                    assert_within_spend_ceiling(
+                        all_results, config.eval.spend_ceiling_usd
+                    )
             finally:
                 # WHY finally: ensures teardown even if a question raises
                 # an unhandled exception outside the per-question try block.

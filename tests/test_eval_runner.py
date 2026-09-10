@@ -9,9 +9,13 @@ import pytest
 
 from src.eval.config import EvalConfig
 from src.eval.runner import EvalRunner, _score_question
-from src.eval.schemas import EvalQuestion
+from src.eval.schemas import EvalQuestion, EvalResult
 from src.domain import SearchResult
 from src.eval import storage
+from src.eval.runner import (
+    SpendCeilingExceeded,
+    assert_within_spend_ceiling,
+)
 
 
 class DummyLLM:
@@ -185,3 +189,49 @@ class TestEvalRunner:
         runner.run()
         assert len(progress_calls) == 5
         assert progress_calls[-1] == (5, 5)
+
+
+class TestSpendCeiling:
+    """The harness's only guard on real money — previously untested.
+
+    The check was written inline inside the per-question loop, where nothing
+    could reach it.
+    """
+
+    def _result(self, cost: float) -> EvalResult:
+        return EvalResult(
+            question_id=f"q{cost}", dataset="d", retrieved_chunk_ids=[],
+            retrieved_chunks=[], generated_answer="a", metrics={},
+            timings_ms={}, tokens={}, cost_usd=cost,
+        )
+
+    def test_no_ceiling_never_aborts(self):
+        assert_within_spend_ceiling([self._result(1000.0)], None) is None
+
+    def test_under_the_ceiling_passes(self):
+        assert_within_spend_ceiling(
+            [self._result(0.4), self._result(0.4)], 1.0
+        ) is None
+
+    def test_exactly_at_the_ceiling_passes(self):
+        """Strictly greater aborts, so spending the full budget is allowed."""
+        assert_within_spend_ceiling([self._result(1.0)], 1.0) is None
+
+    def test_over_the_ceiling_aborts(self):
+        with pytest.raises(SpendCeilingExceeded):
+            assert_within_spend_ceiling(
+                [self._result(0.6), self._result(0.6)], 1.0
+            )
+
+    def test_the_message_names_the_amount_and_how_far_it_got(self):
+        with pytest.raises(SpendCeilingExceeded, match=r"\$1\.2000 > \$1\.0000"):
+            assert_within_spend_ceiling(
+                [self._result(0.6), self._result(0.6)], 1.0
+            )
+        with pytest.raises(SpendCeilingExceeded, match="after 2 questions"):
+            assert_within_spend_ceiling(
+                [self._result(0.6), self._result(0.6)], 1.0
+            )
+
+    def test_an_empty_run_never_aborts(self):
+        assert_within_spend_ceiling([], 0.0) is None

@@ -335,3 +335,38 @@ class TestCosineInvariantOwnership:
             embeddings=[[0.1] * 8],
         )
         assert store.get_stats()["total_chunks"] == 1
+
+
+class TestDuplicateIdsWithinOneBatch:
+    """Ingesting a document whose chunks repeat verbatim must not crash.
+
+    BUG: chunk ids are content-addressed, so a document containing the same text
+    twice — a repeated boilerplate footer, a disclaimer page, a CSV with
+    duplicate rows — produces the same id twice in one upsert batch. ChromaDB
+    rejects that batch with DuplicateIDError, so the whole upload failed.
+    """
+
+    def test_repeated_ids_collapse_instead_of_raising(self, chroma_collection):
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore(collection=chroma_collection)
+        store.upsert(
+            ids=["same", "same", "other"],
+            documents=["duplicated text", "duplicated text", "distinct text"],
+            metadatas=[{"doc_id": "d"}, {"doc_id": "d"}, {"doc_id": "d"}],
+            embeddings=[[0.1] * 8, [0.1] * 8, [0.2] * 8],
+        )
+        assert store.get_stats()["total_chunks"] == 2
+
+    def test_the_first_occurrence_wins(self, chroma_collection):
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore(collection=chroma_collection)
+        store.upsert(
+            ids=["dup", "dup"],
+            documents=["first", "second"],
+            metadatas=[{"doc_id": "a"}, {"doc_id": "b"}],
+            embeddings=[[0.1] * 8, [0.2] * 8],
+        )
+        chunks = store.get_by_doc_id("a")
+        assert [c["content"] for c in chunks] == ["first"]

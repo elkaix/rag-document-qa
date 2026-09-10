@@ -101,3 +101,73 @@ class TestTeardown:
                            llm_override=DummyLLM(),
                            judge_llm_override=DummyLLM())
         p.teardown()  # should not raise
+
+
+class TestMLPapersIngest:
+    """The 58-line ML-papers branch, reachable now that the path is injectable.
+
+    The manifest path used to be a literal inside _ingest_ml_papers, so the only
+    branch a test could reach was the missing-manifest no-op.
+    """
+
+    def _pipeline(self, tmp_path, manifest, **kw):
+        import uuid
+
+        import chromadb
+
+        from src.document_loader import TextChunker
+        from src.eval.pipeline_factory import EvalPipeline
+        from src.vector_store import ChromaVectorStore
+
+        # WHY a unique name: EphemeralClient shares one in-process store, so a
+        # fixed name would leak chunks between tests in this class.
+        store = ChromaVectorStore.open(
+            chromadb.EphemeralClient(), f"ml_papers_{uuid.uuid4().hex}"
+        )
+        return EvalPipeline(
+            chunker=TextChunker(chunk_size=128, chunk_overlap=16),
+            vector_store=store,
+            llm=None,
+            judge_llm=None,
+            config=_baseline_config(),
+            dataset_name="ml_papers_v1",
+            ml_papers_manifest=manifest,
+            **kw,
+        )
+
+    def test_missing_manifest_is_a_no_op(self, tmp_path):
+        pipeline = self._pipeline(tmp_path, tmp_path / "absent.json")
+        pipeline._ingest_ml_papers()
+        assert pipeline.vector_store.get_stats()["total_chunks"] == 0
+
+    def test_empty_manifest_is_a_no_op(self, tmp_path):
+        manifest = tmp_path / "corpus_manifest.json"
+        manifest.write_text(json.dumps({"papers": []}))
+        pipeline = self._pipeline(tmp_path, manifest)
+        pipeline._ingest_ml_papers()
+        assert pipeline.vector_store.get_stats()["total_chunks"] == 0
+
+    def test_a_listed_paper_is_chunked_and_upserted(self, tmp_path):
+        paper = tmp_path / "paper.txt"
+        paper.write_text(
+            "Retrieval augmented generation combines a retriever with a generator. "
+            * 20
+        )
+        manifest = tmp_path / "corpus_manifest.json"
+        manifest.write_text(
+            json.dumps({"papers": [{"id": "p1", "local_path": str(paper)}]})
+        )
+
+        pipeline = self._pipeline(tmp_path, manifest)
+        pipeline._ingest_ml_papers()
+
+        assert pipeline.vector_store.get_stats()["total_chunks"] > 0
+
+    def test_a_missing_paper_file_does_not_abort_the_run(self, tmp_path):
+        manifest = tmp_path / "corpus_manifest.json"
+        manifest.write_text(
+            json.dumps({"papers": [{"id": "gone", "local_path": str(tmp_path / "nope.pdf")}]})
+        )
+        pipeline = self._pipeline(tmp_path, manifest)
+        pipeline._ingest_ml_papers()
+        assert pipeline.vector_store.get_stats()["total_chunks"] == 0

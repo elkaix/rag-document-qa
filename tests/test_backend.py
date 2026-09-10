@@ -438,3 +438,26 @@ class TestConversationCharacterization:
 
         assert listed[0] == first
         assert second in listed
+
+
+class TestRepetitiveDocumentIngest:
+    """A document whose chunks repeat verbatim must ingest, not crash.
+
+    BUG: content-addressed chunk ids meant a repeated boilerplate footer or a
+    disclaimer page produced the same id twice in one upsert batch, and ChromaDB
+    rejected the batch with DuplicateIDError — the upload failed outright.
+    """
+
+    def test_a_document_with_repeated_text_ingests(
+        self, backend: RAGBackend, tmp_path: Path
+    ):
+        repetitive = tmp_path / "boilerplate.txt"
+        repetitive.write_text(
+            "Retrieval augmented generation combines a retriever with a generator. "
+            * 60
+        )
+
+        result = backend.ingest_file(repetitive)
+
+        assert result["chunks_count"] >= 1
+        assert backend.get_stats()["total_chunks"] >= 1

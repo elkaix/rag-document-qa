@@ -29,6 +29,7 @@ Return type of query():
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -52,6 +53,10 @@ from src.retrieval.composition import compose_retrieval
 from src.vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
+
+# WHY a module constant: the ML-papers corpus manifest path is a deployment
+#      fact, and EvalPipeline takes it as a field so a test can point elsewhere.
+DEFAULT_ML_PAPERS_MANIFEST = Path("eval_data/ml_papers_v1/corpus_manifest.json")
 
 
 # --------------------------------------------------------------------------- #
@@ -90,6 +95,12 @@ class EvalPipeline:
     # to ChromaDB internals that could change. Own the client reference here.
     _client: chromadb.ClientAPI = field(repr=False, default=None)  # type: ignore[assignment]
     _collection_name: str = field(repr=False, default="")
+
+    # WHY a field rather than a literal inside _ingest_ml_papers: the path was
+    # hardcoded at the call site, which made the whole 58-line ingest branch
+    # unreachable in a test — the only path a test could take was the
+    # missing-manifest no-op.
+    ml_papers_manifest: Path = field(default=DEFAULT_ML_PAPERS_MANIFEST)
 
     # Lazily-built QueryEngine, cached after the first query(). Deferred because
     # the hybrid retriever is only assembled during ingest() (it needs the corpus).
@@ -166,11 +177,10 @@ class EvalPipeline:
         it means no papers have been added yet.
         """
         import json
-        from pathlib import Path
 
         from src.document_loader import DocumentLoader
 
-        manifest_path = Path("eval_data/ml_papers_v1/corpus_manifest.json")
+        manifest_path = self.ml_papers_manifest
         if not manifest_path.exists():
             logger.info("ML Papers manifest not found at %s — ingest is a no-op.", manifest_path)
             return
