@@ -407,7 +407,8 @@ server. Docker invokes `uvicorn src.api.main:app` directly instead.
 | `GET` | `/health` | `health` | Health check |
 
 The eval-harness routes (`/api/eval/*`) are tabled separately under
-[Evaluation Harness](#api--ui).
+[Evaluation Harness](#api--ui). Together the two tables cover all 27 registered
+operations: 26 HTTP method/path pairs across 23 paths, plus the WebSocket.
 
 ### WebSocket Protocol
 
@@ -645,6 +646,7 @@ The `src/eval/` package provides a reproducible evaluation system over labeled g
 | `GET` | `/api/eval/runs` | List all eval runs |
 | `GET` | `/api/eval/runs/{id}` | Get run metadata |
 | `GET` | `/api/eval/runs/{id}/results` | Per-question results |
+| `GET` | `/api/eval/runs/{id}/results/{question_id}` | One question's result |
 | `GET` | `/api/eval/runs/{id}/status` | Live status for in-progress runs |
 | `GET` | `/api/eval/compare` | Two-run diff with significance tests |
 

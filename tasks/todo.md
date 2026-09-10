@@ -59,7 +59,8 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
 
 ## Tranche 9 — run it, then say what it is  ✔
 - [x] **Booted the app.** 508 green tests had never executed the lifespan on a
-      real process. `uvicorn src.api.main:app` starts clean; 23 route paths;
+      real process. `uvicorn src.api.main:app` starts clean; 27 operations
+      registered (26 HTTP pairs across 23 paths, plus the WebSocket);
       `/health`, `/api/documents`, `/api/conversations`, `/api/eval/configs`,
       `/api/eval/runs` all 200; a live upload → list → delete round-trip of a
       document with repeated text (the tranche-3 crash) succeeds end to end.
@@ -82,6 +83,12 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
       (11 vars), testing table and design decisions all now match the code.
 - [x] **README file tree + project CLAUDE.md paths** refreshed; the "reranking
       is not yet wired" claim corrected.
+- [x] **The suite was writing to `data/`.** Every test entering
+      `with TestClient(app)` ran the real lifespan against `data/rag.db` and
+      `data/chroma/` — the developer's own store; confirmed by mtime. Tests
+      that swapped in a mock backend did so only after startup. A session-wide
+      autouse fixture in `conftest.py` now points both at tmp, with a test
+      asserting the invariant directly.
 
 ## Out of scope / deferred
 - **black**: would reformat 83 of 138 files. The repo was never

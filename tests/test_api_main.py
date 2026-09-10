@@ -52,15 +52,10 @@ class TestModuleRunner:
 class TestLifespanWiring:
     """Entering the lifespan must populate everything the routes depend on."""
 
-    def test_startup_populates_app_state(self, tmp_path, monkeypatch):
-        # WHY monkeypatch the paths: the lifespan builds a *persistent* Chroma
-        #     client and a real SQLite file. Pointing both at tmp_path keeps the
-        #     test from touching the developer's data/ directory.
-        monkeypatch.setattr("src.api.main.CHROMA_PATH", str(tmp_path / "chroma"))
-        monkeypatch.setattr(
-            "src.api.main.SQLITE_URL", f"sqlite:///{tmp_path / 'test.db'}"
-        )
-
+    def test_startup_populates_app_state(self):
+        # The lifespan builds a *persistent* Chroma client and a real SQLite
+        # file; conftest's session-wide `_isolate_app_state_dirs` points both
+        # into tmp so no test writes to the developer's data/ directory.
         with TestClient(app) as client:
             assert client.app.state.backend is not None
             assert client.app.state.engine is not None
@@ -72,6 +67,22 @@ class TestLifespanWiring:
         # healthcheck hits, including while startup is still in progress.
         with TestClient(app) as client:
             assert client.get("/health").status_code == 200
+
+    def test_lifespan_never_opens_the_repository_data_directory(self):
+        # BUG FIX: every test that entered `with TestClient(app)` ran the real
+        #          lifespan against data/rag.db and data/chroma/ — the
+        #          developer's own store. Confirmed by mtime: one route test
+        #          rewrote data/chroma/chroma.sqlite3. Tests that swapped in a
+        #          mock backend did so only after startup, too late to help.
+        # WHY assert on the paths rather than on file mtimes: an mtime check is
+        #      a race against anything else on the machine, and this states the
+        #      invariant directly — the suite must never address data/.
+        from src.api import main as api_main
+        from src.config import DATA_DIR
+
+        data_dir = str(DATA_DIR.resolve())
+        assert not api_main.CHROMA_PATH.startswith(data_dir)
+        assert data_dir not in api_main.SQLITE_URL
 
 
 class TestCors:

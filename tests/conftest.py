@@ -114,6 +114,44 @@ def _stub_openai_provider():
 
 
 # --------------------------------------------------------------------------- #
+# Isolation: never touch the developer's persistent stores                     #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_app_state_dirs(tmp_path_factory):
+    """Redirect the FastAPI lifespan's SQLite and ChromaDB paths into tmp.
+
+    BEFORE: any test entering `with TestClient(app)` ran the real lifespan,
+            which opens `data/rag.db` and `data/chroma/` — the developer's
+            actual store. Confirmed by mtime: running one route test rewrote
+            `data/chroma/chroma.sqlite3`. Tests that replaced `app.state.backend`
+            with a mock did so only *after* startup, so the real stores were
+            already open.
+    AFTER:  the module globals `src.api.main` copied from `src.config` at import
+            time point into a session-scoped tmp dir, so the lifespan builds its
+            own throwaway stores.
+    WHY session-scoped and autouse: a test that forgets this is exactly the case
+            that corrupts local data, and the failure is silent. Opting in is the
+            wrong default for something whose blast radius is the user's files.
+    WHY patch `src.api.main` and not `src.config`: main.py does
+            `from src.config import CHROMA_PATH, SQLITE_URL`, which copies the
+            values at import; rebinding the config module would not be seen.
+    """
+    tmp = tmp_path_factory.mktemp("app_state")
+
+    from src.api import main as api_main
+
+    original = (api_main.CHROMA_PATH, api_main.SQLITE_URL)
+    api_main.CHROMA_PATH = str(tmp / "chroma")
+    api_main.SQLITE_URL = f"sqlite:///{tmp / 'rag.db'}"
+    try:
+        yield tmp
+    finally:
+        api_main.CHROMA_PATH, api_main.SQLITE_URL = original
+
+
+# --------------------------------------------------------------------------- #
 # Constants                                                                    #
 # --------------------------------------------------------------------------- #
 
