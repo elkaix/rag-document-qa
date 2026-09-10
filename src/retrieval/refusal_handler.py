@@ -1,7 +1,11 @@
-"""RefusalHandler — answerability gate based on top-1 retrieval similarity.
+"""RefusalHandler — answerability gate based on the best retrieval similarity.
 
 Pipeline position:
     Retriever (post-rerank) candidates → [RefusalHandler] → answer or refusal text
+
+The gate reads the *best* score among the candidates, not the first one —
+hybrid retrieval orders by fused rank, so position 0 is not the top score.
+See should_refuse for the full reasoning.
 
 Phase 2 lever 2g. SQuAD v2 includes 'unanswerable' questions whose gold
 answer is the empty string. Phase 1's pipeline always tries to answer,
@@ -16,7 +20,7 @@ from src.domain import SearchResult
 
 
 class RefusalHandler:
-    """Deterministic answerability gate driven by top-1 similarity score."""
+    """Deterministic answerability gate driven by the best similarity score in the set."""
 
     def __init__(
         self,
@@ -28,7 +32,8 @@ class RefusalHandler:
 
         Args:
             enabled: When False, should_refuse always returns False.
-            similarity_threshold: Top-1 score must be >= this to NOT refuse.
+            similarity_threshold: The best score in the set must be >= this to
+                NOT refuse. Deliberately not "top-1": see should_refuse.
             no_answer_text: Text returned in place of an LLM answer on refusal.
         """
         self._enabled = enabled
@@ -51,9 +56,11 @@ class RefusalHandler:
             hybrid retrieval orders by *fused rank*, and a BM25-only hit at
             position 0 carries score 0.0 (no comparable dense similarity
             exists). The gate would then refuse a question the corpus answers
-            well. Asking for the best score in the set is the question the gate
-            actually means, and it does not depend on an ordering the seam
-            never promised.
+            well. The seam does promise descending *relevance* (see
+            ``Retriever.retrieve``) — what it never promised, and what this code
+            assumed, is descending *score*. Asking for the best score in the set
+            is the question the gate actually means, and it is the only form
+            that survives a strategy whose scores are not monotone in rank.
         """
         if not self._enabled:
             return False

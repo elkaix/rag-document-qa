@@ -10,7 +10,9 @@ adapters that either conform directly or compose an inner Retriever:
   a cross-encoder (`CrossEncoderReranker`).
 - `MultiQueryRetriever` — composes an inner Retriever, fans out rewritten queries
   (`QueryRewriter`), and fuses the per-query rankings by RRF.
-- `reciprocal_rank_fusion` — the rank-based fusion both of the above use.
+- `reciprocal_rank_fusion` — the rank-based fusion used by `BM25HybridRetriever`
+  (sparse vs. dense) and `MultiQueryRetriever` (one ranking per expansion).
+  `RerankingRetriever` does not fuse — it re-scores a single ranking.
 
 `RefusalHandler` is not a Retriever — it is an answerability gate the QueryEngine
 applies after retrieval. These modules were promoted from `src/eval/` so
