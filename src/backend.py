@@ -65,7 +65,7 @@ from .models.document import DocumentRecord
 from .models.evaluation import MessageEvaluation
 from .models.message import Message, MessageSource
 from .query_engine import QueryEngine, StreamResult
-from .retrieval import build_retriever
+from .retrieval import build_retrieval_plan
 from .domain import SearchResult
 from .vector_store import ChromaVectorStore
 
@@ -175,14 +175,21 @@ class RAGBackend:
         #          (RETRIEVER_STRATEGY) behind the seam, so a validated eval
         #          chain is promoted to production by configuration, not a
         #          rewrite. Default "dense" preserves current behaviour.
+        # WHY the plan carries top_k: reranking changes how many chunks the
+        #      engine ends up with, so the count is part of the composition
+        #      rather than a constant the caller supplies alongside it. This
+        #      rule used to exist only on the eval side.
+        plan = build_retrieval_plan(
+            RETRIEVER_STRATEGY,
+            self.vector_store,
+            top_k=TOP_K_RESULTS,
+            rerank_over_fetch_n=RERANK_OVER_FETCH_N,
+        )
         self.query_engine = QueryEngine(
-            retriever=build_retriever(
-                RETRIEVER_STRATEGY, self.vector_store,
-                rerank_over_fetch_n=RERANK_OVER_FETCH_N,
-            ),
+            retriever=plan.retriever,
             llm=self.llm,
             reasoning_llm=self.reasoning_llm,
-            top_k=TOP_K_RESULTS,
+            top_k=plan.top_k,
         )
 
         logger.info(

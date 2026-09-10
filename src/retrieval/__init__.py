@@ -20,7 +20,11 @@ from __future__ import annotations
 
 from src.retrieval.base import Retriever
 from src.retrieval.dense import DenseRetriever
-from src.retrieval.factory import build_retriever
+from src.retrieval.composition import (
+    RetrievalPlan,
+    build_retrieval_plan,
+    compose_retrieval,
+)
 from src.retrieval.hybrid import BM25HybridRetriever, reciprocal_rank_fusion
 from src.retrieval.query_rewriter import MultiQueryRetriever, QueryRewriter
 from src.retrieval.refusal_handler import RefusalHandler
@@ -29,7 +33,9 @@ from src.retrieval.reranker import CrossEncoderReranker, RerankingRetriever
 __all__ = [
     "Retriever",
     "DenseRetriever",
-    "build_retriever",
+    "RetrievalPlan",
+    "build_retrieval_plan",
+    "compose_retrieval",
     "BM25HybridRetriever",
     "reciprocal_rank_fusion",
     "CrossEncoderReranker",

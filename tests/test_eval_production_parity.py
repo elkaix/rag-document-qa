@@ -81,3 +81,69 @@ def test_eval_pipeline_issues_the_shipped_prompt_and_context():
         assert recorder.user == expected_user
     finally:
         pipeline.teardown()
+
+
+class TestCompositionParity:
+    """Eval and production must compose retrieval by the same rule.
+
+    ADR 0004 single-sourced the prompt and the context builder. It left the
+    *composition* rule in two places: production selected by a strategy string
+    and passed top_k flat, while eval selected by lever flags and derived top_k
+    from whether reranking was on. The two agreed only because final_top_k and
+    TOP_K_RESULTS happened to be the same number — an agreement by coincidence
+    that nothing tested and that would break the moment either was tuned.
+    """
+
+    def test_reranked_production_and_eval_agree_on_the_effective_top_k(self):
+        """The case the original parity test could not reach: reranking on."""
+        from src.retrieval.composition import compose_retrieval
+
+        class _Base:
+            def retrieve(self, query, top_k):
+                return []
+
+        class _Reranker:
+            def rerank(self, query, candidates, final_top_k):
+                return candidates[:final_top_k]
+
+        production = compose_retrieval(
+            base=_Base(), reranker=_Reranker(), top_k=5, rerank_over_fetch_n=20
+        )
+        evaluation = compose_retrieval(
+            base=_Base(),
+            reranker=_Reranker(),
+            top_k=5,
+            rerank_over_fetch_n=20,
+            rerank_final_top_k=5,
+        )
+        assert production.top_k == evaluation.top_k
+
+    def test_tuning_the_shared_constant_moves_both_sides_together(self):
+        """The literals are single-sourced, so they cannot drift apart."""
+        from src.config import (
+            REFUSAL_NO_ANSWER_TEXT,
+            REFUSAL_SIMILARITY_THRESHOLD,
+            RERANK_OVER_FETCH_N,
+            TOP_K_RESULTS,
+        )
+        from src.eval.config import RefusalHandlerCfg, RerankerCfg
+
+        reranker = RerankerCfg()
+        assert reranker.rerank_top_n == RERANK_OVER_FETCH_N
+        assert reranker.final_top_k == TOP_K_RESULTS
+
+        refusal = RefusalHandlerCfg()
+        assert refusal.similarity_threshold == REFUSAL_SIMILARITY_THRESHOLD
+        assert refusal.no_answer_text == REFUSAL_NO_ANSWER_TEXT
+
+    def test_both_paths_use_the_one_composition_function(self):
+        """A structural guard: neither caller may stack adapters itself again."""
+        import inspect
+
+        from src import backend
+        from src.eval import pipeline_factory
+
+        for module in (backend, pipeline_factory):
+            source = inspect.getsource(module)
+            assert "RerankingRetriever(" not in source, module.__name__
+            assert "MultiQueryRetriever(" not in source, module.__name__

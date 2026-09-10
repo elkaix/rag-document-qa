@@ -29,9 +29,10 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
       `allowed_origins()` moved to config with tests
 - [x] Rerank widths + refusal defaults single-sourced from `src/config.py`
 
-## Tranche 4 — C1 retrieval composition
-- [ ] Characterization test for current composition rule
-- [ ] One composition module returning (Retriever, effective top_k)
+## Tranche 4 — C1 retrieval composition  ✔ (ADR 0006)
+- [x] `tests/test_retrieval_composition.py` pins order + effective top-k
+- [x] `src/retrieval/composition.py` owns the rule; `factory.py` deleted
+- [x] Parity test now covers the reranked case + a structural guard
 
 ## Tranche 5 — C4 eval run submission
 - [ ] Submission module; route translates HTTP only

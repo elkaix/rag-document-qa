@@ -40,16 +40,15 @@ from src.eval.config import EvalConfig
 from src.eval.schemas import EvalQuestion
 from src.llm_handler import LLMHandler
 from src.query_engine import QueryEngine
+from src.domain import SearchResult
 from src.retrieval import (
     CrossEncoderReranker,
     DenseRetriever,
-    MultiQueryRetriever,
     QueryRewriter,
     RefusalHandler,
-    RerankingRetriever,
     Retriever,
 )
-from src.domain import SearchResult
+from src.retrieval.composition import compose_retrieval
 from src.vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
@@ -255,30 +254,25 @@ class EvalPipeline:
         if self._engine is not None:
             return self._engine
 
-        base = self.hybrid_retriever or DenseRetriever(self.vector_store)
-        retriever = base
-        if self.rewriter is not None:
-            retriever = MultiQueryRetriever(inner=retriever, rewriter=self.rewriter)
-        if self.reranker is not None:
-            retriever = RerankingRetriever(
-                inner=retriever, reranker=self.reranker,
-                over_fetch_n=self.config.pipeline.reranker.rerank_top_n,
-            )
-
-        # When reranking is on, the final count is the reranker's final_top_k
-        # (it over-fetches the wider rerank_top_n first); otherwise it is top_k.
-        top_k = (
-            self.config.pipeline.reranker.final_top_k
-            if self.reranker is not None
-            else self.config.pipeline.retriever.top_k
+        # BEFORE: this stacked the adapters and derived top_k here, so the same
+        #         rule existed in two modules and production had no equivalent
+        #         of the top_k half at all.
+        # AFTER:  one composition owner, shared with production's presets.
+        plan = compose_retrieval(
+            base=self.hybrid_retriever or DenseRetriever(self.vector_store),
+            rewriter=self.rewriter,
+            reranker=self.reranker,
+            top_k=self.config.pipeline.retriever.top_k,
+            rerank_over_fetch_n=self.config.pipeline.reranker.rerank_top_n,
+            rerank_final_top_k=self.config.pipeline.reranker.final_top_k,
         )
         # reasoning_llm is unused on the sync ask() path (the eval harness never
         # streams), so the answer LLM stands in for the constructor requirement.
         self._engine = QueryEngine(
-            retriever=retriever,
+            retriever=plan.retriever,
             llm=self.llm,
             reasoning_llm=self.llm,
-            top_k=top_k,
+            top_k=plan.top_k,
             refusal=self.refusal_handler,
         )
         return self._engine

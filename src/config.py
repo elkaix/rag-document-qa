@@ -70,7 +70,7 @@ TOP_K_RESULTS: int = 5
 #      hybrid, and multi-query retrieval interchangeable. Production picks one
 #      here, so an eval-validated chain is promoted by config, not by a rewrite.
 #      "dense" is the behaviour-preserving default; "reranked" is wired;
-#      "hybrid"/"multi_query" are recognised but deferred (see build_retriever).
+#      "hybrid"/"multi_query" are recognised but deferred (see build_retrieval_plan).
 RETRIEVER_STRATEGY: str = "dense"
 
 # WHY 20: the reranked strategy over-fetches this many dense candidates before

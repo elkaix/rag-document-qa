@@ -43,7 +43,8 @@ behaviour behind a small interface), **seam** (a boundary you can substitute at)
   directly (`DenseRetriever`, `BM25HybridRetriever`) or *compose* an inner
   Retriever (`RerankingRetriever` over-fetches then cross-encodes;
   `MultiQueryRetriever` fans rewritten queries out and dedups). Live in
-  `src/retrieval/`; selected for production by `build_retriever`. See
+  `src/retrieval/`; composed for both production and eval by
+  `compose_retrieval` (`src/retrieval/composition.py`). See
   [ADR 0004](docs/adr/0004-retriever-seam-and-query-engine.md).
 - **QueryEngine** (`src/query_engine/`) — the deep module owning retrieve→generate
   for both the sync (`ask`) and streaming (`ask_stream`) paths: one Markdown

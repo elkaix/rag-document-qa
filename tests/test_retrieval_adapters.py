@@ -199,24 +199,26 @@ def test_multi_query_fans_out_dedups_and_ranks_best_first():
 # --------------------------------------------------------------------------- #
 
 def test_build_retriever_dense_is_the_default_strategy():
-    from src.retrieval import DenseRetriever, build_retriever
+    from src.retrieval import DenseRetriever, build_retrieval_plan
 
-    retriever = build_retriever("dense", _chroma_store())
+    retriever = build_retrieval_plan("dense", _chroma_store()).retriever
     assert isinstance(retriever, DenseRetriever)
 
 
 def test_build_retriever_reranked_composes_dense_and_a_reranker(monkeypatch):
     """reranked wires a RerankingRetriever without loading the real model here."""
-    from src.retrieval import RerankingRetriever, build_retriever
+    from src.retrieval import RerankingRetriever, build_retrieval_plan
 
-    monkeypatch.setattr("src.retrieval.factory.CrossEncoderReranker", _FakeReranker)
-    retriever = build_retriever("reranked", _chroma_store(), rerank_over_fetch_n=15)
+    monkeypatch.setattr("src.retrieval.composition.CrossEncoderReranker", _FakeReranker)
+    retriever = build_retrieval_plan(
+        "reranked", _chroma_store(), rerank_over_fetch_n=15
+    ).retriever
     assert isinstance(retriever, RerankingRetriever)
 
 
 @pytest.mark.parametrize("strategy", ["hybrid", "multi_query", "totally-bogus"])
 def test_build_retriever_rejects_unwired_or_unknown_strategies(strategy):
-    from src.retrieval import build_retriever
+    from src.retrieval import build_retrieval_plan
 
     with pytest.raises(ValueError):
-        build_retriever(strategy, _chroma_store())
+        build_retrieval_plan(strategy, _chroma_store())
