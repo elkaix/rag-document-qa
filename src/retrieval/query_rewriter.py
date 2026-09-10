@@ -1,7 +1,7 @@
 """Multi-query expansion — the LLM rewriter and the Retriever adapter that composes it.
 
 Pipeline position:
-    user query → [MultiQueryRetriever → QueryRewriter] → {q, q', q''} → inner Retriever → union
+    user query → [MultiQueryRetriever → QueryRewriter] → {q, q', q''} → inner Retriever → RRF
 
 Two collaborators live here:
 
@@ -117,12 +117,17 @@ class QueryRewriter:
 
         expansions = self._parse_expansions(raw)
         # Always lead with original; dedupe; cap at original + max_expansions.
+        # BUG FIX: the length check ran *after* the append, so the cap could
+        #     be overshot by one — ``max_expansions=0`` (expansion disabled by
+        #     count) returned two queries, the original plus one alternative.
+        #     Checking before the append makes the configured number a bound
+        #     rather than a suggestion.
         ordered: list[str] = [query]
         for alt in expansions:
-            if alt and alt not in ordered:
-                ordered.append(alt)
             if len(ordered) >= self._max_expansions + 1:
                 break
+            if alt and alt not in ordered:
+                ordered.append(alt)
         return ordered, cost, p_t, c_t
 
     @staticmethod

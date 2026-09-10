@@ -10,7 +10,8 @@ corpus, dense over the Chroma vectors — then fuses them with RRF:
 
 Why RRF over weighted-sum: RRF is parameter-light (one constant), robust to
 score-scale differences across the two retrievers, and the literature shows it
-consistently matches or beats tuned weighted-sum on benchmarks like BEIR.
+consistently matches or beats tuned weighted-sum on benchmarks like BEIR. See
+``fusion`` for the two ways a fused ordering can mislead you.
 
 Design Decision (why the corpus is not a constructor argument):
     This retriever used to take a ``dict[str, str]`` snapshot, which is what
@@ -19,73 +20,24 @@ Design Decision (why the corpus is not a constructor argument):
     which re-reads the collection whenever the store's revision moves. Nothing
     varies across that seam — there is one corpus implementation — so it is an
     *internal* seam, constructed here rather than injected.
+
+Design Decision (why the sparse half lives in its own module):
+    ``sparse_index`` builds and scores the BM25 index; this module fuses its
+    output with the dense ranking. Two responsibilities, and the sparse one is
+    pure — a snapshot in, ids out — so it can be tested without a vector store.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-
-from rank_bm25 import BM25Okapi
 
 from src.domain import Chunk, SearchResult
 from src.retrieval.corpus import ChunkCorpus, CorpusSnapshot
 from src.retrieval.fusion import reciprocal_rank_fusion
+from src.retrieval.sparse_index import SparseIndex, build_sparse_index, rank_ids
 from src.vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
-
-
-def _tokenize(text: str) -> list[str]:
-    """Split text into BM25 terms.
-
-    WHY a plain lowercase split: rank-bm25 expects pre-tokenized input, and a
-    whitespace split is good enough for English RAG corpora. Stemming and
-    stop-word removal would help marginally and would add a runtime dependency
-    (nltk) plus a corpus-language assumption we do not want to make here.
-    """
-    return text.lower().split()
-
-
-@dataclass(frozen=True)
-class _SparseIndex:
-    """A BM25 index over one corpus snapshot, or an explicitly disabled one.
-
-    Attributes:
-        chunk_ids: Corpus ids, positionally aligned with the BM25 documents.
-        bm25: The index, or None when the corpus cannot support one (empty
-            collection, or every chunk tokenizing to nothing). None means
-            "skip the sparse side", never "crash on the next query".
-    """
-
-    chunk_ids: list[str]
-    bm25: BM25Okapi | None
-
-
-def _build_sparse_index(snapshot: CorpusSnapshot) -> _SparseIndex:
-    """Build a BM25 index over a corpus snapshot, degrading instead of raising.
-
-    Args:
-        snapshot: The corpus to index.
-
-    Returns:
-        An index whose ``bm25`` is None when BM25 is not defined over this
-        corpus.
-
-    BUG FIX: ``BM25Okapi`` divides by the corpus size to get the average
-        document length and by the term count to get the average IDF, so an
-        empty collection and a collection whose chunks all tokenize to nothing
-        both raised ZeroDivisionError from inside the library. An empty index
-        is a normal state for a fresh deployment — the first query after boot
-        and before any upload hit exactly this path — so it must degrade to
-        dense-only retrieval rather than fail the request.
-    """
-    chunk_ids = list(snapshot.chunks.keys())
-    tokenized = [_tokenize(snapshot.chunks[cid].content) for cid in chunk_ids]
-    if not any(tokenized):
-        logger.debug("Sparse index skipped: corpus has no tokenizable text.")
-        return _SparseIndex(chunk_ids=chunk_ids, bm25=None)
-    return _SparseIndex(chunk_ids=chunk_ids, bm25=BM25Okapi(tokenized))
 
 
 class BM25HybridRetriever:
@@ -112,10 +64,10 @@ class BM25HybridRetriever:
         self._bm25_top_k = bm25_top_k
         self._dense_top_k = dense_top_k
         self._rrf_k = rrf_k
-        self._index: _SparseIndex | None = None
+        self._index: SparseIndex | None = None
         self._built_from: CorpusSnapshot | None = None
 
-    def _sparse_index(self) -> tuple[_SparseIndex, CorpusSnapshot]:
+    def _sparse_index(self) -> tuple[SparseIndex, CorpusSnapshot]:
         """Return the BM25 index for the current corpus, rebuilding if stale.
 
         The snapshot is cached by *identity*: ``ChunkCorpus`` hands back the
@@ -123,49 +75,34 @@ class BM25HybridRetriever:
         rule lives in one module and this one only asks.
         """
         snapshot = self._corpus.snapshot()
-        if self._index is None or self._built_from is not snapshot:
-            self._index = _build_sparse_index(snapshot)
-            self._built_from = snapshot
+        index = self._index
+        if index is None or self._built_from is not snapshot:
+            index = build_sparse_index(snapshot)
             logger.debug(
                 "Rebuilt BM25 index at store revision %d (%d chunks).",
                 snapshot.revision,
                 len(snapshot),
             )
-        return self._index, snapshot
-
-    def _sparse_ids(self, query: str, index: _SparseIndex) -> list[str]:
-        """Return BM25's ranked candidate ids for `query` (empty when disabled).
-
-        Only chunks with a positive BM25 score are returned. A zero score means
-        the query shares no term with the chunk; feeding those into the fusion
-        would let arbitrary non-matches inherit a rank, and with a corpus
-        smaller than ``bm25_top_k`` that is every chunk in the collection.
-
-        Note:
-            BM25Okapi's IDF is ``log(N - df + 0.5) - log(df + 0.5)``, which is
-            zero for a term appearing in exactly half the corpus and negative
-            above that. On a two-chunk collection a perfectly discriminating
-            term therefore scores 0 and is dropped here — the sparse side goes
-            quiet on corpora too small for term statistics to mean anything,
-            which is the right thing for it to do.
-
-        TRADE-OFF: scoring sorts the whole corpus, so this is O(N log N) per
-            query in the number of chunks. Fine at the scale a single-worker
-            ChromaDB deployment serves; a corpus large enough to feel it wants
-            a real inverted index (Elasticsearch, Vespa) rather than rank-bm25.
-        """
-        if index.bm25 is None:
-            return []
-        tokens = _tokenize(query)
-        if not tokens:
-            return []
-        scores = index.bm25.get_scores(tokens)
-        ranked = sorted(
-            (i for i in range(len(index.chunk_ids)) if scores[i] > 0.0),
-            key=lambda i: scores[i],
-            reverse=True,
-        )[: self._bm25_top_k]
-        return [index.chunk_ids[i] for i in ranked]
+        # BUG FIX: this returned ``self._index`` — the attribute, not the local
+        #     just built. Retrieval runs on more than one thread (the websocket
+        #     path drives it through ``loop.run_in_executor``, and the backend
+        #     is a lifespan singleton), so a concurrent rebuild could replace
+        #     the attribute between the check and the return, handing this
+        #     caller an index built from a *different* snapshot than the one
+        #     returned alongside it. The two are then inconsistent:
+        #     ``index.chunk_ids`` can name chunks absent from ``snapshot.chunks``
+        #     and the caller silently drops them. Returning the local pairs each
+        #     caller with the index it actually validated.
+        # WHY the two attributes are published last, together: they are the
+        #     cache, and a reader that saw the new index paired with the old
+        #     ``_built_from`` would rebuild on every call forever. Writing them
+        #     after the work means a racing thread sees either the old
+        #     consistent pair or the new one, never a torn one. Two threads may
+        #     still duplicate a rebuild — that costs time, not correctness, and
+        #     ``ChunkCorpus`` already serialises the expensive half.
+        self._index = index
+        self._built_from = snapshot
+        return index, snapshot
 
     def retrieve(self, query: str, top_k: int = 5) -> list[SearchResult]:
         """Run BM25 + dense, RRF-fuse the two rankings, return the top `top_k`.
@@ -188,10 +125,19 @@ class BM25HybridRetriever:
             anything here similar enough" must read the best score in the list
             rather than assume position 0 holds it (``RefusalHandler`` does).
         """
+        # BUG FIX: both halves were sized from the constructor's constants
+        #     alone, so a caller asking for more results than either constant
+        #     silently got fewer. ``POST /api/query`` accepts top_k up to 50
+        #     (src/api/models.py) while both constants default to 20, so
+        #     ``top_k=50`` returned at most 40 chunks — usually far fewer, since
+        #     BM25 drops its zero-score non-matches — with nothing telling the
+        #     caller the number they asked for was not honoured. Fusing needs at
+        #     least ``top_k`` candidates per half to be able to return ``top_k``.
+        fetch_n = max(self._dense_top_k, top_k)
         index, snapshot = self._sparse_index()
-        sparse_ids = self._sparse_ids(query, index)
+        sparse_ids = rank_ids(query, index, max(self._bm25_top_k, top_k))
 
-        dense_results = self._vector_store.query(query_text=query, top_k=self._dense_top_k)
+        dense_results = self._vector_store.query(query_text=query, top_k=fetch_n)
         dense_by_id = {r.chunk_id: r for r in dense_results}
 
         fused_ids = reciprocal_rank_fusion(
@@ -207,9 +153,13 @@ class BM25HybridRetriever:
                 continue
             chunk = snapshot.chunks.get(chunk_id)
             if chunk is None:
-                # The corpus moved between the sparse ranking and this lookup
-                # (a delete landing mid-query). Dropping the id is correct:
-                # the chunk no longer exists to cite.
+                # Defensive, and unreachable by construction: every sparse id
+                # was read out of this very snapshot, which is immutable, so a
+                # delete landing mid-query cannot empty it. Kept because the
+                # alternative to skipping an unciteable id is a KeyError in the
+                # request path, and because it is the one place a future
+                # sparse-id source that does *not* come from the snapshot would
+                # show up.
                 continue
             results.append(_as_result(chunk))
         return results

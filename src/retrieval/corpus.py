@@ -43,6 +43,7 @@ TRADE-OFF: the first query after an upload pays a full collection read, so
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 from src.domain import Chunk
@@ -67,7 +68,14 @@ class CorpusSnapshot:
 
 
 class ChunkCorpus:
-    """A lazily-materialised, self-refreshing view of the whole collection."""
+    """A lazily-materialised view of one vector store's whole collection.
+
+    It refreshes for writes issued through the ``ChromaVectorStore`` it was
+    given, which is the only thing the store's revision counter can see. A write
+    through a *different* store object wrapping the same collection is invisible
+    here — see ``ChromaVectorStore.revision`` for why production is nonetheless
+    safe.
+    """
 
     def __init__(self, vector_store: ChromaVectorStore) -> None:
         """Track a vector store without reading it yet.
@@ -84,6 +92,15 @@ class ChunkCorpus:
         #     look fresh-and-empty, and hybrid retrieval would silently serve
         #     dense-only results until the first write of the process.
         self._snapshot: CorpusSnapshot | None = None
+        # WHY a lock: snapshot() is a read-modify-write on ``_snapshot``, and
+        #     the API serves retrieval from more than one thread (the websocket
+        #     path goes through ``loop.run_in_executor``). Unsynchronised, two
+        #     threads both miss, both pay the full collection read, and the
+        #     slower one can then install its *older* snapshot over the newer —
+        #     after which every identity-caching consumer rebuilds on every
+        #     call. The lock is held across the read, so the loser of the race
+        #     waits and gets the winner's snapshot instead of duplicating it.
+        self._lock = threading.Lock()
 
     def snapshot(self) -> CorpusSnapshot:
         """Return the corpus, re-reading it only if the store has been written.
@@ -93,11 +110,18 @@ class ChunkCorpus:
             while the store's revision is unchanged, so consumers may cache
             derived values on its identity.
         """
-        revision = self._vector_store.revision
-        cached = self._snapshot
-        if cached is not None and cached.revision == revision:
-            return cached
+        with self._lock:
+            # WHY the revision is read *before* all_chunks(): a write landing
+            #     between the two labels fresh data with the older revision, so
+            #     the next call re-reads — one wasted rebuild. Reading it after
+            #     would label older data with the newer revision, and the corpus
+            #     would serve a stale index believing it fresh. Cheap-and-wrong
+            #     is the failure this ordering avoids.
+            revision = self._vector_store.revision
+            cached = self._snapshot
+            if cached is not None and cached.revision == revision:
+                return cached
 
-        fresh = CorpusSnapshot(revision=revision, chunks=self._vector_store.all_chunks())
-        self._snapshot = fresh
-        return fresh
+            fresh = CorpusSnapshot(revision=revision, chunks=self._vector_store.all_chunks())
+            self._snapshot = fresh
+            return fresh

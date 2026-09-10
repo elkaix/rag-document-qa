@@ -121,5 +121,12 @@ class RerankingRetriever:
             The reranked top-`top_k` SearchResults (empty if the inner retriever
             found nothing).
         """
-        candidates = self._inner.retrieve(query, top_k=self._over_fetch_n)
+        # BUG FIX: the over-fetch was sized from ``over_fetch_n`` alone, so a
+        #     caller asking for more results than that constant silently got
+        #     fewer. ``POST /api/query`` accepts top_k up to 50
+        #     (src/api/models.py) while ``RERANK_OVER_FETCH_N`` is 20, so
+        #     ``top_k=50`` returned 20 chunks and nothing said the requested
+        #     count was not honoured. Over-fetching is meant to give the
+        #     cross-encoder *more* choice than the caller wants, never less.
+        candidates = self._inner.retrieve(query, top_k=max(self._over_fetch_n, top_k))
         return self._reranker.rerank(query, candidates, final_top_k=top_k)

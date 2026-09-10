@@ -198,3 +198,48 @@ def test_a_query_with_no_terms_still_returns_dense_results():
         dense=[_sr("c1", "cats are carnivorous mammals", 0.5)],
     )
     assert [r.chunk_id for r in _hybrid(store).retrieve("   ", top_k=5)] == ["c1"]
+
+
+def test_top_k_larger_than_the_configured_widths_is_still_honoured():
+    """Both halves used to be sized from the constructor constants alone.
+
+    `POST /api/query` accepts top_k up to 50 while both widths default to 20,
+    so a caller asking for 30 got at most 20 dense + 20 sparse candidates and,
+    after fusion dropped the overlap, fewer results than requested — with
+    nothing saying so.
+    """
+    chunks = {f"c{i}": _chunk(f"c{i}", f"cats chunk number {i}") for i in range(30)}
+    dense = [_sr(f"c{i}", f"cats chunk number {i}", 0.9 - i * 0.01) for i in range(30)]
+    from src.retrieval.hybrid import BM25HybridRetriever
+
+    retriever = BM25HybridRetriever(
+        vector_store=_FakeStore(chunks=chunks, dense=dense),
+        bm25_top_k=10,
+        dense_top_k=10,
+    )
+    assert len(retriever.retrieve("cats", top_k=25)) == 25
+
+
+def test_top_k_below_the_configured_widths_still_over_fetches():
+    """The widths remain a floor: fusion wants more candidates than it returns."""
+    chunks = {f"c{i}": _chunk(f"c{i}", f"cats chunk number {i}") for i in range(30)}
+    dense = [_sr(f"c{i}", f"cats chunk number {i}", 0.9 - i * 0.01) for i in range(30)]
+    from src.retrieval.hybrid import BM25HybridRetriever
+
+    store = _FakeStore(chunks=chunks, dense=dense)
+    retriever = BM25HybridRetriever(vector_store=store, bm25_top_k=20, dense_top_k=20)
+    assert len(retriever.retrieve("cats", top_k=5)) == 5
+
+
+def test_rrf_counts_a_repeated_id_once_at_its_best_rank():
+    """A duplicate inside one ranking must not buy extra fused score.
+
+    No current caller emits duplicates, which is exactly why unguarded
+    accumulation would fail silently the first time one did: an id listed three
+    times would outrank a genuinely better result on repetition alone.
+    """
+    from src.retrieval import reciprocal_rank_fusion
+
+    fused = reciprocal_rank_fusion([["a", "a", "a", "b"], ["b", "c"]], rrf_k=60)
+    # "b" appears at rank 4 and rank 1; "a" only at rank 1. b: 1/64 + 1/61 > a: 1/61.
+    assert fused == ["b", "a", "c"]

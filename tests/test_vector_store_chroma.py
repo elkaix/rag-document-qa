@@ -329,18 +329,43 @@ class TestRevision:
         )
         assert store.revision == 1
 
-    def test_delete_advances_it_even_when_nothing_matched(self, chroma_collection):
-        """A no-op delete still counts: the corpus must not trust a stale cache.
+    def test_delete_that_matched_nothing_does_not_advance_it(self, chroma_collection):
+        """A no-op delete changes no chunk, so it must not invalidate any index.
 
-        Chroma's delete() is a filtered scan, so "nothing matched" is a fact
-        about the query, not a guarantee the collection is unchanged from the
-        derived index's point of view. Counting it is the cheap, safe side.
+        This test previously asserted the opposite, on the reasoning that
+        Chroma's delete() is a filtered scan and so "nothing matched" describes
+        the query rather than the collection. That caution cost more than it
+        bought: deleting an unknown or already-deleted doc_id is the ordinary
+        404 path and the ordinary retry path, and each one forced a full corpus
+        re-read and BM25 rebuild for a call that changed nothing.
+
+        What made the cheap side safe is `delete_by_doc_id` now holding the
+        store's write lock across the count *and* the delete, so no concurrent
+        upsert can slip a matching chunk in between them. A count of 0 is
+        therefore a real guarantee that the corpus is unchanged, not a hopeful
+        reading of one — see the companion test below.
         """
         from src.vector_store import ChromaVectorStore
 
         store = ChromaVectorStore(collection=chroma_collection)
         store.delete_by_doc_id("never-ingested")
+        assert store.revision == 0
+
+    def test_delete_that_matched_something_does_advance_it(self, chroma_collection):
+        """The other half: a delete that removed chunks must invalidate indexes."""
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore(collection=chroma_collection)
+        store.upsert(
+            ids=["c1"],
+            documents=["Doc1 chunk1"],
+            metadatas=[{"doc_id": "doc1"}],
+            embeddings=[VEC_A],
+        )
         assert store.revision == 1
+
+        assert store.delete_by_doc_id("doc1") == 1
+        assert store.revision == 2
 
     def test_reads_do_not_advance_it(self, populated_vector_store):
         before = populated_vector_store.revision

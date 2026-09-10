@@ -44,11 +44,40 @@ def reciprocal_rank_fusion(
             top-rank items more, larger flattens contributions).
 
     Returns:
-        Fused ranking, IDs ordered by descending fused score. Ties keep the
-        order in which the ids were first seen, so the fusion is deterministic.
+        Fused ranking, IDs ordered by descending fused score. The result is
+        deterministic for a given input, but the resolution of a tie is not a
+        documented guarantee — see below.
+
+    Note:
+        Two caveats worth knowing before reading a fused ordering as meaningful.
+
+        *Ties resolve toward the list passed first.* Rank *r* in any list earns
+        the same ``1 / (rrf_k + r)``, so disjoint lists tie at every rank and
+        Python's stable sort breaks each tie for whichever list was passed
+        first. ``BM25HybridRetriever`` passes sparse before dense, so a
+        sparse-only hit wins the positional coin-flip against a dense-only hit
+        at the same rank. At ``top_k=1`` that decides the single result
+        returned, and a sparse-only hit carries score 0.0. Swapping the
+        arguments would flip the bias, not remove it: with no common scale
+        there is no principled tie-break, which is the price of rank fusion.
+
+        *Exactly-tied sums may still order arbitrarily.* Float addition is not
+        associative, so ids whose scores are mathematically equal can differ in
+        the last bit and sort against insertion order. Deterministic, but not
+        first-seen.
     """
     scores: dict[str, float] = {}
     for ranking in rankings:
+        # WHY the per-list dedupe: an id repeated inside one ranking would
+        #     otherwise earn a contribution per occurrence, so a retriever that
+        #     emitted the same chunk three times could outrank a genuinely
+        #     better result on repetition alone. Every current caller passes
+        #     unique ids, which is exactly why this would fail silently if one
+        #     ever stopped. Only the best (lowest) rank counts.
+        seen: set[str] = set()
         for rank, item_id in enumerate(ranking, start=1):
+            if item_id in seen:
+                continue
+            seen.add(item_id)
             scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (rrf_k + rank)
     return sorted(scores.keys(), key=lambda i: scores[i], reverse=True)

@@ -290,3 +290,35 @@ def test_build_retriever_multi_query_without_an_llm_fails_loudly(monkeypatch):
     monkeypatch.setattr("src.retrieval.composition.QUERY_REWRITER_MODEL", "gpt-4.1-nano")
     with pytest.raises(ValueError, match="LLM handler"):
         build_retrieval_plan("multi_query", _chroma_store())
+
+
+def test_reranker_over_fetches_at_least_the_requested_top_k():
+    """The over-fetch was sized from over_fetch_n alone, capping large top_k.
+
+    `POST /api/query` accepts top_k up to 50 while RERANK_OVER_FETCH_N is 20,
+    so `top_k=30` under the reranked strategy silently returned 20. Over-fetching
+    exists to give the cross-encoder more choice than the caller wants, never
+    less.
+    """
+    from src.retrieval.reranker import RerankingRetriever
+
+    asked: list[int] = []
+
+    class _Inner:
+        def retrieve(self, query, top_k=5):
+            asked.append(top_k)
+            return [
+                SearchResult(chunk_id=f"c{i}", content="t", score=1.0, metadata={}, doc_id="d")
+                for i in range(top_k)
+            ]
+
+    class _PassThrough:
+        def rerank(self, query, candidates, final_top_k):
+            return candidates[:final_top_k]
+
+    out = RerankingRetriever(inner=_Inner(), reranker=_PassThrough(), over_fetch_n=20).retrieve(
+        "q", top_k=30
+    )
+
+    assert asked == [30]
+    assert len(out) == 30
