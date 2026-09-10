@@ -38,9 +38,7 @@ def _is_constrained(model: str) -> bool:
     accept the default temperature; older gpt-4* families accept the full range.
     """
     lower = model.lower()
-    return (
-        lower.startswith(("gpt-5", "o1", "o3", "o4"))
-    )
+    return lower.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
 class OpenAICompatibleAdapter:
@@ -82,9 +80,7 @@ class OpenAICompatibleAdapter:
     def generate(self, messages: list[dict], **kwargs: object) -> GenerationResult:
         """Call chat.completions.create and return text plus usage."""
         client = self._client_factory()
-        response = client.chat.completions.create(
-            **self._request_kwargs(messages=messages)
-        )
+        response = client.chat.completions.create(**self._request_kwargs(messages=messages))
         text = response.choices[0].message.content or ""
         usage = _usage_from_response(response)
         if usage is None:
@@ -114,9 +110,7 @@ class OpenAICompatibleAdapter:
             if delta and delta.content:
                 collected.append(delta.content)
                 yield delta.content
-        yield reported or counted_usage(
-            join_message_text(messages), "".join(collected), self.model
-        )
+        yield reported or counted_usage(join_message_text(messages), "".join(collected), self.model)
 
 
 def _usage_from_response(response: object) -> Usage | None:

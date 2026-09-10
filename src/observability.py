@@ -47,9 +47,7 @@ def init_observability(otlp_endpoint: str | None = None) -> None:
         return
     _INITIALIZED = True
 
-    endpoint = otlp_endpoint or os.getenv(
-        "OTLP_ENDPOINT", "http://localhost:6006/v1/traces"
-    )
+    endpoint = otlp_endpoint or os.getenv("OTLP_ENDPOINT", "http://localhost:6006/v1/traces")
 
     try:
         import opentelemetry.trace as otel_trace
@@ -70,9 +68,7 @@ def init_observability(otlp_endpoint: str | None = None) -> None:
     except Exception as exc:
         # TRADE-OFF: We catch broadly here because we never want Phoenix
         # being unavailable to crash the RAG service.  A warning is enough.
-        logger.warning(
-            "Observability init failed — spans will be no-ops. Reason: %s", exc
-        )
+        logger.warning("Observability init failed — spans will be no-ops. Reason: %s", exc)
 
 
 def get_tracer():

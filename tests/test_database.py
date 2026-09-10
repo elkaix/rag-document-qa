@@ -37,6 +37,7 @@ from src.models.message import Message, MessageSource
 # Shared fixture: isolated in-memory engine for each test class
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def engine():
     """
@@ -59,6 +60,7 @@ def engine():
 # TestDatabaseSetup
 # ---------------------------------------------------------------------------
 
+
 class TestDatabaseSetup:
     """Verify the engine and table scaffolding work correctly."""
 
@@ -78,9 +80,9 @@ class TestDatabaseSetup:
             table_names = {row[0] for row in result}
 
         expected = {"conversations", "messages", "message_sources", "documents"}
-        assert expected.issubset(table_names), (
-            f"Missing tables. Found: {table_names}. Expected at least: {expected}"
-        )
+        assert expected.issubset(
+            table_names
+        ), f"Missing tables. Found: {table_names}. Expected at least: {expected}"
 
     def test_foreign_keys_enabled(self, engine):
         """
@@ -103,6 +105,7 @@ class TestDatabaseSetup:
 # ---------------------------------------------------------------------------
 # TestConversationModel
 # ---------------------------------------------------------------------------
+
 
 class TestConversationModel:
     """Verify Conversation CRUD and cascade behaviour."""
@@ -181,20 +184,21 @@ class TestConversationModel:
             session.commit()
 
         with Session(engine) as session:
-            assert session.get(Message, msg_id) is None, (
-                "Message was not deleted when its Conversation was deleted"
-            )
+            assert (
+                session.get(Message, msg_id) is None
+            ), "Message was not deleted when its Conversation was deleted"
             remaining_sources = session.exec(
                 select(MessageSource).where(MessageSource.message_id == msg_id)
             ).all()
-            assert len(remaining_sources) == 0, (
-                "MessageSources were not deleted when their Message was deleted"
-            )
+            assert (
+                len(remaining_sources) == 0
+            ), "MessageSources were not deleted when their Message was deleted"
 
 
 # ---------------------------------------------------------------------------
 # TestDocumentRecordModel
 # ---------------------------------------------------------------------------
+
 
 class TestDocumentRecordModel:
     """Verify DocumentRecord persistence."""
@@ -232,6 +236,7 @@ class TestDocumentRecordModel:
 # ---------------------------------------------------------------------------
 # TestGetSession
 # ---------------------------------------------------------------------------
+
 
 class TestGetSession:
     """Verify the get_session dependency-injection helper."""

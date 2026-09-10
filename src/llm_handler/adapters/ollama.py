@@ -130,9 +130,7 @@ class OllamaAdapter:
         except _REQUEST_EXCEPTION as exc:
             raise _unavailable(exc) from exc
 
-        yield reported or counted_usage(
-            join_message_text(messages), "".join(collected), self.model
-        )
+        yield reported or counted_usage(join_message_text(messages), "".join(collected), self.model)
 
 
 def _usage_from(data: dict) -> Usage | None:

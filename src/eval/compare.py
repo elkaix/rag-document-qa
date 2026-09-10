@@ -89,11 +89,7 @@ def _paired_values(
         are aligned by position.
     """
     # Gather question_ids that have a score in run A for this (metric, dataset).
-    candidates = {
-        qid
-        for (qid, ds, m) in scores_a
-        if ds == dataset and m == metric
-    }
+    candidates = {qid for (qid, ds, m) in scores_a if ds == dataset and m == metric}
     a_vals: list[float] = []
     b_vals: list[float] = []
     qids: list[str] = []
@@ -103,6 +99,7 @@ def _paired_values(
         if a_score is None or b_score is None:
             continue
         import math
+
         if math.isnan(a_score) or math.isnan(b_score):
             continue
         a_vals.append(a_score)
@@ -200,7 +197,9 @@ def compare_runs(id_a: str, id_b: str) -> CompareResult:
     # PATTERN: Prefer recall_at_5 for consistency across evals;
     # fall back to alphabetically-first metric for reproducibility.
     all_metrics = sorted({m for (m, _) in shared_combos})
-    headline = "recall_at_5" if "recall_at_5" in all_metrics else (all_metrics[0] if all_metrics else None)
+    headline = (
+        "recall_at_5" if "recall_at_5" in all_metrics else (all_metrics[0] if all_metrics else None)
+    )
 
     # Step 6: Compute per-question diffs for the headline metric.
     # Collect across all real datasets (exclude None) where headline metric appears.
@@ -215,13 +214,15 @@ def compare_runs(id_a: str, id_b: str) -> CompareResult:
             a_vals, b_vals, qids = _paired_values(scores_a, scores_b, headline, ds)
             for qid, a_score, b_score in zip(qids, a_vals, b_vals, strict=False):
                 raw_delta = b_score - a_score
-                per_question_rows.append({
-                    "question_id": qid,
-                    "dataset": ds,
-                    "a_score": a_score,
-                    "b_score": b_score,
-                    "delta": raw_delta,
-                })
+                per_question_rows.append(
+                    {
+                        "question_id": qid,
+                        "dataset": ds,
+                        "a_score": a_score,
+                        "b_score": b_score,
+                        "delta": raw_delta,
+                    }
+                )
 
     # Sort by absolute delta descending, then cap at top 10.
     per_question_rows.sort(key=lambda row: abs(row["delta"]), reverse=True)

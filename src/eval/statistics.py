@@ -121,9 +121,7 @@ def paired_permutation_test(
             pairs survive NaN-drop.
     """
     if len(a) != len(b):
-        raise ValueError(
-            f"Paired samples must have equal length: len(a)={len(a)}, len(b)={len(b)}"
-        )
+        raise ValueError(f"Paired samples must have equal length: len(a)={len(a)}, len(b)={len(b)}")
     arr_a = np.asarray(a, dtype=float)
     arr_b = np.asarray(b, dtype=float)
     # Drop pairs where either side is NaN.

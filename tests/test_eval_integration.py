@@ -17,14 +17,21 @@ from src.eval.schemas import EvalQuestion
 
 class DummyLLM:
     """Returns canned data — JSON for judges, plain for generation."""
+
     model = "gpt-4.1-nano"  # engine reads .model for spans + cost pricing
 
     def generate(self, prompt: str, system_prompt: str | None = None) -> str:
         if "JSON" in (system_prompt or "") or '"score"' in prompt or '"is_refusal"' in prompt:
-            return json.dumps({
-                "score": 1.0, "claims": [], "chunks": [],
-                "factual_match": 1.0, "is_refusal": False, "reasoning": "ok",
-            })
+            return json.dumps(
+                {
+                    "score": 1.0,
+                    "claims": [],
+                    "chunks": [],
+                    "factual_match": 1.0,
+                    "is_refusal": False,
+                    "reasoning": "ok",
+                }
+            )
         return "<dummy answer>"
 
     def generate_with_usage(
@@ -35,19 +42,24 @@ class DummyLLM:
 
 
 def _make_config(name: str, top_k: int) -> EvalConfig:
-    return EvalConfig.model_validate({
-        "name": name, "description": f"top_k={top_k}",
-        "pipeline": {
-            "chunker": {"strategy": "recursive", "chunk_size": 256, "chunk_overlap": 32},
-            "retriever": {"top_k": top_k},
-            "generator": {"model": "gpt-4.1-nano", "reasoning_model": None},
-        },
-        "eval": {
-            "datasets": ["squad_v2_dev_200"],
-            "judge_model": "gpt-4.1-nano",
-            "bootstrap_n": 100, "permutation_n": 100, "seed": 42,
-        },
-    })
+    return EvalConfig.model_validate(
+        {
+            "name": name,
+            "description": f"top_k={top_k}",
+            "pipeline": {
+                "chunker": {"strategy": "recursive", "chunk_size": 256, "chunk_overlap": 32},
+                "retriever": {"top_k": top_k},
+                "generator": {"model": "gpt-4.1-nano", "reasoning_model": None},
+            },
+            "eval": {
+                "datasets": ["squad_v2_dev_200"],
+                "judge_model": "gpt-4.1-nano",
+                "bootstrap_n": 100,
+                "permutation_n": 100,
+                "seed": 42,
+            },
+        }
+    )
 
 
 @pytest.fixture
@@ -58,6 +70,7 @@ def tmp_eval_runs(tmp_path, monkeypatch):
     import importlib
 
     import src.eval.storage
+
     importlib.reload(src.eval.storage)
     yield src.eval.storage
     monkeypatch.delenv("EVAL_RUNS_DIR", raising=False)
@@ -68,8 +81,10 @@ def tmp_eval_runs(tmp_path, monkeypatch):
 def synthetic_squad(monkeypatch, tmp_path):
     questions = [
         EvalQuestion(
-            id=f"q{i}", question=f"What is fact {i}?",
-            gold_answer=f"Fact {i}.", gold_chunk_ids=[f"q{i}"],
+            id=f"q{i}",
+            question=f"What is fact {i}?",
+            gold_answer=f"Fact {i}.",
+            gold_chunk_ids=[f"q{i}"],
             metadata={"context": f"Fact {i} is important.", "title": "t"},
         )
         for i in range(5)
@@ -87,7 +102,9 @@ class TestFullLifecycle:
         # Run 1: top_k=3
         cfg_a = _make_config("topk-3", top_k=3)
         runner_a = EvalRunner(
-            cfg_a, llm_override=DummyLLM(), judge_llm_override=DummyLLM(),
+            cfg_a,
+            llm_override=DummyLLM(),
+            judge_llm_override=DummyLLM(),
         )
         meta_a = runner_a.run()
         assert meta_a.n_questions == 5
@@ -96,7 +113,9 @@ class TestFullLifecycle:
         # Run 2: top_k=1
         cfg_b = _make_config("topk-1", top_k=1)
         runner_b = EvalRunner(
-            cfg_b, llm_override=DummyLLM(), judge_llm_override=DummyLLM(),
+            cfg_b,
+            llm_override=DummyLLM(),
+            judge_llm_override=DummyLLM(),
         )
         meta_b = runner_b.run()
         assert meta_b.n_questions == 5

@@ -58,9 +58,7 @@ class QueryResponse(BaseModel):
 
     answer: str = Field(description="Generated answer.")
     sources: list[SourceInfo] = Field(default_factory=list, description="Retrieved source chunks.")
-    confidence: float = Field(
-        ge=0.0, le=1.0, description="Estimated answer confidence (0–1)."
-    )
+    confidence: float = Field(ge=0.0, le=1.0, description="Estimated answer confidence (0–1).")
     latency_ms: float = Field(description="Total request latency in milliseconds.")
     # WHY: StageTelemetry carries per-stage timing and token-cost numbers.
     #      Optional with None default so existing callers that construct

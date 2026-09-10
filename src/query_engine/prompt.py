@@ -64,9 +64,7 @@ def build_context(results: list[SearchResult]) -> str:
         the prefix is what lets the model (and downstream citations) attribute
         each passage to its source document.
     """
-    return "\n\n".join(
-        f"[{r.metadata.get('filename', 'unknown')}] {r.content}" for r in results
-    )
+    return "\n\n".join(f"[{r.metadata.get('filename', 'unknown')}] {r.content}" for r in results)
 
 
 def build_answer_user_prompt(context: str, question: str) -> str:

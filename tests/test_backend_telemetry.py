@@ -34,6 +34,7 @@ from src.vector_store import ChromaVectorStore
 # Fixtures (mirrored from test_backend.py)                                    #
 # --------------------------------------------------------------------------- #
 
+
 @pytest.fixture
 def tmp_sqlite_engine():
     """In-memory SQLite engine with all tables created."""
@@ -84,12 +85,11 @@ def ingested_backend(backend: RAGBackend, tmp_path: Path) -> RAGBackend:
 # Tests                                                                        #
 # --------------------------------------------------------------------------- #
 
+
 class TestQueryWithTelemetry:
     """Tests for RAGBackend.query_with_telemetry()."""
 
-    def test_telemetry_fields_are_non_negative_after_ingest(
-        self, ingested_backend: RAGBackend
-    ):
+    def test_telemetry_fields_are_non_negative_after_ingest(self, ingested_backend: RAGBackend):
         """query_with_telemetry returns a StageTelemetry with all non-negative fields.
 
         PATTERN: With no real LLM configured, LLMHandler falls back to a dummy
@@ -150,9 +150,7 @@ class TestQueryWithTelemetry:
 class TestStreamQueryTelemetry:
     """Tests for the telemetry event emitted by stream_query()."""
 
-    def test_stream_query_emits_telemetry_event_last(
-        self, ingested_backend: RAGBackend
-    ):
+    def test_stream_query_emits_telemetry_event_last(self, ingested_backend: RAGBackend):
         """stream_query yields a ("telemetry", dict) as the final event after ("done", ...).
 
         WHY last: The done event is what the client waits for to display sources.
@@ -172,7 +170,13 @@ class TestStreamQueryTelemetry:
         assert isinstance(last_data, dict)
 
         # All five fields must be present and non-negative
-        for field in ("retrieve_ms", "generate_ms", "prompt_tokens", "completion_tokens", "cost_usd"):
+        for field in (
+            "retrieve_ms",
+            "generate_ms",
+            "prompt_tokens",
+            "completion_tokens",
+            "cost_usd",
+        ):
             assert field in last_data, f"Missing telemetry field: {field}"
             assert last_data[field] >= 0, f"Telemetry field {field} is negative: {last_data[field]}"
 
@@ -220,9 +224,7 @@ class TestStreamQueryTelemetry:
         """
         conv_id = ingested_backend.create_conversation()["id"]
 
-        events = list(
-            ingested_backend.stream_query("What is RAG?", conversation_id=conv_id)
-        )
+        events = list(ingested_backend.stream_query("What is RAG?", conversation_id=conv_id))
 
         # Telemetry still last, with non-negative usage from the captured Usage.
         last_type, last_data = events[-1]
@@ -239,9 +241,7 @@ class TestStreamQueryTelemetry:
         detail = ingested_backend.get_conversation(conv_id)
         assert any(m["role"] == "assistant" for m in detail["messages"])
 
-    def test_stream_query_existing_events_order_preserved(
-        self, ingested_backend: RAGBackend
-    ):
+    def test_stream_query_existing_events_order_preserved(self, ingested_backend: RAGBackend):
         """Existing event types appear in the expected order before telemetry.
 
         The protocol guarantees: status* → reasoning* → status → token* → done → telemetry
@@ -257,9 +257,7 @@ class TestStreamQueryTelemetry:
 
         done_idx = next(i for i, (t, _) in enumerate(events) if t == "done")
         telemetry_idx = next(i for i, (t, _) in enumerate(events) if t == "telemetry")
-        assert telemetry_idx > done_idx, (
-            "telemetry event must come after done event"
-        )
+        assert telemetry_idx > done_idx, "telemetry event must come after done event"
 
 
 class TestSourceShapeParity:
@@ -281,16 +279,12 @@ class TestSourceShapeParity:
                 return data["sources"]
         raise AssertionError("stream_query emitted no done event")
 
-    def test_both_paths_return_the_same_source_fields(
-        self, ingested_backend: RAGBackend
-    ):
+    def test_both_paths_return_the_same_source_fields(self, ingested_backend: RAGBackend):
         sync = self._sync_sources(ingested_backend)
         stream = self._stream_sources(ingested_backend)
         assert sync and stream, "fixture should retrieve at least one chunk"
         assert set(sync[0]) == set(stream[0])
 
-    def test_streaming_sources_carry_chunk_index(
-        self, ingested_backend: RAGBackend
-    ):
+    def test_streaming_sources_carry_chunk_index(self, ingested_backend: RAGBackend):
         stream = self._stream_sources(ingested_backend)
         assert "chunk_index" in stream[0]

@@ -25,11 +25,13 @@ def test_archive_copies_four_artifacts(tmp_path):
     (src / "questions.jsonl").write_text("\n".join(["{}"] * 200))  # large — not copied
 
     dst = tmp_path / "docs" / "phase2" / "runs" / "fake_run"
-    rc = _cmd_archive(_FakeArgs(
-        run_id="fake_run",
-        to=str(dst),
-        runs_root=str(tmp_path / "eval_runs"),
-    ))
+    rc = _cmd_archive(
+        _FakeArgs(
+            run_id="fake_run",
+            to=str(dst),
+            runs_root=str(tmp_path / "eval_runs"),
+        )
+    )
     assert rc == 0
     assert (dst / "metrics.json").exists()
     assert (dst / "cost.json").exists()

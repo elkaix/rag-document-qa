@@ -23,6 +23,7 @@ from src.query_engine.prompt import ANSWER_SYSTEM_PROMPT, NO_DOCUMENTS_ANSWER
 # Fakes at the two engine seams                                               #
 # --------------------------------------------------------------------------- #
 
+
 class _FakeRetriever:
     def __init__(self, results: list[SearchResult]):
         self._results = results
@@ -36,7 +37,9 @@ class _FakeRetriever:
 class _FakeLLM:
     """Records the (system, user) instructions it is handed; scripts its output."""
 
-    def __init__(self, model: str = "fake-answer", answer: str = "hello world", p: int = 7, c: int = 3):
+    def __init__(
+        self, model: str = "fake-answer", answer: str = "hello world", p: int = 7, c: int = 3
+    ):
         self.model = model
         self._answer = answer
         self._p, self._c = p, c
@@ -63,8 +66,11 @@ class _FakeLLM:
 
 def _sr(chunk_id: str, content: str, score: float, filename: str = "doc.txt") -> SearchResult:
     return SearchResult(
-        chunk_id=chunk_id, content=content, score=score,
-        metadata={"filename": filename, "chunk_index": 0}, doc_id="d1",
+        chunk_id=chunk_id,
+        content=content,
+        score=score,
+        metadata={"filename": filename, "chunk_index": 0},
+        doc_id="d1",
     )
 
 
@@ -81,6 +87,7 @@ def _engine(results, answer_llm=None, reasoning_llm=None, refusal=None, top_k=5)
 # --------------------------------------------------------------------------- #
 # Slice 1 — ask() happy path: retrieve -> prompt -> generate -> telemetry      #
 # --------------------------------------------------------------------------- #
+
 
 def test_ask_returns_results_answer_and_telemetry():
     llm = _FakeLLM(answer="Paris is the capital.", p=11, c=4)
@@ -124,6 +131,7 @@ def test_ask_top_k_defaults_and_overrides():
 # --------------------------------------------------------------------------- #
 # Slice 2 — ask() no-documents and refusal gate skip generation               #
 # --------------------------------------------------------------------------- #
+
 
 def test_ask_with_no_documents_returns_zero_generation_telemetry():
     llm = _FakeLLM()
@@ -174,6 +182,7 @@ def test_ask_refusal_gate_fires_on_empty_index_before_no_documents_notice():
 # --------------------------------------------------------------------------- #
 # Slice 3 — ask_stream events + sync/stream instruction parity                 #
 # --------------------------------------------------------------------------- #
+
 
 def _event_types(events):
     return [t for t, _ in events]

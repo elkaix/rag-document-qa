@@ -23,34 +23,24 @@ def temp_freeze_path(tmp_path: Path) -> Path:
 
 class TestSampleAndFreeze:
     def test_sample_size_matches(self, temp_freeze_path: Path):
-        result = sample_and_freeze(
-            output_path=temp_freeze_path, sample_size=10, seed=42
-        )
+        result = sample_and_freeze(output_path=temp_freeze_path, sample_size=10, seed=42)
         assert len(result) == 10
         assert temp_freeze_path.exists()
 
     def test_seed_reproducibility(self, tmp_path: Path):
-        a = sample_and_freeze(
-            output_path=tmp_path / "a.jsonl", sample_size=5, seed=99
-        )
-        b = sample_and_freeze(
-            output_path=tmp_path / "b.jsonl", sample_size=5, seed=99
-        )
+        a = sample_and_freeze(output_path=tmp_path / "a.jsonl", sample_size=5, seed=99)
+        b = sample_and_freeze(output_path=tmp_path / "b.jsonl", sample_size=5, seed=99)
         assert [q.id for q in a] == [q.id for q in b]
 
     def test_includes_unanswerable_rows(self, temp_freeze_path: Path):
-        result = sample_and_freeze(
-            output_path=temp_freeze_path, sample_size=50, seed=7
-        )
+        result = sample_and_freeze(output_path=temp_freeze_path, sample_size=50, seed=7)
         n_unanswerable = sum(1 for q in result if q.is_unanswerable)
         n_answerable = sum(1 for q in result if not q.is_unanswerable)
         assert n_unanswerable > 0
         assert n_answerable > 0
 
     def test_each_row_has_required_fields(self, temp_freeze_path: Path):
-        result = sample_and_freeze(
-            output_path=temp_freeze_path, sample_size=5, seed=1
-        )
+        result = sample_and_freeze(output_path=temp_freeze_path, sample_size=5, seed=1)
         for q in result:
             assert isinstance(q, EvalQuestion)
             assert q.id
@@ -65,9 +55,7 @@ class TestSampleAndFreeze:
 
 class TestLoadFrozen:
     def test_round_trip(self, temp_freeze_path: Path):
-        original = sample_and_freeze(
-            output_path=temp_freeze_path, sample_size=5, seed=5
-        )
+        original = sample_and_freeze(output_path=temp_freeze_path, sample_size=5, seed=5)
         loaded = load_frozen(temp_freeze_path)
         assert loaded == original
 

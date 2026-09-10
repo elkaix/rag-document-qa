@@ -292,8 +292,7 @@ class TestSemanticStrategy:
     def test_it_produces_chunks_and_labels_them(self):
         chunker = TextChunker(chunk_size=120, chunk_overlap=20, strategy="semantic")
         text = " ".join(
-            f"This is sentence number {i} about retrieval augmented generation."
-            for i in range(12)
+            f"This is sentence number {i} about retrieval augmented generation." for i in range(12)
         )
         chunks = chunker.chunk(self._doc(text))
         assert chunks

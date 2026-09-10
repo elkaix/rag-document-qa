@@ -34,8 +34,10 @@ class TestLoadQuestions:
         path = temp_data_dir / "questions.jsonl"
         sample = [
             EvalQuestion(
-                id="q1", question="What is attention?",
-                gold_answer="A weighted sum.", gold_chunk_ids=["c1"],
+                id="q1",
+                question="What is attention?",
+                gold_answer="A weighted sum.",
+                gold_chunk_ids=["c1"],
             ),
         ]
         _write_questions(path, sample)
@@ -59,17 +61,23 @@ class TestVerifyCorpusManifest:
         sha = hashlib.sha256(b"hello world").hexdigest()
 
         manifest_path = temp_data_dir / "manifest.json"
-        manifest_path.write_text(json.dumps({
-            "version": "v1",
-            "description": "test",
-            "papers": [{
-                "id": "fake",
-                "title": "Fake Paper",
-                "source_url": "https://example.com",
-                "local_path": str(pdf_path),
-                "sha256": sha,
-            }],
-        }))
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "version": "v1",
+                    "description": "test",
+                    "papers": [
+                        {
+                            "id": "fake",
+                            "title": "Fake Paper",
+                            "source_url": "https://example.com",
+                            "local_path": str(pdf_path),
+                            "sha256": sha,
+                        }
+                    ],
+                }
+            )
+        )
         papers = verify_corpus_manifest(manifest_path)
         assert len(papers) == 1
         assert papers[0]["id"] == "fake"
@@ -80,36 +88,59 @@ class TestVerifyCorpusManifest:
         bad_sha = "0" * 64
 
         manifest_path = temp_data_dir / "manifest.json"
-        manifest_path.write_text(json.dumps({
-            "version": "v1",
-            "description": "test",
-            "papers": [{
-                "id": "fake", "title": "Fake", "source_url": "https://x",
-                "local_path": str(pdf_path), "sha256": bad_sha,
-            }],
-        }))
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "version": "v1",
+                    "description": "test",
+                    "papers": [
+                        {
+                            "id": "fake",
+                            "title": "Fake",
+                            "source_url": "https://x",
+                            "local_path": str(pdf_path),
+                            "sha256": bad_sha,
+                        }
+                    ],
+                }
+            )
+        )
         with pytest.raises(ManifestVerificationError, match="sha256 mismatch"):
             verify_corpus_manifest(manifest_path)
 
     def test_missing_pdf_raises(self, temp_data_dir: Path):
         manifest_path = temp_data_dir / "manifest.json"
-        manifest_path.write_text(json.dumps({
-            "version": "v1",
-            "description": "test",
-            "papers": [{
-                "id": "missing", "title": "Missing", "source_url": "https://x",
-                "local_path": str(temp_data_dir / "absent.pdf"),
-                "sha256": "0" * 64,
-            }],
-        }))
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "version": "v1",
+                    "description": "test",
+                    "papers": [
+                        {
+                            "id": "missing",
+                            "title": "Missing",
+                            "source_url": "https://x",
+                            "local_path": str(temp_data_dir / "absent.pdf"),
+                            "sha256": "0" * 64,
+                        }
+                    ],
+                }
+            )
+        )
         with pytest.raises(ManifestVerificationError, match="not found"):
             verify_corpus_manifest(manifest_path)
 
     def test_empty_papers_list_is_ok(self, temp_data_dir: Path):
         manifest_path = temp_data_dir / "manifest.json"
-        manifest_path.write_text(json.dumps({
-            "version": "v1", "description": "skeleton", "papers": [],
-        }))
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "version": "v1",
+                    "description": "skeleton",
+                    "papers": [],
+                }
+            )
+        )
         assert verify_corpus_manifest(manifest_path) == []
 
 

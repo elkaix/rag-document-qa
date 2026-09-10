@@ -82,8 +82,6 @@ class TestAnswerCorrectness:
             side_effect=[np.array([1.0, 0.0]), np.array([0.5, 0.5])],
         ):
             llm = FakeLLM([{"factual_match": 0.5, "reasoning": "Partly."}])
-            score, _ = answer_correctness(
-                generated="Mostly right.", gold="The answer.", llm=llm
-            )
+            score, _ = answer_correctness(generated="Mostly right.", gold="The answer.", llm=llm)
         # cosine = 0.5/sqrt(0.5) ≈ 0.7071; judge = 0.5; mean ≈ 0.6036
         assert score == pytest.approx((1 / np.sqrt(2) + 0.5) / 2, abs=1e-3)

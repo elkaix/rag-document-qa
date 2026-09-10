@@ -136,9 +136,7 @@ def save_run(
     # metrics.json — list of AggregatedMetric dicts; default=str handles any
     # non-JSON-native types (e.g. numpy floats) gracefully.
     metrics_data = [am.model_dump() for am in aggregated]
-    (run_dir / "metrics.json").write_text(
-        json.dumps(metrics_data, indent=2, default=str)
-    )
+    (run_dir / "metrics.json").write_text(json.dumps(metrics_data, indent=2, default=str))
 
     # cost.json — plain dict; default=str for safety.
     (run_dir / "cost.json").write_text(json.dumps(cost, indent=2, default=str))
@@ -173,9 +171,7 @@ def load_run(run_id: str, base_dir: Path | None = None) -> dict:
     if not run_dir.exists():
         raise FileNotFoundError(f"Run {run_id} not found at {run_dir}")
 
-    metadata = RunMetadata.model_validate_json(
-        (run_dir / "metadata.json").read_text()
-    )
+    metadata = RunMetadata.model_validate_json((run_dir / "metadata.json").read_text())
 
     # JSONL: skip blank lines to handle trailing newlines robustly.
     results = [

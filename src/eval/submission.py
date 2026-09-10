@@ -110,9 +110,7 @@ def reserve_run_id(config_name: str, started_at: datetime | None = None) -> str:
         to the second — an agreement papered over by a ``run_id_override``
         parameter that existed only to reconcile the duplicate.
     """
-    return compute_run_id(
-        config_name, started_at or datetime.now(UTC), current_git_sha()
-    )
+    return compute_run_id(config_name, started_at or datetime.now(UTC), current_git_sha())
 
 
 def submit_run(
@@ -155,9 +153,7 @@ def submit_run(
         config_path=config_path,
         llm_override=overrides.llm,
         judge_llm_override=overrides.judge_llm,
-        on_progress=lambda done, total: progress.update_progress(
-            resolved_id, done, n_total=total
-        ),
+        on_progress=lambda done, total: progress.update_progress(resolved_id, done, n_total=total),
         run_id=resolved_id,
     )
 

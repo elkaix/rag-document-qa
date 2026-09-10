@@ -20,6 +20,7 @@ def _setup_db():
     """Create an in-memory DB with all tables."""
     engine = get_engine("sqlite://")
     import src.models  # noqa: F401
+
     SQLModel.metadata.create_all(engine)
     return engine
 
@@ -84,14 +85,20 @@ def _mock_llm(response_json: dict) -> MagicMock:
 
 
 def test_evaluate_faithfulness_all_supported():
-    llm = _mock_llm({
-        "claims": [
-            {"claim": "LoRA freezes weights", "supported": True, "evidence": "context says so"},
-            {"claim": "LoRA uses low-rank matrices", "supported": True, "evidence": "mentioned"},
-        ],
-        "score": 1.0,
-        "reasoning": "All claims supported.",
-    })
+    llm = _mock_llm(
+        {
+            "claims": [
+                {"claim": "LoRA freezes weights", "supported": True, "evidence": "context says so"},
+                {
+                    "claim": "LoRA uses low-rank matrices",
+                    "supported": True,
+                    "evidence": "mentioned",
+                },
+            ],
+            "score": 1.0,
+            "reasoning": "All claims supported.",
+        }
+    )
     score, reasoning, details = evaluate_faithfulness(
         answer="LoRA freezes weights and uses low-rank matrices.",
         contexts=["LoRA freezes the original weights and adds low-rank matrices."],
@@ -104,14 +111,16 @@ def test_evaluate_faithfulness_all_supported():
 
 
 def test_evaluate_faithfulness_partial():
-    llm = _mock_llm({
-        "claims": [
-            {"claim": "LoRA freezes weights", "supported": True, "evidence": "yes"},
-            {"claim": "LoRA was invented in 2025", "supported": False, "evidence": None},
-        ],
-        "score": 0.5,
-        "reasoning": "One claim unsupported.",
-    })
+    llm = _mock_llm(
+        {
+            "claims": [
+                {"claim": "LoRA freezes weights", "supported": True, "evidence": "yes"},
+                {"claim": "LoRA was invented in 2025", "supported": False, "evidence": None},
+            ],
+            "score": 0.5,
+            "reasoning": "One claim unsupported.",
+        }
+    )
     score, reasoning, details = evaluate_faithfulness(
         answer="LoRA freezes weights. LoRA was invented in 2025.",
         contexts=["LoRA freezes the original weights."],
@@ -124,7 +133,9 @@ def test_evaluate_faithfulness_malformed_json():
     llm = MagicMock()
     llm.generate.return_value = "This is not JSON at all"
     score, reasoning, details = evaluate_faithfulness(
-        answer="test", contexts=["test"], llm=llm,
+        answer="test",
+        contexts=["test"],
+        llm=llm,
     )
     assert score == 0.0
     assert "failed" in reasoning.lower() or "error" in reasoning.lower()
@@ -132,10 +143,12 @@ def test_evaluate_faithfulness_malformed_json():
 
 
 def test_evaluate_answer_relevancy():
-    llm = _mock_llm({
-        "score": 0.9,
-        "reasoning": "Answer directly addresses the question.",
-    })
+    llm = _mock_llm(
+        {
+            "score": 0.9,
+            "reasoning": "Answer directly addresses the question.",
+        }
+    )
     score, reasoning = evaluate_answer_relevancy(
         question="What is LoRA?",
         answer="LoRA is a fine-tuning technique.",
@@ -146,14 +159,16 @@ def test_evaluate_answer_relevancy():
 
 
 def test_evaluate_context_precision():
-    llm = _mock_llm({
-        "chunks": [
-            {"chunk_index": 0, "relevant": True},
-            {"chunk_index": 1, "relevant": False},
-        ],
-        "score": 0.5,
-        "reasoning": "Only one chunk was relevant.",
-    })
+    llm = _mock_llm(
+        {
+            "chunks": [
+                {"chunk_index": 0, "relevant": True},
+                {"chunk_index": 1, "relevant": False},
+            ],
+            "score": 0.5,
+            "reasoning": "Only one chunk was relevant.",
+        }
+    )
     score, reasoning, details = evaluate_context_precision(
         question="What is LoRA?",
         contexts=["LoRA is about low-rank adaptation.", "The weather is nice today."],

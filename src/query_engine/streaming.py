@@ -42,7 +42,9 @@ def retrieval_summary(results: list[SearchResult]) -> str:
 
 
 def build_answer_messages(
-    history: list[dict[str, str]], context: str, question: str,
+    history: list[dict[str, str]],
+    context: str,
+    question: str,
 ) -> list[dict[str, str]]:
     """Build the multi-turn messages list: system + prior turns + current user."""
     messages: list[dict[str, str]] = [{"role": "system", "content": ANSWER_SYSTEM_PROMPT}]

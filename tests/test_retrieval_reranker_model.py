@@ -8,13 +8,15 @@ from src.domain import SearchResult
 
 
 def _sr(chunk_id: str, content: str, score: float, metadata: dict | None = None) -> SearchResult:
-    return SearchResult(doc_id="", chunk_id=chunk_id, content=content,
-                        score=score, metadata=metadata or {})
+    return SearchResult(
+        doc_id="", chunk_id=chunk_id, content=content, score=score, metadata=metadata or {}
+    )
 
 
 @pytest.fixture(scope="module")
 def reranker():
     from src.retrieval.reranker import CrossEncoderReranker
+
     return CrossEncoderReranker()
 
 

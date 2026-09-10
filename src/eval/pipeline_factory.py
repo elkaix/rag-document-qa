@@ -63,6 +63,7 @@ DEFAULT_ML_PAPERS_MANIFEST = Path("eval_data/ml_papers_v1/corpus_manifest.json")
 # EvalPipeline                                                                 #
 # --------------------------------------------------------------------------- #
 
+
 @dataclass
 class EvalPipeline:
     """An isolated, ephemeral RAG pipeline for one (config, dataset) eval run.
@@ -85,7 +86,7 @@ class EvalPipeline:
 
     # Phase 2 additions — None when the corresponding lever is off. Composed into
     # a single Retriever by _get_engine(); the refusal gate is passed to the engine.
-    hybrid_retriever: Retriever | None = None    # BM25HybridRetriever, set during ingest
+    hybrid_retriever: Retriever | None = None  # BM25HybridRetriever, set during ingest
     reranker: CrossEncoderReranker | None = None
     rewriter: QueryRewriter | None = None
     refusal_handler: RefusalHandler | None = None
@@ -128,9 +129,7 @@ class EvalPipeline:
         elif self.dataset_name == "ml_papers_v1":
             self._ingest_ml_papers()
         else:
-            logger.warning(
-                "Unknown dataset %r — ingest is a no-op.", self.dataset_name
-            )
+            logger.warning("Unknown dataset %r — ingest is a no-op.", self.dataset_name)
 
     def _ingest_squad(self, questions: list[EvalQuestion]) -> None:
         """Upsert each question's context as one Chroma document.
@@ -165,7 +164,9 @@ class EvalPipeline:
             if self.config.pipeline.hybrid.enabled:
                 documents_map = dict(zip(ids, documents, strict=False))
                 self.hybrid_retriever = _build_hybrid_retriever(
-                    self.config.pipeline.hybrid, self.vector_store, documents_map,
+                    self.config.pipeline.hybrid,
+                    self.vector_store,
+                    documents_map,
                 )
 
     def _ingest_ml_papers(self) -> None:
@@ -211,9 +212,7 @@ class EvalPipeline:
                 documents=[c.content for c in chunks],
                 metadatas=[{"doc_id": c.doc_id, "paper_id": paper.get("id", "")} for c in chunks],
             )
-            logger.info(
-                "Ingested paper %s: %d chunks.", paper.get("id"), len(chunks)
-            )
+            logger.info("Ingested paper %s: %d chunks.", paper.get("id"), len(chunks))
 
         # Phase 2: build hybrid retriever over all upserted chunks.
         # WHY after the loop: we need the complete corpus before building BM25.
@@ -226,7 +225,9 @@ class EvalPipeline:
             documents_map = self.vector_store.all_chunk_texts()
             if documents_map:
                 self.hybrid_retriever = _build_hybrid_retriever(
-                    self.config.pipeline.hybrid, self.vector_store, documents_map,
+                    self.config.pipeline.hybrid,
+                    self.vector_store,
+                    documents_map,
                 )
 
     def query(self, question: str) -> tuple[list[SearchResult], str, dict]:
@@ -248,11 +249,15 @@ class EvalPipeline:
                 cost_usd: float
         """
         results, answer, stage = self._get_engine().ask(question)
-        return results, answer, {
-            "timings_ms": {"retrieve": stage.retrieve_ms, "generate": stage.generate_ms},
-            "tokens": {"prompt": stage.prompt_tokens, "completion": stage.completion_tokens},
-            "cost_usd": stage.cost_usd,
-        }
+        return (
+            results,
+            answer,
+            {
+                "timings_ms": {"retrieve": stage.retrieve_ms, "generate": stage.generate_ms},
+                "tokens": {"prompt": stage.prompt_tokens, "completion": stage.completion_tokens},
+                "cost_usd": stage.cost_usd,
+            },
+        )
 
     def _get_engine(self) -> QueryEngine:
         """Build (once) and return the QueryEngine composed from the configured levers.
@@ -313,6 +318,7 @@ class EvalPipeline:
 # Factory                                                                      #
 # --------------------------------------------------------------------------- #
 
+
 def build_pipeline(
     config: EvalConfig,
     dataset_name: str,
@@ -368,7 +374,8 @@ def build_pipeline(
     # ---- LLM handlers ----------------------------------------------------------
     llm = llm_override if llm_override is not None else LLMHandler(config.pipeline.generator.model)
     judge_llm = (
-        judge_llm_override if judge_llm_override is not None
+        judge_llm_override
+        if judge_llm_override is not None
         else LLMHandler(config.eval.judge_model)
     )
 
@@ -392,6 +399,7 @@ def build_pipeline(
 # Phase 2 component builders                                                   #
 # --------------------------------------------------------------------------- #
 
+
 def _build_embedding_function(cfg) -> object:
     """Build the Chroma EmbeddingFunction for the given embedder config.
 
@@ -406,9 +414,11 @@ def _build_embedding_function(cfg) -> object:
     """
     if cfg.name == "chroma_default":
         from chromadb.utils import embedding_functions
+
         return embedding_functions.DefaultEmbeddingFunction()
     if cfg.name == "bge_small_en_v1_5":
         from src.eval.embedders import BgeEmbedder
+
         return BgeEmbedder()
     raise ValueError(f"Unknown embedder name: {cfg.name}")
 
@@ -427,9 +437,13 @@ def _build_hybrid_retriever(cfg, vector_store, documents: dict[str, str]):
     if not cfg.enabled:
         return None
     from src.retrieval import BM25HybridRetriever
+
     return BM25HybridRetriever(
-        vector_store=vector_store, documents=documents,
-        bm25_top_k=cfg.bm25_top_k, dense_top_k=cfg.dense_top_k, rrf_k=cfg.rrf_k,
+        vector_store=vector_store,
+        documents=documents,
+        bm25_top_k=cfg.bm25_top_k,
+        dense_top_k=cfg.dense_top_k,
+        rrf_k=cfg.rrf_k,
     )
 
 
@@ -445,6 +459,7 @@ def _build_reranker(cfg):
     if cfg.model is None:
         return None
     from src.retrieval import CrossEncoderReranker
+
     return CrossEncoderReranker()
 
 
@@ -462,6 +477,7 @@ def _build_rewriter(cfg, llm):
     if cfg.model is None:
         return None
     from src.retrieval import QueryRewriter
+
     return QueryRewriter(model=cfg.model, max_expansions=cfg.max_expansions, llm=llm)
 
 
@@ -477,7 +493,9 @@ def _build_refusal(cfg):
     if not cfg.enabled:
         return None
     from src.retrieval import RefusalHandler
+
     return RefusalHandler(
-        enabled=True, similarity_threshold=cfg.similarity_threshold,
+        enabled=True,
+        similarity_threshold=cfg.similarity_threshold,
         no_answer_text=cfg.no_answer_text,
     )

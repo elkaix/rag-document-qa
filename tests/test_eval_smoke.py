@@ -25,8 +25,12 @@ def test_top_level_imports():
     assert callable(cost_usd)
     assert MODEL_PRICES
     for cls in (
-        AggregatedMetric, CompareResult, EvalQuestion,
-        EvalResult, MetricDelta, RunMetadata,
+        AggregatedMetric,
+        CompareResult,
+        EvalQuestion,
+        EvalResult,
+        MetricDelta,
+        RunMetadata,
     ):
         assert isinstance(cls, type)
 
@@ -36,10 +40,7 @@ def test_compose_retrieval_then_aggregate():
     from src.eval import EvalQuestion, bootstrap_ci
     from src.eval.metrics.retrieval import recall_at_k
 
-    questions = [
-        EvalQuestion(id=str(i), question="Q?", gold_chunk_ids=["c1"])
-        for i in range(50)
-    ]
+    questions = [EvalQuestion(id=str(i), question="Q?", gold_chunk_ids=["c1"]) for i in range(50)]
     retrieved_per_q = [["c1", "x"] if i % 5 != 0 else ["x", "y"] for i in range(50)]
     recalls = [
         recall_at_k(q.gold_chunk_ids, ret, k=5)

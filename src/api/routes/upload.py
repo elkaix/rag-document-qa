@@ -68,7 +68,6 @@ async def _process_upload(file: UploadFile, backend: BackendDep) -> UploadRespon
         chunks.append(piece)
     contents = b"".join(chunks)
 
-
     try:
         result = backend.ingest_bytes(filename, contents)
     except Exception as exc:

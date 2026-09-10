@@ -24,26 +24,88 @@ PHASE2_DIR = Path("configs/eval/phase2")
 def stub_llm():
     class _S:
         model = "gpt-4.1-nano"  # engine reads .model for spans + cost pricing
+
         def generate(self, prompt, system_prompt=None):
             return "stub answer"
+
         def generate_with_usage(self, prompt, system_prompt=None):
             return "stub answer", 10, 5
+
     return _S()
 
 
-@pytest.mark.parametrize("yaml_name,expects", [
-    ("phase2_baseline.yaml",  {"rewriter": False, "reranker": False, "refusal": False, "hybrid": False, "embedder": "chroma_default"}),
-    ("phase2b_embedder.yaml", {"rewriter": False, "reranker": False, "refusal": False, "hybrid": False, "embedder": "bge_small_en_v1_5"}),
-    ("phase2c_hybrid.yaml",   {"rewriter": False, "reranker": False, "refusal": False, "hybrid": True,  "embedder": "bge_small_en_v1_5"}),
-    ("phase2d_rerank.yaml",   {"rewriter": False, "reranker": True,  "refusal": False, "hybrid": True,  "embedder": "bge_small_en_v1_5"}),
-    ("phase2e_rewrite.yaml",  {"rewriter": True,  "reranker": True,  "refusal": False, "hybrid": True,  "embedder": "bge_small_en_v1_5"}),
-    ("phase2g_refusal.yaml",  {"rewriter": True,  "reranker": True,  "refusal": True,  "hybrid": True,  "embedder": "bge_small_en_v1_5"}),
-])
+@pytest.mark.parametrize(
+    "yaml_name,expects",
+    [
+        (
+            "phase2_baseline.yaml",
+            {
+                "rewriter": False,
+                "reranker": False,
+                "refusal": False,
+                "hybrid": False,
+                "embedder": "chroma_default",
+            },
+        ),
+        (
+            "phase2b_embedder.yaml",
+            {
+                "rewriter": False,
+                "reranker": False,
+                "refusal": False,
+                "hybrid": False,
+                "embedder": "bge_small_en_v1_5",
+            },
+        ),
+        (
+            "phase2c_hybrid.yaml",
+            {
+                "rewriter": False,
+                "reranker": False,
+                "refusal": False,
+                "hybrid": True,
+                "embedder": "bge_small_en_v1_5",
+            },
+        ),
+        (
+            "phase2d_rerank.yaml",
+            {
+                "rewriter": False,
+                "reranker": True,
+                "refusal": False,
+                "hybrid": True,
+                "embedder": "bge_small_en_v1_5",
+            },
+        ),
+        (
+            "phase2e_rewrite.yaml",
+            {
+                "rewriter": True,
+                "reranker": True,
+                "refusal": False,
+                "hybrid": True,
+                "embedder": "bge_small_en_v1_5",
+            },
+        ),
+        (
+            "phase2g_refusal.yaml",
+            {
+                "rewriter": True,
+                "reranker": True,
+                "refusal": True,
+                "hybrid": True,
+                "embedder": "bge_small_en_v1_5",
+            },
+        ),
+    ],
+)
 def test_phase2_yaml_builds_pipeline_with_expected_attrs(yaml_name, expects, stub_llm):
     cfg = load_config(PHASE2_DIR / yaml_name)
     pipeline = build_pipeline(
-        cfg, dataset_name="squad_v2_dev_200",
-        llm_override=stub_llm, judge_llm_override=stub_llm,
+        cfg,
+        dataset_name="squad_v2_dev_200",
+        llm_override=stub_llm,
+        judge_llm_override=stub_llm,
     )
     try:
         assert (pipeline.rewriter is not None) == expects["rewriter"]
@@ -63,8 +125,10 @@ def test_phase2_query_with_refusal_short_circuits(stub_llm):
     """End-to-end smoke: refusal handler short-circuits when top-1 < threshold (empty index)."""
     cfg = load_config(PHASE2_DIR / "phase2g_refusal.yaml")
     pipeline = build_pipeline(
-        cfg, dataset_name="squad_v2_dev_200",
-        llm_override=stub_llm, judge_llm_override=stub_llm,
+        cfg,
+        dataset_name="squad_v2_dev_200",
+        llm_override=stub_llm,
+        judge_llm_override=stub_llm,
     )
     try:
         # Empty index → retrieval returns [] → handler refuses. Post-convergence

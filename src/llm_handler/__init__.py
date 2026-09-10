@@ -91,9 +91,7 @@ class LLMHandler:
         self.ollama_base_url = ollama_base_url.rstrip("/")
 
         self._provider = detect_provider(model)
-        self._adapter = build_adapter(
-            model, temperature, max_tokens, api_key, self.ollama_base_url
-        )
+        self._adapter = build_adapter(model, temperature, max_tokens, api_key, self.ollama_base_url)
         # The fallback is always ready — no client, no configuration.
         self._dummy = DummyAdapter(model)
         logger.info("LLMHandler initialised: model=%s provider=%s", model, self._provider)
@@ -169,6 +167,4 @@ class LLMHandler:
 
     def list_models(self) -> list[str]:
         """Return available model names for the current provider."""
-        return list_models(
-            self._provider, self.model, self.api_key, self.ollama_base_url
-        )
+        return list_models(self._provider, self.model, self.api_key, self.ollama_base_url)

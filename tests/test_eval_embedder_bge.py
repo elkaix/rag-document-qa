@@ -9,11 +9,13 @@ import pytest
 def embedder():
     """Module-scoped to amortize the model-load cost across tests."""
     from src.eval.embedders import BgeEmbedder
+
     return BgeEmbedder()
 
 
 def test_returns_384_dim_vectors(embedder):
     import numpy as np
+
     out = embedder(["hello world"])
     assert len(out) == 1
     assert len(out[0]) == 384
@@ -26,6 +28,7 @@ def test_returns_384_dim_vectors(embedder):
 def test_synonyms_closer_than_unrelated(embedder):
     """Sanity check that the right model is loaded — not a stub."""
     import numpy as np
+
     a, b, c = embedder(["cat", "feline", "airplane"])
     a, b, c = np.array(a), np.array(b), np.array(c)
     cos = lambda u, v: float(u @ v / (np.linalg.norm(u) * np.linalg.norm(v)))

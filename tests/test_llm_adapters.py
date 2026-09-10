@@ -43,6 +43,7 @@ from src.llm_handler.providers import build_adapter, detect_provider
 # DummyAdapter — the always-available fallback                                #
 # --------------------------------------------------------------------------- #
 
+
 class TestDummyAdapter:
     """The dummy adapter needs no client and always returns a placeholder."""
 
@@ -76,6 +77,7 @@ class TestDummyAdapter:
 # OpenAI-compatible adapter (serves both OpenAI and GLM)                       #
 # --------------------------------------------------------------------------- #
 
+
 class FakeOpenAIClient:
     """Mimics the subset of the OpenAI SDK the adapter calls.
 
@@ -94,9 +96,7 @@ class FakeOpenAIClient:
         self.calls = calls if calls is not None else []
         self._usage = usage
         self._stream_usage = stream_usage
-        self.chat = SimpleNamespace(
-            completions=SimpleNamespace(create=self._create)
-        )
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
 
     def _create(self, **kwargs: object):
         self.calls.append(kwargs)
@@ -149,17 +149,13 @@ class TestOpenAICompatibleAdapter:
 
     def test_generate_returns_reported_usage(self) -> None:
         fake = FakeOpenAIClient(usage=(10, 8))
-        result = self._adapter("gpt-4", fake).generate(
-            [{"role": "user", "content": "Q"}]
-        )
+        result = self._adapter("gpt-4", fake).generate([{"role": "user", "content": "Q"}])
         assert result.text == "OpenAI answer"
         assert result.usage == Usage(prompt_tokens=10, completion_tokens=8)
 
     def test_generate_falls_back_to_counted_usage_when_provider_omits_it(self) -> None:
         fake = FakeOpenAIClient(usage=None)
-        result = self._adapter("gpt-4", fake).generate(
-            [{"role": "user", "content": "Q"}]
-        )
+        result = self._adapter("gpt-4", fake).generate([{"role": "user", "content": "Q"}])
         assert result.usage.prompt_tokens > 0  # counted locally, not reported
 
     def test_constrained_model_omits_temperature_and_uses_completion_tokens(self) -> None:
@@ -193,6 +189,7 @@ class TestOpenAICompatibleAdapter:
 # --------------------------------------------------------------------------- #
 # Anthropic adapter — owns the system-message split                           #
 # --------------------------------------------------------------------------- #
+
 
 class _FakeAnthropicStream:
     """Context-manager stream mirroring anthropic's messages.stream()."""
@@ -305,6 +302,7 @@ class TestAnthropicAdapter:
 # Ollama adapter — local /api/chat with prompt_eval_count / eval_count usage   #
 # --------------------------------------------------------------------------- #
 
+
 class _FakeOllamaResponse:
     def __init__(self, payload: dict) -> None:
         self._payload = payload
@@ -351,7 +349,9 @@ class FakeOllamaHttp:
         self._fail = fail
         self._stream_lines = stream_lines
 
-    def post(self, url: str, json: dict | None = None, timeout: int | None = None, stream: bool = False):
+    def post(
+        self, url: str, json: dict | None = None, timeout: int | None = None, stream: bool = False
+    ):
         self.calls.append({"url": url, "json": json, "stream": stream})
         if self._fail:
             raise requests.exceptions.ConnectionError("connection refused")
@@ -423,6 +423,7 @@ class TestOllamaAdapter:
 # --------------------------------------------------------------------------- #
 # Provider selection — model prefix -> adapter, incl. the GLM branch          #
 # --------------------------------------------------------------------------- #
+
 
 class TestProviderSelection:
     """LLMHandler picks one adapter per model; GLM shares the OpenAI adapter."""

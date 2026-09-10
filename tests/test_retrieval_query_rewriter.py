@@ -12,8 +12,9 @@ class _StubLLM:
         self._completion_tokens = completion_tokens
         self.calls: list[tuple[str, str | None]] = []
 
-    def generate_with_usage(self, prompt: str, system_prompt: str | None = None
-                             ) -> tuple[str, int, int]:
+    def generate_with_usage(
+        self, prompt: str, system_prompt: str | None = None
+    ) -> tuple[str, int, int]:
         self.calls.append((prompt, system_prompt))
         return self._response, self._prompt_tokens, self._completion_tokens
 
@@ -21,6 +22,7 @@ class _StubLLM:
 def test_no_model_passthrough():
     """When model is None, expand returns [query] unchanged with zero cost."""
     from src.retrieval import QueryRewriter
+
     rw = QueryRewriter(model=None, max_expansions=3, llm=None)
     queries, cost, p_t, c_t = rw.expand("What is RAG?")
     assert queries == ["What is RAG?"]
@@ -32,10 +34,12 @@ def test_no_model_passthrough():
 def test_expansion_returns_dedup_list_and_cost():
     """With a real model name and stub LLM, expand returns deduped expansions + cost."""
     from src.retrieval import QueryRewriter
+
     stub = _StubLLM(
         response='["What does RAG stand for?", "Define retrieval augmented generation", '
-                 '"What is RAG?"]',
-        prompt_tokens=80, completion_tokens=40,
+        '"What is RAG?"]',
+        prompt_tokens=80,
+        completion_tokens=40,
     )
     rw = QueryRewriter(model="gpt-4.1-nano", max_expansions=3, llm=stub)
     queries, cost, p_t, c_t = rw.expand("What is RAG?")
@@ -54,6 +58,7 @@ def test_expansion_returns_dedup_list_and_cost():
 def test_malformed_llm_response_falls_back_to_passthrough():
     """If the LLM returns non-JSON, expand returns [query] and logs a warning."""
     from src.retrieval import QueryRewriter
+
     stub = _StubLLM(response="not json at all", prompt_tokens=50, completion_tokens=10)
     rw = QueryRewriter(model="gpt-4.1-nano", max_expansions=3, llm=stub)
     queries, cost, _, _ = rw.expand("What is RAG?")

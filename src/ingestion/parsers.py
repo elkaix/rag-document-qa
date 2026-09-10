@@ -266,6 +266,5 @@ def parser_for(extension: str) -> Parser:
         return PARSERS[extension.lower()]
     except KeyError:
         raise ValueError(
-            f"Unsupported file type: {extension}. "
-            f"Supported: {sorted(SUPPORTED_EXTENSIONS)}"
+            f"Unsupported file type: {extension}. " f"Supported: {sorted(SUPPORTED_EXTENSIONS)}"
         ) from None

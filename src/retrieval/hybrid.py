@@ -107,14 +107,16 @@ class BM25HybridRetriever:
 
         # --- Dense side --------------------------------------------------------
         dense_results = self._vector_store.query(
-            query_text=query, top_k=self._dense_top_k,
+            query_text=query,
+            top_k=self._dense_top_k,
         )
         dense_ids = [r.chunk_id for r in dense_results]
         dense_score_by_id = {r.chunk_id: r.score for r in dense_results}
 
         # --- Fusion ------------------------------------------------------------
         fused_ids = reciprocal_rank_fusion(
-            [sparse_ids, dense_ids], rrf_k=self._rrf_k,
+            [sparse_ids, dense_ids],
+            rrf_k=self._rrf_k,
         )[:top_k]
 
         return [

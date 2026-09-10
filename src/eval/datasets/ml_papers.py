@@ -89,9 +89,7 @@ def verify_corpus_manifest(
     for paper in papers:
         local_path = Path(paper["local_path"])
         if not local_path.exists():
-            raise ManifestVerificationError(
-                f"Paper {paper['id']!r} not found at {local_path}"
-            )
+            raise ManifestVerificationError(f"Paper {paper['id']!r} not found at {local_path}")
         actual_sha = _sha256_of(local_path)
         expected_sha = paper["sha256"]
         if actual_sha != expected_sha:

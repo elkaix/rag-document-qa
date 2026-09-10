@@ -50,11 +50,15 @@ def _make_metadata(run_id: str = "test-run") -> RunMetadata:
 
 def _make_result(qid: str = "q1") -> EvalResult:
     return EvalResult(
-        question_id=qid, dataset="squad_v2_dev_200",
-        retrieved_chunk_ids=["c1"], retrieved_chunks=["text"],
-        generated_answer="ans", metrics={"recall_at_5": 1.0},
+        question_id=qid,
+        dataset="squad_v2_dev_200",
+        retrieved_chunk_ids=["c1"],
+        retrieved_chunks=["text"],
+        generated_answer="ans",
+        metrics={"recall_at_5": 1.0},
         timings_ms={"retrieve": 12.0, "generate": 100.0},
-        tokens={"prompt": 50, "completion": 25}, cost_usd=0.001,
+        tokens={"prompt": 50, "completion": 25},
+        cost_usd=0.001,
     )
 
 
@@ -77,15 +81,16 @@ class TestSaveAndLoadRun:
         results = [_make_result("q1"), _make_result("q2")]
         aggregated = [
             AggregatedMetric(
-                metric_name="recall_at_5", mean=1.0,
-                ci_low=1.0, ci_high=1.0, n=2,
+                metric_name="recall_at_5",
+                mean=1.0,
+                ci_low=1.0,
+                ci_high=1.0,
+                n=2,
             )
         ]
         cost = {"total_usd": 0.002, "mean_usd_per_query": 0.001}
         run_dir = tmp_eval_runs / meta.run_id
-        storage.save_run(
-            run_dir, meta, results, aggregated, cost, "name: test\n"
-        )
+        storage.save_run(run_dir, meta, results, aggregated, cost, "name: test\n")
 
         loaded = storage.load_run(meta.run_id)
         assert loaded["metadata"] == meta
@@ -109,15 +114,19 @@ class TestListRuns:
     def test_lists_completed_runs_descending(self, tmp_eval_runs):
         # Create two runs with distinct timestamps.
         meta_old = _make_metadata("old-run")
-        meta_old = meta_old.model_copy(update={
-            "started_at": datetime(2026, 1, 1, tzinfo=UTC),
-            "finished_at": datetime(2026, 1, 1, tzinfo=UTC),
-        })
+        meta_old = meta_old.model_copy(
+            update={
+                "started_at": datetime(2026, 1, 1, tzinfo=UTC),
+                "finished_at": datetime(2026, 1, 1, tzinfo=UTC),
+            }
+        )
         meta_new = _make_metadata("new-run")
-        meta_new = meta_new.model_copy(update={
-            "started_at": datetime(2026, 4, 1, tzinfo=UTC),
-            "finished_at": datetime(2026, 4, 1, tzinfo=UTC),
-        })
+        meta_new = meta_new.model_copy(
+            update={
+                "started_at": datetime(2026, 4, 1, tzinfo=UTC),
+                "finished_at": datetime(2026, 4, 1, tzinfo=UTC),
+            }
+        )
         for m in (meta_old, meta_new):
             run_dir = tmp_eval_runs / m.run_id
             storage.save_run(run_dir, m, [], [], {}, "x: y\n")

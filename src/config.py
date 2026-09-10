@@ -20,6 +20,7 @@ Where it fits in the RAG pipeline:
   CONFIG is imported by every layer, so it defines the shape of the whole
   system.
 """
+
 import logging
 import os
 from pathlib import Path

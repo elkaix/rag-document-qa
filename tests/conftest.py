@@ -77,8 +77,12 @@ def _stub_openai_provider():
         )
         usage = SimpleNamespace(prompt_tokens=10, completion_tokens=8, total_tokens=18)
         return SimpleNamespace(
-            id="chatcmpl-stub", choices=[choice], usage=usage,
-            model="stub", created=0, object="chat.completion",
+            id="chatcmpl-stub",
+            choices=[choice],
+            usage=usage,
+            model="stub",
+            created=0,
+            object="chat.completion",
         )
 
     def _make_stub_stream_chunks():
@@ -87,8 +91,11 @@ def _stub_openai_provider():
             delta = SimpleNamespace(content=piece, role="assistant")
             choice = SimpleNamespace(delta=delta, finish_reason=None, index=0)
             yield SimpleNamespace(
-                id="chatcmpl-stub", choices=[choice], model="stub",
-                created=0, object="chat.completion.chunk",
+                id="chatcmpl-stub",
+                choices=[choice],
+                model="stub",
+                created=0,
+                object="chat.completion.chunk",
             )
 
     class _StubCompletions:
@@ -177,6 +184,7 @@ SAMPLE_TEXT_2 = (
 # Document fixtures                                                            #
 # --------------------------------------------------------------------------- #
 
+
 @pytest.fixture
 def sample_document() -> Document:
     """A single Document instance with realistic content."""
@@ -229,6 +237,7 @@ def sample_chunks(sample_document: Document) -> list[Chunk]:
 # --------------------------------------------------------------------------- #
 # Embedding fixtures                                                           #
 # --------------------------------------------------------------------------- #
+
 
 def _make_deterministic_embedding(text: str, dim: int = EMBEDDING_DIM) -> list[float]:
     """Create a deterministic unit-norm embedding from text."""
@@ -289,6 +298,7 @@ def populated_vector_store(sample_chunks: list[Chunk], chroma_collection) -> Chr
 # Tmp file helper                                                              #
 # --------------------------------------------------------------------------- #
 
+
 @pytest.fixture
 def tmp_text_file(tmp_path: Path) -> Path:
     """A temporary .txt file with sample content."""
@@ -329,6 +339,7 @@ def tmp_csv_file(tmp_path: Path) -> Path:
 # --------------------------------------------------------------------------- #
 # Eval run storage                                                             #
 # --------------------------------------------------------------------------- #
+
 
 @pytest.fixture
 def tmp_eval_runs(tmp_path: Path, monkeypatch) -> Path:

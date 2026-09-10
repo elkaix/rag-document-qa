@@ -40,6 +40,7 @@ from src.vector_store import ChromaVectorStore
 # Fixtures                                                                     #
 # --------------------------------------------------------------------------- #
 
+
 @pytest.fixture
 def tmp_sqlite_engine():
     """
@@ -111,6 +112,7 @@ def txt_file(tmp_path: Path) -> Path:
 # Document operation tests                                                     #
 # --------------------------------------------------------------------------- #
 
+
 class TestDocumentOperations:
     """Tests for ingest, list, query, delete, and idempotent re-ingest."""
 
@@ -158,9 +160,7 @@ class TestDocumentOperations:
         assert chunks_deleted >= 1
         assert backend.list_documents() == []
 
-    def test_reingest_same_file_is_idempotent(
-        self, backend: RAGBackend, txt_file: Path
-    ):
+    def test_reingest_same_file_is_idempotent(self, backend: RAGBackend, txt_file: Path):
         """Ingesting the same file twice results in only 1 document in list_documents."""
         backend.ingest_file(txt_file)
         backend.ingest_file(txt_file)
@@ -168,9 +168,7 @@ class TestDocumentOperations:
         docs = backend.list_documents()
         assert len(docs) == 1
 
-    def test_get_document_chunks_returns_ingested_chunks(
-        self, backend: RAGBackend, txt_file: Path
-    ):
+    def test_get_document_chunks_returns_ingested_chunks(self, backend: RAGBackend, txt_file: Path):
         """get_document_chunks returns every chunk of the ingested document.
 
         Guards the seam between RAGBackend and ChromaVectorStore.get_by_doc_id —
@@ -197,6 +195,7 @@ class TestDocumentOperations:
 # --------------------------------------------------------------------------- #
 # Conversation CRUD tests                                                      #
 # --------------------------------------------------------------------------- #
+
 
 class TestConversationCRUD:
     """Tests for conversation create, list, get, update, delete, search, export, share."""
@@ -238,9 +237,7 @@ class TestConversationCRUD:
         """update_conversation can rename and pin a conversation."""
         conv = backend.create_conversation(title="Old Title")
 
-        updated = backend.update_conversation(
-            conv["id"], title="New Title", pinned=True
-        )
+        updated = backend.update_conversation(conv["id"], title="New Title", pinned=True)
 
         assert updated is not None
         assert updated["title"] == "New Title"
@@ -250,14 +247,18 @@ class TestConversationCRUD:
         """Deleting a conversation removes its messages and sources."""
         conv = backend.create_conversation()
         backend._save_message(
-            conv["id"], "assistant", "Answer",
-            sources=[{
-                "doc_id": "d1",
-                "chunk_id": "c1",
-                "filename": "f.txt",
-                "score": 0.9,
-                "excerpt": "some text",
-            }],
+            conv["id"],
+            "assistant",
+            "Answer",
+            sources=[
+                {
+                    "doc_id": "d1",
+                    "chunk_id": "c1",
+                    "filename": "f.txt",
+                    "score": 0.9,
+                    "excerpt": "some text",
+                }
+            ],
         )
 
         deleted = backend.delete_conversation(conv["id"])
@@ -314,6 +315,7 @@ class TestConversationCRUD:
 # --------------------------------------------------------------------------- #
 # Sliding window tests                                                         #
 # --------------------------------------------------------------------------- #
+
 
 class TestSlidingWindow:
     """Tests for _get_sliding_window — the chat-history truncation logic."""
@@ -378,9 +380,9 @@ class TestConversationCharacterization:
         assert titled != "New Chat"
 
         backend._auto_title(conv_id, "A completely different question")
-        assert backend.get_conversation(conv_id)["title"] == titled, (
-            "a user-visible title must not be overwritten by a later turn"
-        )
+        assert (
+            backend.get_conversation(conv_id)["title"] == titled
+        ), "a user-visible title must not be overwritten by a later turn"
 
     def test_auto_title_truncates_on_a_word_boundary(self, backend: RAGBackend):
         conv_id = backend.create_conversation()["id"]
@@ -393,38 +395,40 @@ class TestConversationCharacterization:
         conv_id = backend.create_conversation()["id"]
         msg_id = backend._save_message(conv_id, "user", "hello")
         assert msg_id
-        assert any(
-            m["id"] == msg_id for m in backend.get_conversation(conv_id)["messages"]
-        )
+        assert any(m["id"] == msg_id for m in backend.get_conversation(conv_id)["messages"])
 
-    def test_save_message_persists_sources_and_bumps_the_conversation(
-        self, backend: RAGBackend
-    ):
+    def test_save_message_persists_sources_and_bumps_the_conversation(self, backend: RAGBackend):
         conv_id = backend.create_conversation()["id"]
         before = backend.get_conversation(conv_id)["updated_at"]
         msg_id = backend._save_message(
-            conv_id, "assistant", "answer", model="m",
-            sources=[{
-                "doc_id": "d", "chunk_id": "c", "filename": "f.txt",
-                "score": 0.5, "excerpt": "e",
-            }],
+            conv_id,
+            "assistant",
+            "answer",
+            model="m",
+            sources=[
+                {
+                    "doc_id": "d",
+                    "chunk_id": "c",
+                    "filename": "f.txt",
+                    "score": 0.5,
+                    "excerpt": "e",
+                }
+            ],
         )
         conv = backend.get_conversation(conv_id)
         message = next(m for m in conv["messages"] if m["id"] == msg_id)
         assert len(message["sources"]) == 1
         assert conv["updated_at"] >= before
 
-    def test_search_matches_titles_and_message_bodies_without_duplicates(
-        self, backend: RAGBackend
-    ):
+    def test_search_matches_titles_and_message_bodies_without_duplicates(self, backend: RAGBackend):
         conv_id = backend.create_conversation("kangaroo notes")["id"]
         backend._save_message(conv_id, "user", "tell me about kangaroo biology")
 
         hits = backend.search_conversations("kangaroo")
 
-        assert [c["id"] for c in hits].count(conv_id) == 1, (
-            "a conversation matching on both title and body must appear once"
-        )
+        assert [c["id"] for c in hits].count(
+            conv_id
+        ) == 1, "a conversation matching on both title and body must appear once"
 
     def test_list_conversations_puts_pinned_first(self, backend: RAGBackend):
         first = backend.create_conversation("older")["id"]
@@ -445,13 +449,10 @@ class TestRepetitiveDocumentIngest:
     rejected the batch with DuplicateIDError — the upload failed outright.
     """
 
-    def test_a_document_with_repeated_text_ingests(
-        self, backend: RAGBackend, tmp_path: Path
-    ):
+    def test_a_document_with_repeated_text_ingests(self, backend: RAGBackend, tmp_path: Path):
         repetitive = tmp_path / "boilerplate.txt"
         repetitive.write_text(
-            "Retrieval augmented generation combines a retriever with a generator. "
-            * 60
+            "Retrieval augmented generation combines a retriever with a generator. " * 60
         )
 
         result = backend.ingest_file(repetitive)

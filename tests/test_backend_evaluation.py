@@ -44,11 +44,14 @@ def _seed_turn(backend: RAGBackend, *, with_sources: bool = True) -> str:
 
     with Session(backend.engine) as session:
         user = Message(
-            conversation_id=conv_id, role="user", content="What is RAG?",
+            conversation_id=conv_id,
+            role="user",
+            content="What is RAG?",
             created_at=base,
         )
         assistant = Message(
-            conversation_id=conv_id, role="assistant",
+            conversation_id=conv_id,
+            role="assistant",
             content="RAG retrieves then generates.",
             created_at=base + timedelta(seconds=1),
         )
@@ -58,8 +61,11 @@ def _seed_turn(backend: RAGBackend, *, with_sources: bool = True) -> str:
         if with_sources:
             session.add(
                 MessageSource(
-                    message_id=assistant_id, doc_id="d1", chunk_id="c1",
-                    filename="rag.txt", score=0.9,
+                    message_id=assistant_id,
+                    doc_id="d1",
+                    chunk_id="c1",
+                    filename="rag.txt",
+                    score=0.9,
                     excerpt="RAG combines retrieval with generation.",
                 )
             )
@@ -73,6 +79,7 @@ def _fake_judges(calls: list[str], **overrides) -> Judges:
     Injected through the evaluator's constructor rather than monkeypatched onto
     a module — substituting a judge is part of the interface now.
     """
+
     def faithfulness(answer, contexts, llm):
         calls.append("faithfulness")
         return 1.0, "supported", '{"claims": []}'
@@ -117,6 +124,7 @@ class TestRealtimeFaithfulness:
 
     def test_a_judge_failure_never_reaches_the_caller(self, backend):
         """The streaming endpoint calls this; an exception would kill the stream."""
+
         def boom(*a, **kw):
             raise RuntimeError("judge timeout")
 
@@ -126,7 +134,9 @@ class TestRealtimeFaithfulness:
         result = backend.evaluate_faithfulness_realtime(message_id, "answer", ["ctx"])
 
         assert result == {
-            "metric": "faithfulness", "score": 0.0, "reasoning": "judge timeout",
+            "metric": "faithfulness",
+            "score": 0.0,
+            "reasoning": "judge timeout",
         }
         assert backend.get_evaluation(message_id) == []
 
@@ -143,13 +153,13 @@ class TestEvaluateMessage:
         results = backend.evaluate_message(message_id)
 
         assert {r["metric"] for r in results} == {
-            "faithfulness", "answer_relevancy", "context_precision",
+            "faithfulness",
+            "answer_relevancy",
+            "context_precision",
         }
         assert sorted(calls) == ["answer_relevancy", "context_precision", "faithfulness"]
 
-    def test_skips_faithfulness_when_realtime_already_scored_it(
-        self, backend
-    ):
+    def test_skips_faithfulness_when_realtime_already_scored_it(self, backend):
         """Re-running would duplicate the row and skew aggregations."""
         calls: list[str] = []
         _with_judges(backend, _fake_judges(calls))
@@ -170,9 +180,7 @@ class TestEvaluateMessage:
             ).all()
         assert len(rows) == 1, "faithfulness must not be scored twice"
 
-    def test_faithfulness_is_skipped_when_there_are_no_contexts(
-        self, backend
-    ):
+    def test_faithfulness_is_skipped_when_there_are_no_contexts(self, backend):
         calls: list[str] = []
         _with_judges(backend, _fake_judges(calls))
         message_id = _seed_turn(backend, with_sources=False)
@@ -205,7 +213,9 @@ class TestGetEvaluation:
         rows = backend.get_evaluation(message_id)
 
         assert {r["metric"] for r in rows} == {
-            "faithfulness", "answer_relevancy", "context_precision",
+            "faithfulness",
+            "answer_relevancy",
+            "context_precision",
         }
 
     def test_unknown_message_returns_empty(self, backend):

@@ -136,9 +136,16 @@ class TestCompareResult:
     def test_construction(self):
         now = datetime.now(UTC)
         meta_a = RunMetadata(
-            run_id="A", config_name="a", config_path="a.yaml", git_sha="x",
-            started_at=now, finished_at=now, env_hash="h",
-            eval_set_versions={}, n_questions=10, n_errors=0,
+            run_id="A",
+            config_name="a",
+            config_path="a.yaml",
+            git_sha="x",
+            started_at=now,
+            finished_at=now,
+            env_hash="h",
+            eval_set_versions={},
+            n_questions=10,
+            n_errors=0,
         )
         meta_b = meta_a.model_copy(update={"run_id": "B"})
         result = CompareResult(run_a=meta_a, run_b=meta_b, deltas=[])

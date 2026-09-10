@@ -119,9 +119,7 @@ class RunRegistry:
                 n_total=n_total,
             )
 
-    def update_progress(
-        self, run_id: str, n_completed: int, n_total: int | None = None
-    ) -> None:
+    def update_progress(self, run_id: str, n_completed: int, n_total: int | None = None) -> None:
         """Record incremental progress; transitions queued→running on first call.
 
         Only valid when the run is in queued or running state. Silently ignores
@@ -213,10 +211,7 @@ class RunRegistry:
         with self._lock:
             # WHY: snapshot under lock so the list is consistent even if
             #      another thread marks a run completed concurrently.
-            return [
-                s for s in self._runs.values()
-                if s.status in ("queued", "running")
-            ]
+            return [s for s in self._runs.values() if s.status in ("queued", "running")]
 
     # ------------------------------------------------------------------
     # Maintenance

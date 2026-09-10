@@ -14,10 +14,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 @pytest.fixture
 def synthetic_squad(monkeypatch, tmp_path):
     from src.eval.schemas import EvalQuestion
+
     questions = [
         EvalQuestion(
-            id=f"q{i}", question=f"What is fact {i}?",
-            gold_answer=f"Fact {i}.", gold_chunk_ids=[f"q{i}"],
+            id=f"q{i}",
+            question=f"What is fact {i}?",
+            gold_answer=f"Fact {i}.",
+            gold_chunk_ids=[f"q{i}"],
             metadata={"context": f"Fact {i} is important.", "title": "t"},
         )
         for i in range(3)
@@ -62,6 +65,7 @@ def tmp_eval_runs(tmp_path, monkeypatch):
     import importlib
 
     import src.eval.storage
+
     importlib.reload(src.eval.storage)
     yield runs
     monkeypatch.delenv("EVAL_RUNS_DIR", raising=False)
@@ -73,6 +77,7 @@ def client_with_dummy_llm(monkeypatch):
     """TestClient where the eval route uses a dummy LLM via env override."""
     monkeypatch.setenv("EVAL_LLM_OVERRIDE_DUMMY", "1")
     from src.api.main import app
+
     yield TestClient(app)
 
 
@@ -84,11 +89,10 @@ class TestConfigsEndpoint:
 
 
 class TestRunSubmitAndStatus:
-    def test_submit_and_complete(self, configs_dir, tmp_eval_runs,
-                                 synthetic_squad, client_with_dummy_llm):
-        r = client_with_dummy_llm.post(
-            "/api/eval/run", json={"config_name": "test"}
-        )
+    def test_submit_and_complete(
+        self, configs_dir, tmp_eval_runs, synthetic_squad, client_with_dummy_llm
+    ):
+        r = client_with_dummy_llm.post("/api/eval/run", json={"config_name": "test"})
         assert r.status_code == 202, r.text
         body = r.json()
         run_id = body["run_id"]
@@ -104,19 +108,16 @@ class TestRunSubmitAndStatus:
         assert sr.json()["status"] == "completed", sr.json()
 
     def test_unknown_config_returns_404(self, configs_dir, client_with_dummy_llm):
-        r = client_with_dummy_llm.post(
-            "/api/eval/run", json={"config_name": "nope"}
-        )
+        r = client_with_dummy_llm.post("/api/eval/run", json={"config_name": "nope"})
         assert r.status_code == 404
 
 
 class TestRunsList:
-    def test_lists_completed_runs(self, configs_dir, tmp_eval_runs,
-                                  synthetic_squad, client_with_dummy_llm):
+    def test_lists_completed_runs(
+        self, configs_dir, tmp_eval_runs, synthetic_squad, client_with_dummy_llm
+    ):
         # Submit + wait
-        r = client_with_dummy_llm.post(
-            "/api/eval/run", json={"config_name": "test"}
-        )
+        r = client_with_dummy_llm.post("/api/eval/run", json={"config_name": "test"})
         run_id = r.json()["run_id"]
         for _ in range(60):
             sr = client_with_dummy_llm.get(f"/api/eval/runs/{run_id}/status")
@@ -132,11 +133,10 @@ class TestRunsList:
 
 
 class TestRunDetailAndResults:
-    def test_get_run_detail(self, configs_dir, tmp_eval_runs,
-                            synthetic_squad, client_with_dummy_llm):
-        r = client_with_dummy_llm.post(
-            "/api/eval/run", json={"config_name": "test"}
-        )
+    def test_get_run_detail(
+        self, configs_dir, tmp_eval_runs, synthetic_squad, client_with_dummy_llm
+    ):
+        r = client_with_dummy_llm.post("/api/eval/run", json={"config_name": "test"})
         run_id = r.json()["run_id"]
         for _ in range(60):
             sr = client_with_dummy_llm.get(f"/api/eval/runs/{run_id}/status")
@@ -150,11 +150,10 @@ class TestRunDetailAndResults:
         assert d["metadata"]["run_id"] == run_id
         assert d["n_results"] == 3
 
-    def test_get_run_results_paginated(self, configs_dir, tmp_eval_runs,
-                                       synthetic_squad, client_with_dummy_llm):
-        r = client_with_dummy_llm.post(
-            "/api/eval/run", json={"config_name": "test"}
-        )
+    def test_get_run_results_paginated(
+        self, configs_dir, tmp_eval_runs, synthetic_squad, client_with_dummy_llm
+    ):
+        r = client_with_dummy_llm.post("/api/eval/run", json={"config_name": "test"})
         run_id = r.json()["run_id"]
         for _ in range(60):
             sr = client_with_dummy_llm.get(f"/api/eval/runs/{run_id}/status")
@@ -162,9 +161,7 @@ class TestRunDetailAndResults:
                 break
             time.sleep(0.5)
 
-        rr = client_with_dummy_llm.get(
-            f"/api/eval/runs/{run_id}/results?page=1&page_size=2"
-        )
+        rr = client_with_dummy_llm.get(f"/api/eval/runs/{run_id}/results?page=1&page_size=2")
         assert rr.status_code == 200
         body = rr.json()
         assert len(body["items"]) == 2

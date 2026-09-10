@@ -38,7 +38,9 @@ class _LLMHandler(Protocol):
     """Structural type for any object exposing generate_with_usage."""
 
     def generate_with_usage(
-        self, prompt: str, system_prompt: str | None = None,
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
     ) -> tuple[str, int, int]: ...
 
 
@@ -88,7 +90,8 @@ class QueryRewriter:
             f"phrasings of this query. Do NOT include the original."
         )
         raw, p_t, c_t = self._llm.generate_with_usage(
-            user_prompt, system_prompt=self.SYSTEM_PROMPT,
+            user_prompt,
+            system_prompt=self.SYSTEM_PROMPT,
         )
         cost = pricing.cost_usd(self._model, p_t, c_t)
 
@@ -110,9 +113,7 @@ class QueryRewriter:
         try:
             parsed = json.loads(stripped)
         except json.JSONDecodeError:
-            logger.warning(
-                "QueryRewriter got non-JSON response — falling back to [query] only."
-            )
+            logger.warning("QueryRewriter got non-JSON response — falling back to [query] only.")
             return []
         if not isinstance(parsed, list):
             return []

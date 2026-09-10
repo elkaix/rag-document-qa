@@ -29,9 +29,7 @@ from src.vector_store import ChromaVectorStore
 
 
 def _sr(chunk_id: str, content: str, score: float) -> SearchResult:
-    return SearchResult(
-        chunk_id=chunk_id, content=content, score=score, metadata={}, doc_id=""
-    )
+    return SearchResult(chunk_id=chunk_id, content=content, score=score, metadata={}, doc_id="")
 
 
 class _FakeRetriever:
@@ -49,6 +47,7 @@ class _FakeRetriever:
 # --------------------------------------------------------------------------- #
 # Slice 1 — Retriever Protocol + DenseRetriever                               #
 # --------------------------------------------------------------------------- #
+
 
 def _chroma_store() -> ChromaVectorStore:
     store = ChromaVectorStore.open(chromadb.EphemeralClient(), "test_dense")
@@ -91,6 +90,7 @@ def test_dense_retriever_returns_search_results_from_store():
 # Slice 2 — BM25HybridRetriever conforms directly                             #
 # --------------------------------------------------------------------------- #
 
+
 def test_hybrid_retriever_conforms_to_protocol():
     """BM25HybridRetriever already exposes retrieve() — it conforms directly."""
     from src.retrieval import BM25HybridRetriever
@@ -106,6 +106,7 @@ def test_hybrid_retriever_conforms_to_protocol():
 # --------------------------------------------------------------------------- #
 # Slice 3 — RerankingRetriever composes inner + reranker (over-fetch)         #
 # --------------------------------------------------------------------------- #
+
 
 class _FakeReranker:
     """Records the candidates + final_top_k it received; reverses then truncates."""
@@ -152,6 +153,7 @@ def test_reranking_retriever_over_fetches_then_reranks_to_top_k():
 # Slice 4 — MultiQueryRetriever fans out expansions, dedups                    #
 # --------------------------------------------------------------------------- #
 
+
 class _FakeRewriter:
     """Returns a scripted expansion list (the QueryRewriter.expand contract)."""
 
@@ -163,9 +165,7 @@ class _FakeRewriter:
 
 
 def _scored(chunk_id: str, score: float) -> SearchResult:
-    return SearchResult(
-        chunk_id=chunk_id, content=chunk_id, score=score, metadata={}, doc_id=""
-    )
+    return SearchResult(chunk_id=chunk_id, content=chunk_id, score=score, metadata={}, doc_id="")
 
 
 def test_multi_query_retriever_conforms_to_protocol():
@@ -179,10 +179,12 @@ def test_multi_query_fans_out_dedups_and_ranks_best_first():
     """Expansions are retrieved, deduped by chunk_id (keeping the best score), ranked."""
     from src.retrieval import MultiQueryRetriever
 
-    inner = _FakeRetriever({
-        "q": [_scored("c1", 0.9), _scored("c2", 0.5)],
-        "q2": [_scored("c3", 0.8), _scored("c2", 0.7)],
-    })
+    inner = _FakeRetriever(
+        {
+            "q": [_scored("c1", 0.9), _scored("c2", 0.5)],
+            "q2": [_scored("c3", 0.8), _scored("c2", 0.7)],
+        }
+    )
     adapter = MultiQueryRetriever(inner=inner, rewriter=_FakeRewriter(["q", "q2"]))
 
     out = adapter.retrieve("q", top_k=2)
@@ -198,6 +200,7 @@ def test_multi_query_fans_out_dedups_and_ranks_best_first():
 # Factory — config strategy -> Retriever type                                 #
 # --------------------------------------------------------------------------- #
 
+
 def test_build_retriever_dense_is_the_default_strategy():
     from src.retrieval import DenseRetriever, build_retrieval_plan
 
@@ -210,9 +213,7 @@ def test_build_retriever_reranked_composes_dense_and_a_reranker(monkeypatch):
     from src.retrieval import RerankingRetriever, build_retrieval_plan
 
     monkeypatch.setattr("src.retrieval.composition.CrossEncoderReranker", _FakeReranker)
-    retriever = build_retrieval_plan(
-        "reranked", _chroma_store(), rerank_over_fetch_n=15
-    ).retriever
+    retriever = build_retrieval_plan("reranked", _chroma_store(), rerank_over_fetch_n=15).retriever
     assert isinstance(retriever, RerankingRetriever)
 
 

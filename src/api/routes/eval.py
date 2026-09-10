@@ -52,6 +52,7 @@ CONFIGS_DIR = Path("configs/eval")
 # Dependency helper                                                            #
 # --------------------------------------------------------------------------- #
 
+
 def _get_registry(request: Request) -> RunRegistry:
     """Extract the shared RunRegistry from app.state.
 
@@ -79,6 +80,7 @@ def _get_registry(request: Request) -> RunRegistry:
 # GET /api/eval/configs                                                        #
 # --------------------------------------------------------------------------- #
 
+
 @router.get(
     "/configs",
     response_model=list[str],
@@ -99,6 +101,7 @@ def list_configs() -> list[str]:
 # --------------------------------------------------------------------------- #
 # POST /api/eval/run                                                           #
 # --------------------------------------------------------------------------- #
+
 
 @router.post(
     "/run",
@@ -130,9 +133,7 @@ def submit_eval_run(
         run_id = reserve_run_id(body.config_name)
         resolve_config(body.config_name, CONFIGS_DIR)
     except ConfigNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     background_tasks.add_task(
         submit_run,
@@ -148,6 +149,7 @@ def submit_eval_run(
 # --------------------------------------------------------------------------- #
 # GET /api/eval/runs                                                           #
 # --------------------------------------------------------------------------- #
+
 
 @router.get(
     "/runs",
@@ -193,6 +195,7 @@ def list_eval_runs() -> list[RunSummaryDTO]:
 # --------------------------------------------------------------------------- #
 # GET /api/eval/runs/{run_id}                                                  #
 # --------------------------------------------------------------------------- #
+
 
 @router.get(
     "/runs/{run_id}",
@@ -242,6 +245,7 @@ def get_run(run_id: str) -> RunDetailDTO:
 # GET /api/eval/runs/{run_id}/results                                          #
 # --------------------------------------------------------------------------- #
 
+
 @router.get(
     "/runs/{run_id}/results",
     summary="Paginated per-question results for a run",
@@ -287,12 +291,18 @@ def get_run_results(
         for r in page_items
     ]
 
-    return {"items": [d.model_dump() for d in dtos], "page": page, "page_size": page_size, "total": total}
+    return {
+        "items": [d.model_dump() for d in dtos],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+    }
 
 
 # --------------------------------------------------------------------------- #
 # GET /api/eval/runs/{run_id}/results/{question_id}                            #
 # --------------------------------------------------------------------------- #
+
 
 @router.get(
     "/runs/{run_id}/results/{question_id}",
@@ -327,6 +337,7 @@ def get_question_result(run_id: str, question_id: str) -> EvalResult:
 # --------------------------------------------------------------------------- #
 # GET /api/eval/runs/{run_id}/status                                           #
 # --------------------------------------------------------------------------- #
+
 
 @router.get(
     "/runs/{run_id}/status",
@@ -377,6 +388,7 @@ def get_run_status(run_id: str, request: Request) -> RunStatusDTO:
 # --------------------------------------------------------------------------- #
 # GET /api/eval/compare                                                        #
 # --------------------------------------------------------------------------- #
+
 
 @router.get(
     "/compare",

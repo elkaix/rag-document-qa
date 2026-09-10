@@ -49,6 +49,7 @@ _SLIDING_WINDOW_MESSAGES = [
 # generate_messages() tests                                                    #
 # --------------------------------------------------------------------------- #
 
+
 class TestGenerateMessages:
     """Tests for the non-streaming messages-list generation method."""
 
@@ -67,9 +68,9 @@ class TestGenerateMessages:
         # PATTERN: Assert the contract (dummy marker present), not the exact string,
         #          so minor wording changes in _dummy_response don't break the test.
         assert isinstance(result, str), "generate_messages must return a str"
-        assert "[LLM unavailable]" in result, (
-            "Fallback response must contain '[LLM unavailable]' marker"
-        )
+        assert (
+            "[LLM unavailable]" in result
+        ), "Fallback response must contain '[LLM unavailable]' marker"
         assert len(result) > 0, "Fallback response must not be empty"
 
     def test_generate_messages_accepts_sliding_window(self) -> None:
@@ -92,6 +93,7 @@ class TestGenerateMessages:
 # stream_messages() tests                                                      #
 # --------------------------------------------------------------------------- #
 
+
 class TestStreamMessages:
     """Tests for the streaming messages-list generation method."""
 
@@ -109,9 +111,9 @@ class TestStreamMessages:
         full_response = "".join(i for i in items if isinstance(i, str))
 
         assert full_response, "stream_messages must yield answer text"
-        assert "[LLM unavailable]" in full_response, (
-            "Streamed fallback must contain '[LLM unavailable]' marker"
-        )
+        assert (
+            "[LLM unavailable]" in full_response
+        ), "Streamed fallback must contain '[LLM unavailable]' marker"
 
     def test_stream_messages_accepts_sliding_window(self) -> None:
         """Multi-turn conversation history is accepted and yields tokens.

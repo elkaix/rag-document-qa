@@ -124,9 +124,7 @@ class TextChunker:
         all_chunks: list[Chunk] = []
         for doc in documents:
             all_chunks.extend(self.chunk(doc))
-        logger.info(
-            "Total chunks from %d documents: %d", len(documents), len(all_chunks)
-        )
+        logger.info("Total chunks from %d documents: %d", len(documents), len(all_chunks))
         return all_chunks
 
     # ------------------------------------------------------------------ #
@@ -214,11 +212,11 @@ class TextChunker:
         for i in range(1, len(chunks)):
             prev = chunks[i - 1]
             # Grab roughly chunk_overlap chars from the end of previous chunk
-            raw_tail = prev[-self.chunk_overlap:]
+            raw_tail = prev[-self.chunk_overlap :]
             # Snap forward to the nearest word boundary (skip partial word)
             space_idx = raw_tail.find(" ")
             if space_idx != -1 and space_idx < len(raw_tail) - 1:
-                tail = raw_tail[space_idx + 1:]
+                tail = raw_tail[space_idx + 1 :]
             else:
                 # The tail is a single long word — use it as-is
                 tail = raw_tail

@@ -53,6 +53,7 @@ router = APIRouter(prefix="/api", tags=["conversations"])
 # Helper: convert backend dict -> Pydantic ConversationSummary                 #
 # --------------------------------------------------------------------------- #
 
+
 def _to_summary(data: dict) -> ConversationSummary:
     """Convert a backend conversation dict to a ConversationSummary response model.
 
@@ -111,6 +112,7 @@ def _to_detail(data: dict) -> ConversationDetail:
 # List & Create                                                                #
 # --------------------------------------------------------------------------- #
 
+
 @router.get(
     "/conversations",
     response_model=list[ConversationSummary],
@@ -153,6 +155,7 @@ def create_conversation(
 #      with conversation_id="search" and return 404. Defining /search
 #      first ensures it matches literal "search" before the path param.
 
+
 @router.get(
     "/conversations/search",
     response_model=list[ConversationSummary],
@@ -174,6 +177,7 @@ def search_conversations(
 # --------------------------------------------------------------------------- #
 # Detail, Update, Delete — parameterised by {conversation_id}                  #
 # --------------------------------------------------------------------------- #
+
 
 @router.get(
     "/conversations/{conversation_id}",
@@ -254,6 +258,7 @@ def delete_conversation(
 # Export & Share                                                                #
 # --------------------------------------------------------------------------- #
 
+
 @router.get(
     "/conversations/{conversation_id}/export",
     response_class=PlainTextResponse,
@@ -318,6 +323,7 @@ def create_share_token(
 # --------------------------------------------------------------------------- #
 # Shared (public read-only) — uses /api/shared/{token} path                    #
 # --------------------------------------------------------------------------- #
+
 
 @router.get(
     "/shared/{token}",

@@ -40,35 +40,47 @@ class _RecordingLLM:
 
 
 def _baseline_config() -> EvalConfig:
-    return EvalConfig.model_validate({
-        "name": "parity", "description": "",
-        "pipeline": {
-            "chunker": {"strategy": "recursive", "chunk_size": 256, "chunk_overlap": 32},
-            "retriever": {"top_k": 3},
-            "generator": {"model": "gpt-4.1-nano", "reasoning_model": None},
-        },
-        "eval": {
-            "datasets": ["squad_v2_dev_200"], "judge_model": "gpt-4.1-nano",
-            "bootstrap_n": 100, "permutation_n": 100, "seed": 7,
-        },
-    })
+    return EvalConfig.model_validate(
+        {
+            "name": "parity",
+            "description": "",
+            "pipeline": {
+                "chunker": {"strategy": "recursive", "chunk_size": 256, "chunk_overlap": 32},
+                "retriever": {"top_k": 3},
+                "generator": {"model": "gpt-4.1-nano", "reasoning_model": None},
+            },
+            "eval": {
+                "datasets": ["squad_v2_dev_200"],
+                "judge_model": "gpt-4.1-nano",
+                "bootstrap_n": 100,
+                "permutation_n": 100,
+                "seed": 7,
+            },
+        }
+    )
 
 
 def test_eval_pipeline_issues_the_shipped_prompt_and_context():
     """Eval sends the production ANSWER_SYSTEM_PROMPT and filename-prefixed context."""
     recorder = _RecordingLLM()
     pipeline = build_pipeline(
-        _baseline_config(), "squad_v2_dev_200",
-        llm_override=recorder, judge_llm_override=_RecordingLLM(),
+        _baseline_config(),
+        "squad_v2_dev_200",
+        llm_override=recorder,
+        judge_llm_override=_RecordingLLM(),
     )
     try:
-        pipeline.ingest([
-            EvalQuestion(
-                id="q1", question="What is the capital of France?",
-                gold_answer="Paris", gold_chunk_ids=["q1"],
-                metadata={"context": "Paris is the capital of France.", "title": "t"},
-            )
-        ])
+        pipeline.ingest(
+            [
+                EvalQuestion(
+                    id="q1",
+                    question="What is the capital of France?",
+                    gold_answer="Paris",
+                    gold_chunk_ids=["q1"],
+                    metadata={"context": "Paris is the capital of France.", "title": "t"},
+                )
+            ]
+        )
         results, _answer, _telemetry = pipeline.query("What is the capital of France?")
 
         # Eval uses the ONE shipped answer prompt — not a reworded eval copy.

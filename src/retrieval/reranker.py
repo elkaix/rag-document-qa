@@ -56,7 +56,9 @@ class CrossEncoderReranker:
         pairs = [(query, c.content) for c in candidates]
         scores = self._model.predict(pairs)
         scored = sorted(
-            zip(candidates, scores, strict=False), key=lambda t: t[1], reverse=True,
+            zip(candidates, scores, strict=False),
+            key=lambda t: t[1],
+            reverse=True,
         )[:final_top_k]
         return [
             SearchResult(
@@ -74,7 +76,10 @@ class _Reranker(Protocol):
     """Structural type for a candidate re-scorer (the one collaborator we inject)."""
 
     def rerank(
-        self, query: str, candidates: list[SearchResult], final_top_k: int,
+        self,
+        query: str,
+        candidates: list[SearchResult],
+        final_top_k: int,
     ) -> list[SearchResult]: ...
 
 

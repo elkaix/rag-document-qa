@@ -78,9 +78,7 @@ def message_dict(msg: Message, sources: list[MessageSource]) -> dict[str, Any]:
     }
 
 
-def conversation_detail(
-    conv: Conversation, messages: list[dict[str, Any]]
-) -> dict[str, Any]:
+def conversation_detail(conv: Conversation, messages: list[dict[str, Any]]) -> dict[str, Any]:
     """Shape a conversation with its messages attached.
 
     Args:

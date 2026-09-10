@@ -115,6 +115,7 @@ eval:
     p = tmp_path / "legacy.yaml"
     p.write_text(yaml_text)
     from src.eval.config import load_config
+
     cfg = load_config(p)
     assert cfg.pipeline.embedder.name == "chroma_default"
     assert cfg.pipeline.hybrid.enabled is False
@@ -145,6 +146,7 @@ eval:
     p = tmp_path / "phase2g.yaml"
     p.write_text(yaml_text)
     from src.eval.config import load_config
+
     cfg = load_config(p)
     assert cfg.pipeline.embedder.name == "bge_small_en_v1_5"
     assert cfg.pipeline.hybrid.enabled is True
@@ -170,5 +172,6 @@ eval:
     p = tmp_path / "bad.yaml"
     p.write_text(yaml_text)
     from src.eval.config import load_config
+
     with pytest.raises(ValidationError):
         load_config(p)

@@ -94,11 +94,7 @@ class DocumentLoader:
 
         allowed = {e.lower() for e in (extensions or SUPPORTED_EXTENSIONS)}
         pattern = "**/*" if recursive else "*"
-        files = [
-            p
-            for p in dir_path.glob(pattern)
-            if p.is_file() and p.suffix.lower() in allowed
-        ]
+        files = [p for p in dir_path.glob(pattern) if p.is_file() and p.suffix.lower() in allowed]
         logger.info("Found %d files in %s", len(files), dir_path)
 
         documents: list[Document] = []

@@ -129,9 +129,7 @@ def evaluate_faithfulness(
         "Respond ONLY with a valid JSON object — no prose, no code fences."
     )
 
-    context_block = "\n\n".join(
-        f"[Context {i+1}]:\n{ctx}" for i, ctx in enumerate(contexts)
-    )
+    context_block = "\n\n".join(f"[Context {i+1}]:\n{ctx}" for i, ctx in enumerate(contexts))
 
     # WHY double braces: we're inside an f-string but need literal { } in the
     #     JSON schema example so the model knows the exact output shape.
@@ -269,9 +267,7 @@ def evaluate_context_precision(
         "Respond ONLY with a valid JSON object — no prose, no code fences."
     )
 
-    chunks_block = "\n\n".join(
-        f"[Chunk {i}]:\n{ctx}" for i, ctx in enumerate(contexts)
-    )
+    chunks_block = "\n\n".join(f"[Chunk {i}]:\n{ctx}" for i, ctx in enumerate(contexts))
 
     user_prompt = (
         f"Question: {question}\n\n"

@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 # ChromaVectorStore                                                            #
 # --------------------------------------------------------------------------- #
 
+
 def _first_occurrence_indices(ids: list[str]) -> list[int]:
     """Return the positions of each id's first appearance, in order.
 
@@ -200,9 +201,7 @@ class ChromaVectorStore:
             kwargs["embeddings"] = [embeddings[i] for i in keep]
 
         self._collection.upsert(**kwargs)
-        logger.debug(
-            "Upserted %d chunks into '%s'", len(keep), self._collection.name
-        )
+        logger.debug("Upserted %d chunks into '%s'", len(keep), self._collection.name)
 
     # ---------------------------------------------------------------------- #
     # Read operations                                                         #
@@ -254,7 +253,10 @@ class ChromaVectorStore:
             return []
 
         # Build ChromaDB query kwargs based on which input was provided
-        query_kwargs: dict[str, Any] = {"n_results": top_k, "include": ["documents", "metadatas", "distances"]}
+        query_kwargs: dict[str, Any] = {
+            "n_results": top_k,
+            "include": ["documents", "metadatas", "distances"],
+        }
         if query_text is not None:
             query_kwargs["query_texts"] = [query_text]
         else:
@@ -268,12 +270,14 @@ class ChromaVectorStore:
         # WHY: ChromaDB returns batched results (outer list = one entry per query).
         # We always send a single query, so we index [0] to get the per-chunk lists.
         ids = raw["ids"][0]
-        documents = raw["documents"][0]       # type: ignore[index]
-        metadatas = raw["metadatas"][0]       # type: ignore[index]
-        distances = raw["distances"][0]       # type: ignore[index]
+        documents = raw["documents"][0]  # type: ignore[index]
+        metadatas = raw["metadatas"][0]  # type: ignore[index]
+        distances = raw["distances"][0]  # type: ignore[index]
 
         results: list[SearchResult] = []
-        for chunk_id, text, meta, distance in zip(ids, documents, metadatas, distances, strict=False):
+        for chunk_id, text, meta, distance in zip(
+            ids, documents, metadatas, distances, strict=False
+        ):
             # PATTERN: ChromaDB cosine distance is in [0, 2] where 0 = identical.
             # Convert to similarity score in [0, 1]:
             #   score = max(0, 1 - distance)
@@ -353,8 +357,7 @@ class ChromaVectorStore:
         ids = raw.get("ids") or []
         documents = raw.get("documents") or []
         return {
-            chunk_id: documents[i] if i < len(documents) else ""
-            for i, chunk_id in enumerate(ids)
+            chunk_id: documents[i] if i < len(documents) else "" for i, chunk_id in enumerate(ids)
         }
 
     # ---------------------------------------------------------------------- #
@@ -388,7 +391,9 @@ class ChromaVectorStore:
         self._collection.delete(where={"doc_id": doc_id})
         logger.debug(
             "Deleted %d chunks for doc_id='%s' from '%s'",
-            count, doc_id, self._collection.name,
+            count,
+            doc_id,
+            self._collection.name,
         )
         return count
 

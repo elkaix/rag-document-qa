@@ -99,7 +99,10 @@ class QueryEngine:
     # ------------------------------------------------------------------ #
 
     def ask(
-        self, question: str, top_k: int | None = None, model: str | None = None,
+        self,
+        question: str,
+        top_k: int | None = None,
+        model: str | None = None,
     ) -> tuple[list[SearchResult], str, StageTelemetry]:
         """Retrieve, generate, and assemble telemetry for one question.
 
@@ -147,8 +150,10 @@ class QueryEngine:
         generate_ms = (time.perf_counter() - gen_start) * 1000
 
         usage = Usage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens)
-        return results, answer, telemetry_asm.assemble(
-            retrieve_ms, generate_ms, handler.model, usage
+        return (
+            results,
+            answer,
+            telemetry_asm.assemble(retrieve_ms, generate_ms, handler.model, usage),
         )
 
     # ------------------------------------------------------------------ #

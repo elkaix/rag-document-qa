@@ -139,17 +139,30 @@ class TestSaveMessage:
     def test_persists_sources(self, store, history):
         conv_id = store.create()["id"]
         history.save_message(
-            conv_id, "assistant", "answer", model="m",
-            sources=[{
-                "doc_id": "d", "chunk_id": "c", "filename": "f.txt",
-                "score": 0.5, "excerpt": "e",
-            }],
+            conv_id,
+            "assistant",
+            "answer",
+            model="m",
+            sources=[
+                {
+                    "doc_id": "d",
+                    "chunk_id": "c",
+                    "filename": "f.txt",
+                    "score": 0.5,
+                    "excerpt": "e",
+                }
+            ],
         )
         sources = store.get(conv_id)["messages"][0]["sources"]
-        assert sources == [{
-            "doc_id": "d", "chunk_id": "c", "filename": "f.txt",
-            "score": 0.5, "excerpt": "e",
-        }]
+        assert sources == [
+            {
+                "doc_id": "d",
+                "chunk_id": "c",
+                "filename": "f.txt",
+                "score": 0.5,
+                "excerpt": "e",
+            }
+        ]
 
     def test_missing_source_fields_fall_back(self, store, history):
         conv_id = store.create()["id"]
@@ -167,10 +180,14 @@ class TestSaveMessage:
 class TestSlidingWindow:
     def _turn(self, session_factory, conv_id, role, content, offset):
         with session_factory() as session:
-            session.add(Message(
-                conversation_id=conv_id, role=role, content=content,
-                created_at=datetime.now(UTC) + timedelta(seconds=offset),
-            ))
+            session.add(
+                Message(
+                    conversation_id=conv_id,
+                    role=role,
+                    content=content,
+                    created_at=datetime.now(UTC) + timedelta(seconds=offset),
+                )
+            )
             session.commit()
 
     def test_empty_thread_yields_nothing(self, store, history):
@@ -187,9 +204,7 @@ class TestSlidingWindow:
 
         assert [m["content"] for m in window] == ["answered", "reply"]
 
-    def test_consecutive_same_role_messages_are_skipped(
-        self, store, history, session_factory
-    ):
+    def test_consecutive_same_role_messages_are_skipped(self, store, history, session_factory):
         conv_id = store.create()["id"]
         self._turn(session_factory, conv_id, "user", "first", 0)
         self._turn(session_factory, conv_id, "user", "second", 1)
@@ -251,8 +266,12 @@ class TestShaping:
     def test_message_dict_embeds_shaped_sources(self):
         msg = Message(conversation_id="c", role="user", content="hi")
         src = MessageSource(
-            message_id=msg.id, doc_id="d", chunk_id="ch",
-            filename="f", score=0.5, excerpt="e",
+            message_id=msg.id,
+            doc_id="d",
+            chunk_id="ch",
+            filename="f",
+            score=0.5,
+            excerpt="e",
         )
         shaped = message_dict(msg, [src])
         assert shaped["sources"] == [source_dict(src)]

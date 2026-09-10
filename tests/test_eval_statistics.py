@@ -47,9 +47,7 @@ class TestPairedPermutationTest:
     def test_identical_distributions_high_p(self):
         rng = np.random.default_rng(SEED)
         sample = rng.normal(0, 1, size=100).tolist()
-        delta, p = paired_permutation_test(
-            sample, sample, n_resamples=2000, seed=SEED
-        )
+        delta, p = paired_permutation_test(sample, sample, n_resamples=2000, seed=SEED)
         assert delta == pytest.approx(0.0)
         assert p > 0.5
 
@@ -57,9 +55,7 @@ class TestPairedPermutationTest:
         rng = np.random.default_rng(SEED)
         a = rng.normal(0.0, 1.0, size=100)
         b = a + 1.0
-        delta, p = paired_permutation_test(
-            a.tolist(), b.tolist(), n_resamples=2000, seed=SEED
-        )
+        delta, p = paired_permutation_test(a.tolist(), b.tolist(), n_resamples=2000, seed=SEED)
         assert delta == pytest.approx(1.0, abs=0.01)
         assert p < 0.01
 

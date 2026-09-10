@@ -86,9 +86,7 @@ class TestSubmitRunLifecycle:
         sink = RecordingSink()
         (configs_dir / "boom.yaml").write_text("name: boom\n")
 
-        monkeypatch.setattr(
-            "src.eval.submission.load_config", lambda path: object()
-        )
+        monkeypatch.setattr("src.eval.submission.load_config", lambda path: object())
 
         class _Exploding:
             def __init__(self, *a, **kw): ...
@@ -141,9 +139,7 @@ class TestSubmitRunLifecycle:
         monkeypatch.setattr("src.eval.submission.EvalRunner", _Runner)
 
         reserved = reserve_run_id("ok")
-        result = submit_run(
-            "ok", configs_dir=configs_dir, progress=sink, run_id=reserved
-        )
+        result = submit_run("ok", configs_dir=configs_dir, progress=sink, run_id=reserved)
         assert seen["run_id"] == reserved == result.run_id
 
 

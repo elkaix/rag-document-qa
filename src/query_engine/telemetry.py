@@ -18,7 +18,10 @@ from src.telemetry.pricing import cost_usd
 
 
 def assemble(
-    retrieve_ms: float, generate_ms: float, model: str, usage: Usage,
+    retrieve_ms: float,
+    generate_ms: float,
+    model: str,
+    usage: Usage,
 ) -> StageTelemetry:
     """Build a StageTelemetry from stage timings and provider-reported usage.
 

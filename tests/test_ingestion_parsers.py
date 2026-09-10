@@ -39,15 +39,13 @@ class TestNormalisePdfText:
         )
 
     def test_paragraph_breaks_survive(self):
-        assert normalise_pdf_text("First para.\n\nSecond para.") == (
-            "First para.\n\nSecond para."
-        )
+        assert normalise_pdf_text("First para.\n\nSecond para.") == ("First para.\n\nSecond para.")
 
     def test_a_wrapped_hyphenated_word_is_rejoined(self):
         assert normalise_pdf_text("develop-\nment") == "development"
 
     def test_a_real_compound_keeps_its_hyphen(self):
-        """"self-attention" has no space after the hyphen, so it is not a wrap."""
+        """ "self-attention" has no space after the hyphen, so it is not a wrap."""
         assert normalise_pdf_text("self-attention works") == "self-attention works"
 
     def test_a_hyphen_before_a_capital_is_not_a_wrap(self):

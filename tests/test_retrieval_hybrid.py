@@ -12,6 +12,7 @@ def _sr(chunk_id: str, content: str, score: float) -> SearchResult:
 def test_rrf_fusion_asymmetric_inputs():
     """RRF on A=[a,b,c,d], B=[d,a] with rrf_k=60 yields fused order a, d, b, c."""
     from src.retrieval.hybrid import reciprocal_rank_fusion
+
     A = ["a", "b", "c", "d"]
     B = ["d", "a"]
     fused = reciprocal_rank_fusion([A, B], rrf_k=60)
@@ -25,9 +26,7 @@ def test_hybrid_retrieve_returns_top_k():
     from src.retrieval.hybrid import BM25HybridRetriever
     from src.vector_store import ChromaVectorStore
 
-    coll = ChromaVectorStore.open(
-        chromadb.EphemeralClient(), "test_hybrid"
-    ).collection
+    coll = ChromaVectorStore.open(chromadb.EphemeralClient(), "test_hybrid").collection
     coll.upsert(
         ids=["d1", "d2", "d3", "d4"],
         documents=[
@@ -40,10 +39,12 @@ def test_hybrid_retrieve_returns_top_k():
     vs = ChromaVectorStore(collection=coll)
     retriever = BM25HybridRetriever(
         vector_store=vs,
-        documents={"d1": coll.get(ids=["d1"])["documents"][0],
-                    "d2": coll.get(ids=["d2"])["documents"][0],
-                    "d3": coll.get(ids=["d3"])["documents"][0],
-                    "d4": coll.get(ids=["d4"])["documents"][0]},
+        documents={
+            "d1": coll.get(ids=["d1"])["documents"][0],
+            "d2": coll.get(ids=["d2"])["documents"][0],
+            "d3": coll.get(ids=["d3"])["documents"][0],
+            "d4": coll.get(ids=["d4"])["documents"][0],
+        },
         bm25_top_k=3,
         dense_top_k=3,
         rrf_k=60,
