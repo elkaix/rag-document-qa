@@ -71,7 +71,7 @@ class EvalResult(BaseModel):
     error: str | None = None
 
     @model_validator(mode="after")
-    def _backfill_cost_breakdown(self) -> "EvalResult":
+    def _backfill_cost_breakdown(self) -> EvalResult:
         if not self.cost_breakdown:
             self.cost_breakdown = {
                 "generator": self.cost_usd,

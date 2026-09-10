@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from src.retrieval.base import Retriever
 from src.domain import SearchResult
+from src.retrieval.base import Retriever
 
 
 class CrossEncoderReranker:
@@ -56,7 +56,7 @@ class CrossEncoderReranker:
         pairs = [(query, c.content) for c in candidates]
         scores = self._model.predict(pairs)
         scored = sorted(
-            zip(candidates, scores), key=lambda t: t[1], reverse=True,
+            zip(candidates, scores, strict=False), key=lambda t: t[1], reverse=True,
         )[:final_top_k]
         return [
             SearchResult(

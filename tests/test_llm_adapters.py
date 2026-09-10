@@ -24,22 +24,20 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import pytest
+import requests
 
+from src.llm_handler import LLMHandler
+from src.llm_handler.adapters.anthropic import AnthropicAdapter
 from src.llm_handler.adapters.base import (
     GenerationResult,
     ProviderAdapter,
     ProviderUnavailableError,
     Usage,
 )
-import requests
-
-from src.llm_handler import LLMHandler
-from src.llm_handler.adapters.anthropic import AnthropicAdapter
 from src.llm_handler.adapters.dummy import DummyAdapter
 from src.llm_handler.adapters.ollama import OllamaAdapter
 from src.llm_handler.adapters.openai_compatible import OpenAICompatibleAdapter
 from src.llm_handler.providers import build_adapter, detect_provider
-
 
 # --------------------------------------------------------------------------- #
 # DummyAdapter — the always-available fallback                                #
@@ -202,7 +200,7 @@ class _FakeAnthropicStream:
     def __init__(self, usage: tuple[int, int] | None) -> None:
         self._usage = usage
 
-    def __enter__(self) -> "_FakeAnthropicStream":
+    def __enter__(self) -> _FakeAnthropicStream:
         return self
 
     def __exit__(self, *exc: object) -> bool:
@@ -322,7 +320,7 @@ class _FakeOllamaStreamResponse:
     def __init__(self, lines: list[bytes]) -> None:
         self._lines = lines
 
-    def __enter__(self) -> "_FakeOllamaStreamResponse":
+    def __enter__(self) -> _FakeOllamaStreamResponse:
         return self
 
     def __exit__(self, *exc: object) -> bool:

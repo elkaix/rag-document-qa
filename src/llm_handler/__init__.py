@@ -23,7 +23,7 @@ Design Decision:
 from __future__ import annotations
 
 import logging
-from typing import Iterator
+from collections.abc import Iterator
 
 # WHY no load_dotenv() here: importing this package must not read files or arm
 #      real provider credentials. Entry points call src.config.load_env()
@@ -40,8 +40,8 @@ from .providers import build_adapter, detect_provider, list_models
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "LLMHandler",
     "GenerationResult",
+    "LLMHandler",
     "ProviderAdapter",
     "ProviderUnavailableError",
     "Usage",

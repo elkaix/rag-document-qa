@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pytest
 
 from src.eval.statistics import bootstrap_ci, paired_permutation_test
-
 
 SEED = 12345
 

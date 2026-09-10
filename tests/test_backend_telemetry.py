@@ -25,11 +25,10 @@ from pathlib import Path
 import chromadb
 import pytest
 
-from src.backend import RAGBackend
-from src.vector_store import ChromaVectorStore
 from src.api.schemas.telemetry import StageTelemetry
+from src.backend import RAGBackend
 from src.database import create_db_and_tables, get_engine
-
+from src.vector_store import ChromaVectorStore
 
 # --------------------------------------------------------------------------- #
 # Fixtures (mirrored from test_backend.py)                                    #

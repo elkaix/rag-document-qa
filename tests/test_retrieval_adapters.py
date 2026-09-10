@@ -23,8 +23,8 @@ from __future__ import annotations
 import chromadb
 import pytest
 
-from src.retrieval import Retriever
 from src.domain import SearchResult
+from src.retrieval import Retriever
 from src.vector_store import ChromaVectorStore
 
 

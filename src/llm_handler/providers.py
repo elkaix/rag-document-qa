@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from types import ModuleType
-from typing import Callable
 
 from .adapters.anthropic import AnthropicAdapter
 from .adapters.base import ProviderAdapter, ProviderUnavailableError
@@ -76,7 +76,7 @@ def detect_provider(model: str) -> str:
         One of ``"openai"``, ``"anthropic"``, ``"glm"``, ``"ollama"``.
     """
     lower = model.lower()
-    if lower.startswith("gpt") or lower.startswith("o1") or lower.startswith("o3"):
+    if lower.startswith(("gpt", "o1", "o3")):
         return "openai"
     if lower.startswith("claude"):
         return "anthropic"

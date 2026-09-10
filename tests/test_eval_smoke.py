@@ -8,12 +8,12 @@ import math
 
 def test_top_level_imports():
     from src.eval import (
+        MODEL_PRICES,
         AggregatedMetric,
         CompareResult,
         EvalQuestion,
         EvalResult,
         MetricDelta,
-        MODEL_PRICES,
         RunMetadata,
         bootstrap_ci,
         cost_usd,
@@ -33,7 +33,7 @@ def test_top_level_imports():
 
 def test_compose_retrieval_then_aggregate():
     """Running retrieval metrics across a synthetic dev-set composes correctly."""
-    from src.eval import bootstrap_ci, EvalQuestion
+    from src.eval import EvalQuestion, bootstrap_ci
     from src.eval.metrics.retrieval import recall_at_k
 
     questions = [
@@ -43,7 +43,7 @@ def test_compose_retrieval_then_aggregate():
     retrieved_per_q = [["c1", "x"] if i % 5 != 0 else ["x", "y"] for i in range(50)]
     recalls = [
         recall_at_k(q.gold_chunk_ids, ret, k=5)
-        for q, ret in zip(questions, retrieved_per_q)
+        for q, ret in zip(questions, retrieved_per_q, strict=False)
     ]
     assert sum(recalls) / len(recalls) == 0.8
 

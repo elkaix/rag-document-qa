@@ -2,24 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 import pytest
 
 from src.eval import storage
-
 from src.eval.compare import compare_runs
 from src.eval.schemas import (
     AggregatedMetric,
     EvalResult,
-    MetricDelta,
     RunMetadata,
 )
 
 
 def _make_metadata(run_id: str, versions: dict[str, str] | None = None) -> RunMetadata:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return RunMetadata(
         run_id=run_id, config_name=run_id, config_path=f"{run_id}.yaml",
         git_sha="x" * 7, started_at=now, finished_at=now, env_hash="h",

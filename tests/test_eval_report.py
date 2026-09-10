@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.eval.report import render_compare_html, render_run_html
 from src.eval.schemas import (
@@ -15,7 +15,7 @@ from src.eval.schemas import (
 
 
 def _meta(run_id: str = "test") -> RunMetadata:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return RunMetadata(
         run_id=run_id, config_name="baseline",
         config_path="x.yaml", git_sha="abc1234",

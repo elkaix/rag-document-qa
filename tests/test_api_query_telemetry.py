@@ -18,13 +18,11 @@ Why mock approach instead of full-ingest:
 
 from __future__ import annotations
 
-import json
-from typing import Iterator
-from unittest.mock import MagicMock, patch
+from collections.abc import Iterator
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -181,7 +179,6 @@ class TestWebSocketTelemetry:
 
     def test_stream_emits_telemetry_event(self, ws_client):
         """The WebSocket stream must include a telemetry event."""
-        from src.api.main import app
         with ws_client.websocket_connect("/api/chat") as ws:
             ws.send_json({"query": "What is RAG?", "top_k": 3})
             events = []

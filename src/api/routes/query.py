@@ -13,7 +13,7 @@ import json
 import logging
 import time
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from src.api.dependencies import BackendDep
 from src.api.models import QueryRequest, QueryResponse, SourceInfo

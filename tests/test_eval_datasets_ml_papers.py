@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 
 from src.eval.datasets.ml_papers import (
-    DEFAULT_QUESTIONS_PATH,
     DEFAULT_MANIFEST_PATH,
+    DEFAULT_QUESTIONS_PATH,
     ManifestVerificationError,
     load_questions,
     verify_corpus_manifest,

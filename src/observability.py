@@ -52,12 +52,12 @@ def init_observability(otlp_endpoint: str | None = None) -> None:
     )
 
     try:
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        import opentelemetry.trace as otel_trace
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter,
         )
-        import opentelemetry.trace as otel_trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
         # WHY: OTLPSpanExporter is lazy — it won't attempt a connection
         # until the first batch is flushed, so construction never raises
@@ -67,7 +67,7 @@ def init_observability(otlp_endpoint: str | None = None) -> None:
         provider.add_span_processor(BatchSpanProcessor(exporter))
         otel_trace.set_tracer_provider(provider)
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # TRADE-OFF: We catch broadly here because we never want Phoenix
         # being unavailable to crash the RAG service.  A warning is enough.
         logger.warning(

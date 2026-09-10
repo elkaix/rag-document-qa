@@ -20,7 +20,7 @@ Design decisions:
 from __future__ import annotations
 
 import math
-from typing import Sequence
+from collections.abc import Sequence
 
 # Sentinel returned for undefined metrics (empty gold set).
 # Callers should check math.isnan() and skip these in aggregation.

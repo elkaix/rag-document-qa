@@ -20,7 +20,7 @@ Design Decision:
 from __future__ import annotations
 
 import json
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 
 from .base import (
     GenerationResult,

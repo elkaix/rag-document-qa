@@ -22,8 +22,8 @@ Design decisions:
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 
@@ -167,7 +167,7 @@ class RunRegistry:
                 return
             entry.status = "completed"
             entry.n_completed = entry.n_total
-            entry.completed_at = datetime.now(timezone.utc)
+            entry.completed_at = datetime.now(UTC)
 
     def mark_failed(self, run_id: str, error: str) -> None:
         """Record a run as failed with an error message.
@@ -185,7 +185,7 @@ class RunRegistry:
                 return
             entry.status = "failed"
             entry.error_message = error
-            entry.completed_at = datetime.now(timezone.utc)
+            entry.completed_at = datetime.now(UTC)
 
     # ------------------------------------------------------------------
     # Read operations
@@ -234,7 +234,7 @@ class RunRegistry:
         Returns:
             Number of entries removed from the registry.
         """
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
+        cutoff = datetime.now(UTC) - timedelta(seconds=ttl_seconds)
         to_evict: list[str] = []
 
         with self._lock:

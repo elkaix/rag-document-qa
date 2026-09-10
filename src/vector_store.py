@@ -26,8 +26,7 @@ TRADE-OFF: ChromaDB stores data on disk by default (PersistentClient). For unit
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import chromadb
 
@@ -86,7 +85,7 @@ class ChromaVectorStore:
     #      construction sites. The score conversion below is only correct in
     #      cosine space, so a site that forgot it produced silently wrong
     #      similarity scores rather than an error.
-    SPACE_METADATA: dict[str, str] = {"hnsw:space": "cosine"}
+    SPACE_METADATA: ClassVar[dict[str, str]] = {"hnsw:space": "cosine"}
 
     @classmethod
     def open(
@@ -94,7 +93,7 @@ class ChromaVectorStore:
         client: chromadb.ClientAPI,
         name: str,
         embedding_function: Any = _UNSET,
-    ) -> "ChromaVectorStore":
+    ) -> ChromaVectorStore:
         """Get or create a cosine-space collection and wrap it.
 
         This is the supported way to build a store: it owns the one invariant
@@ -274,7 +273,7 @@ class ChromaVectorStore:
         distances = raw["distances"][0]       # type: ignore[index]
 
         results: list[SearchResult] = []
-        for chunk_id, text, meta, distance in zip(ids, documents, metadatas, distances):
+        for chunk_id, text, meta, distance in zip(ids, documents, metadatas, distances, strict=False):
             # PATTERN: ChromaDB cosine distance is in [0, 2] where 0 = identical.
             # Convert to similarity score in [0, 1]:
             #   score = max(0, 1 - distance)

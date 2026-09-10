@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -20,7 +20,7 @@ from src.eval.schemas import RunMetadata
 
 
 def _meta() -> RunMetadata:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return RunMetadata(
         run_id="r1", config_name="baseline", config_path="x.yaml",
         git_sha="abc1234", started_at=now, finished_at=now,
@@ -31,7 +31,7 @@ def _meta() -> RunMetadata:
 
 class TestRunSummaryDTO:
     def test_construction(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         d = RunSummaryDTO(
             run_id="r1", config_name="baseline",
             started_at=now, finished_at=now,
@@ -40,7 +40,7 @@ class TestRunSummaryDTO:
         assert d.headline_metric == 0.84
 
     def test_headline_metric_optional(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         d = RunSummaryDTO(
             run_id="r1", config_name="baseline",
             started_at=now, finished_at=now,

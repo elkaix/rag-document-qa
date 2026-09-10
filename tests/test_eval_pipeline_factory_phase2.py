@@ -17,7 +17,6 @@ import pytest
 from src.eval.config import load_config
 from src.eval.pipeline_factory import build_pipeline
 
-
 PHASE2_DIR = Path("configs/eval/phase2")
 
 

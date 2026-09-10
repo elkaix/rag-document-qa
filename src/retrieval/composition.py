@@ -36,31 +36,26 @@ Design Decision:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
+# WHY the leading-underscore Protocols are imported rather than redeclared:
+#      an identical local copy is a *different* type to a type checker, so
+#      passing a real QueryRewriter through this module failed to type-check
+#      even though it satisfied the contract.
 from src.config import RERANK_OVER_FETCH_N, TOP_K_RESULTS
 from src.retrieval.base import Retriever
 from src.retrieval.dense import DenseRetriever
-from src.retrieval.query_rewriter import MultiQueryRetriever
-from src.retrieval.reranker import CrossEncoderReranker, RerankingRetriever
+from src.retrieval.query_rewriter import MultiQueryRetriever, _Rewriter
+from src.retrieval.reranker import (
+    CrossEncoderReranker,
+    RerankingRetriever,
+    _Reranker,
+)
 from src.vector_store import ChromaVectorStore
 
 _DEFERRED = {
     "hybrid": "needs a live BM25 corpus synced with ingestion (a new feature)",
     "multi_query": "lands with its rewriter-cost surfacing",
 }
-
-
-class _Reranker(Protocol):
-    """What ``RerankingRetriever`` needs of a reranker."""
-
-    def rerank(self, query: str, candidates: list, final_top_k: int) -> list: ...
-
-
-class _Rewriter(Protocol):
-    """What ``MultiQueryRetriever`` needs of a rewriter."""
-
-    def rewrite(self, query: str) -> list[str]: ...
 
 
 @dataclass(frozen=True)

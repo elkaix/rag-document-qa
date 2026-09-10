@@ -29,19 +29,19 @@ Return type of query():
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import chromadb
 
-from src.ingestion import TextChunker
+from src.domain import SearchResult
 from src.eval.config import EvalConfig
 from src.eval.schemas import EvalQuestion
+from src.ingestion import TextChunker
 from src.llm_handler import LLMHandler
 from src.query_engine import QueryEngine
-from src.domain import SearchResult
 from src.retrieval import (
     CrossEncoderReranker,
     DenseRetriever,
@@ -163,7 +163,7 @@ class EvalPipeline:
             # WHY here (lazy): BM25HybridRetriever needs the full chunk corpus at
             # construction time. build_pipeline() runs before ingest, so we defer.
             if self.config.pipeline.hybrid.enabled:
-                documents_map = dict(zip(ids, documents))
+                documents_map = dict(zip(ids, documents, strict=False))
                 self.hybrid_retriever = _build_hybrid_retriever(
                     self.config.pipeline.hybrid, self.vector_store, documents_map,
                 )
@@ -364,7 +364,6 @@ def build_pipeline(
     vector_store = ChromaVectorStore.open(
         client, collection_name, embedding_function=embedding_function
     )
-    collection = vector_store.collection
 
     # ---- LLM handlers ----------------------------------------------------------
     llm = llm_override if llm_override is not None else LLMHandler(config.pipeline.generator.model)

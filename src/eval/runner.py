@@ -25,10 +25,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import subprocess
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 
@@ -233,7 +233,7 @@ class EvalRunner:
             RunMetadata with run_id, timing, error counts, and warnings.
         """
         config = self._config
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
 
         git_sha = current_git_sha()
 
@@ -302,7 +302,7 @@ class EvalRunner:
         # --- Aggregate and persist ---
         aggregated, warnings = aggregate(all_results, config)
         cost_summary = {**aggregate_costs(all_results), **aggregate_tokens(all_results)}
-        finished_at = datetime.now(timezone.utc)
+        finished_at = datetime.now(UTC)
 
         metadata = RunMetadata(
             run_id=run_id,

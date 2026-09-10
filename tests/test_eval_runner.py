@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
-from src.eval.config import EvalConfig
-from src.eval.runner import EvalRunner, _score_question
-from src.eval.schemas import EvalQuestion, EvalResult
 from src.domain import SearchResult
 from src.eval import storage
+from src.eval.config import EvalConfig
 from src.eval.runner import (
+    EvalRunner,
     SpendCeilingExceeded,
+    _score_question,
     assert_within_spend_ceiling,
 )
+from src.eval.schemas import EvalQuestion, EvalResult
 
 
 class DummyLLM:
@@ -206,16 +206,15 @@ class TestSpendCeiling:
         )
 
     def test_no_ceiling_never_aborts(self):
-        assert_within_spend_ceiling([self._result(1000.0)], None) is None
+        # The guard signals by raising, so "does not raise" is the assertion.
+        assert_within_spend_ceiling([self._result(1000.0)], None)
 
     def test_under_the_ceiling_passes(self):
-        assert_within_spend_ceiling(
-            [self._result(0.4), self._result(0.4)], 1.0
-        ) is None
+        assert_within_spend_ceiling([self._result(0.4), self._result(0.4)], 1.0)
 
     def test_exactly_at_the_ceiling_passes(self):
         """Strictly greater aborts, so spending the full budget is allowed."""
-        assert_within_spend_ceiling([self._result(1.0)], 1.0) is None
+        assert_within_spend_ceiling([self._result(1.0)], 1.0)
 
     def test_over_the_ceiling_aborts(self):
         with pytest.raises(SpendCeilingExceeded):
@@ -234,4 +233,4 @@ class TestSpendCeiling:
             )
 
     def test_an_empty_run_never_aborts(self):
-        assert_within_spend_ceiling([], 0.0) is None
+        assert_within_spend_ceiling([], 0.0)

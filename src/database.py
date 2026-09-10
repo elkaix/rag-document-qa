@@ -33,7 +33,7 @@ import logging
 from collections.abc import Generator
 from typing import Any
 
-from sqlalchemy import Engine, event, text
+from sqlalchemy import Engine, event
 from sqlmodel import Session, SQLModel, create_engine
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ def _attach_foreign_key_pragma(engine: Engine) -> None:
     """
 
     @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:  # noqa: ANN001
+    def _set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()

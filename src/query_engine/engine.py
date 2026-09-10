@@ -24,9 +24,10 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Iterator
+from collections.abc import Iterator
 
 from src.api.schemas.telemetry import StageTelemetry
+from src.domain import SearchResult
 from src.llm_handler import LLMHandler, Usage
 from src.observability import get_tracer
 from src.query_engine import telemetry as telemetry_asm
@@ -45,7 +46,6 @@ from src.query_engine.streaming import (
     retrieval_summary,
 )
 from src.retrieval import RefusalHandler, Retriever
-from src.domain import SearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +244,6 @@ class QueryEngine:
                 if isinstance(item, Usage):
                     continue  # reasoning usage is out of telemetry scope (ADR 0003)
                 yield ("reasoning", item)
-        except Exception as exc:  # noqa: BLE001 — best-effort; degrade to answer.
+        except Exception as exc:
             logger.warning("Reasoning pass failed: %s", exc)
             yield ("status", "Reasoning unavailable — skipping to answer.")

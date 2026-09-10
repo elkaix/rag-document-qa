@@ -15,7 +15,7 @@ it consistently matches or beats tuned weighted-sum on benchmarks like BEIR.
 
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from rank_bm25 import BM25Okapi
 

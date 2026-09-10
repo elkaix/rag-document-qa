@@ -21,6 +21,7 @@ def test_rrf_fusion_asymmetric_inputs():
 def test_hybrid_retrieve_returns_top_k():
     """End-to-end: hybrid retriever combines BM25 and Chroma results into top-K."""
     import chromadb
+
     from src.retrieval.hybrid import BM25HybridRetriever
     from src.vector_store import ChromaVectorStore
 

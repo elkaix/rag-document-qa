@@ -35,6 +35,7 @@ def test_synonyms_closer_than_unrelated(embedder):
 def test_chroma_collection_uses_embedder(embedder):
     """End-to-end: a Chroma collection created with BgeEmbedder retrieves the right doc."""
     import chromadb
+
     from src.vector_store import ChromaVectorStore
 
     coll = ChromaVectorStore.open(

@@ -12,18 +12,17 @@ skip/dedup branches were only ever exercised incidentally.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import chromadb
 import pytest
 from sqlmodel import Session, select
 
 from src.backend import RAGBackend
+from src.database import create_db_and_tables, get_engine
 from src.evaluation import MessageEvaluator
 from src.evaluation.message_evaluator import Judges
-from src.database import create_db_and_tables, get_engine
 from src.models.evaluation import MessageEvaluation
-from src.models.conversation import Conversation
 from src.models.message import Message, MessageSource
 from src.vector_store import ChromaVectorStore
 
@@ -41,7 +40,7 @@ def backend() -> RAGBackend:
 def _seed_turn(backend: RAGBackend, *, with_sources: bool = True) -> str:
     """Persist a user->assistant turn and return the assistant message id."""
     conv_id = backend.create_conversation("Eval fixture")["id"]
-    base = datetime.now(timezone.utc)
+    base = datetime.now(UTC)
 
     with Session(backend.engine) as session:
         user = Message(

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from src.eval.config import EvalConfig
 from src.eval.pipeline_factory import EvalPipeline, build_pipeline
 from src.eval.schemas import EvalQuestion
@@ -115,8 +113,8 @@ class TestMLPapersIngest:
 
         import chromadb
 
-        from src.ingestion import TextChunker
         from src.eval.pipeline_factory import EvalPipeline
+        from src.ingestion import TextChunker
         from src.vector_store import ChromaVectorStore
 
         # WHY a unique name: EphemeralClient shares one in-process store, so a

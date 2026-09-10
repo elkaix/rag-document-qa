@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlmodel import Session, select
 
@@ -140,7 +141,7 @@ class ConversationStore:
             if pinned is not None:
                 conv.pinned = pinned
 
-            conv.updated_at = datetime.now(timezone.utc)
+            conv.updated_at = datetime.now(UTC)
             session.add(conv)
             session.commit()
             session.refresh(conv)

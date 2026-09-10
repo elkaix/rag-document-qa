@@ -30,9 +30,8 @@ from sqlmodel import Session, select, text
 
 from src.database import create_db_and_tables, get_engine, get_session
 from src.models.conversation import Conversation
-from src.models.message import Message, MessageSource
 from src.models.document import DocumentRecord
-
+from src.models.message import Message, MessageSource
 
 # ---------------------------------------------------------------------------
 # Shared fixture: isolated in-memory engine for each test class

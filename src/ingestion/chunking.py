@@ -26,7 +26,6 @@ Design Decision:
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
 
 from src.domain import Chunk, Document
 
@@ -41,7 +40,7 @@ class TextChunker:
         chunk_size: int = 512,
         chunk_overlap: int = 64,
         strategy: str = "recursive",
-        separators: Optional[List[str]] = None,
+        separators: list[str] | None = None,
     ) -> None:
         """
         Args:
@@ -67,7 +66,7 @@ class TextChunker:
     # semantic value and pollute retrieval results with false matches.
     MIN_CHUNK_LENGTH = 20
 
-    def chunk(self, document: Document) -> List[Chunk]:
+    def chunk(self, document: Document) -> list[Chunk]:
         """Split a Document into chunks.
 
         Args:
@@ -89,7 +88,7 @@ class TextChunker:
         else:  # semantic
             raw_chunks = self._semantic_chunk(document.content)
 
-        chunks: List[Chunk] = []
+        chunks: list[Chunk] = []
         for idx, text in enumerate(raw_chunks):
             stripped = text.strip()
             if not stripped or len(stripped) < self.MIN_CHUNK_LENGTH:
@@ -113,7 +112,7 @@ class TextChunker:
         )
         return chunks
 
-    def chunk_documents(self, documents: List[Document]) -> List[Chunk]:
+    def chunk_documents(self, documents: list[Document]) -> list[Chunk]:
         """Chunk multiple documents.
 
         Args:
@@ -122,7 +121,7 @@ class TextChunker:
         Returns:
             Flattened list of all Chunk objects.
         """
-        all_chunks: List[Chunk] = []
+        all_chunks: list[Chunk] = []
         for doc in documents:
             all_chunks.extend(self.chunk(doc))
         logger.info(
@@ -134,9 +133,9 @@ class TextChunker:
     # Chunking strategies                                                  #
     # ------------------------------------------------------------------ #
 
-    def _fixed_chunk(self, text: str) -> List[str]:
+    def _fixed_chunk(self, text: str) -> list[str]:
         """Split text into fixed-size character windows with overlap."""
-        chunks: List[str] = []
+        chunks: list[str] = []
         start = 0
         while start < len(text):
             end = start + self.chunk_size
@@ -144,7 +143,7 @@ class TextChunker:
             start += self.chunk_size - self.chunk_overlap
         return chunks
 
-    def _recursive_chunk(self, text: str, depth: int = 0) -> List[str]:
+    def _recursive_chunk(self, text: str, depth: int = 0) -> list[str]:
         """Recursively split text using a hierarchy of separators.
 
         Splits on the current-depth separator, merges small parts into
@@ -162,8 +161,8 @@ class TextChunker:
             return self._fixed_chunk(text)
 
         parts = text.split(sep)
-        chunks: List[str] = []
-        current_parts: List[str] = []
+        chunks: list[str] = []
+        current_parts: list[str] = []
         current_len = 0
 
         for part in parts:
@@ -192,7 +191,7 @@ class TextChunker:
 
         return chunks
 
-    def _apply_word_overlap(self, chunks: List[str]) -> List[str]:
+    def _apply_word_overlap(self, chunks: list[str]) -> list[str]:
         """Prepend the trailing words of chunk N to chunk N+1.
 
         BEFORE (broken _apply_overlap):
@@ -211,7 +210,7 @@ class TextChunker:
         if self.chunk_overlap == 0 or len(chunks) <= 1:
             return chunks
 
-        result: List[str] = [chunks[0]]
+        result: list[str] = [chunks[0]]
         for i in range(1, len(chunks)):
             prev = chunks[i - 1]
             # Grab roughly chunk_overlap chars from the end of previous chunk
@@ -230,7 +229,7 @@ class TextChunker:
                 result.append(chunks[i])
         return result
 
-    def _semantic_chunk(self, text: str) -> List[str]:
+    def _semantic_chunk(self, text: str) -> list[str]:
         """Sentence-aware chunking: accumulate sentences until chunk_size is exceeded."""
         import re
 
@@ -238,8 +237,8 @@ class TextChunker:
         sentence_endings = re.compile(r"(?<=[.!?])\s+")
         sentences = sentence_endings.split(text)
 
-        chunks: List[str] = []
-        current_sentences: List[str] = []
+        chunks: list[str] = []
+        current_sentences: list[str] = []
         current_len = 0
 
         for sentence in sentences:
@@ -247,7 +246,7 @@ class TextChunker:
             if current_len + s_len > self.chunk_size and current_sentences:
                 chunks.append(" ".join(current_sentences))
                 # keep overlap
-                overlap_sentences: List[str] = []
+                overlap_sentences: list[str] = []
                 overlap_len = 0
                 for sent in reversed(current_sentences):
                     if overlap_len + len(sent) <= self.chunk_overlap:

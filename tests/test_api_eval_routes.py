@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import json
-import os
 import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,6 +60,7 @@ def tmp_eval_runs(tmp_path, monkeypatch):
     runs.mkdir()
     monkeypatch.setenv("EVAL_RUNS_DIR", str(runs))
     import importlib
+
     import src.eval.storage
     importlib.reload(src.eval.storage)
     yield runs

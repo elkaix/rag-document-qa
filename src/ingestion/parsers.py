@@ -33,8 +33,9 @@ import csv
 import json
 import logging
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +205,7 @@ def parse_csv(path: Path) -> ParseResult:
     headers = rows[0]
     lines = [", ".join(headers)]
     for row in rows[1:]:
-        lines.append("; ".join(f"{h}: {v}" for h, v in zip(headers, row)))
+        lines.append("; ".join(f"{h}: {v}" for h, v in zip(headers, row, strict=False)))
 
     return "\n".join(lines), {
         "row_count": len(rows) - 1,

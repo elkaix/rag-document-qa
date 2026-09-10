@@ -17,7 +17,6 @@ Design decisions:
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
 
 from src.eval.config import EvalConfig
 from src.eval.schemas import AggregatedMetric, EvalResult

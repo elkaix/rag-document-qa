@@ -24,23 +24,12 @@ Where it fits in the RAG pipeline:
   Everything beneath (RAGBackend, routes, models) is imported and wired here.
 """
 
-import os
 from contextlib import asynccontextmanager
 
 import chromadb
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.backend import RAGBackend
-from src.vector_store import ChromaVectorStore
-from src.config import (
-    CHROMA_COLLECTION,
-    CHROMA_PATH,
-    SQLITE_URL,
-    allowed_origins,
-    load_env,
-)
-from src.database import create_db_and_tables, get_engine
 from src.api.routes import (
     conversations_router,
     documents_router,
@@ -50,7 +39,17 @@ from src.api.routes import (
 )
 from src.api.routes.eval import router as eval_router
 from src.api.services.eval_runs import RunRegistry
+from src.backend import RAGBackend
+from src.config import (
+    CHROMA_COLLECTION,
+    CHROMA_PATH,
+    SQLITE_URL,
+    allowed_origins,
+    load_env,
+)
+from src.database import create_db_and_tables, get_engine
 from src.observability import init_observability
+from src.vector_store import ChromaVectorStore
 
 # WHY here and not inside a library: this module is the application entry point,
 #      so it is the one place allowed to pull .env into the process. It runs

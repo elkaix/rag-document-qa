@@ -7,24 +7,22 @@ Uses ChromaDB EphemeralClient for vector store fixtures (no disk I/O, no cleanup
 
 from __future__ import annotations
 
-import sys
-import os
-from pathlib import Path
-from typing import List
 import hashlib
+import os
+import sys
+from pathlib import Path
 
 # Ensure project root is on sys.path so `from src.x import ...` works
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import pytest
-import numpy as np
 import chromadb
+import numpy as np
+import pytest
 
 from src.domain import Chunk, Document
 from src.vector_store import ChromaVectorStore
-
 
 # --------------------------------------------------------------------------- #
 # CI mode: stub LLM provider calls                                             #
@@ -168,7 +166,7 @@ def sample_document_2() -> Document:
 
 
 @pytest.fixture
-def sample_chunks(sample_document: Document) -> List[Chunk]:
+def sample_chunks(sample_document: Document) -> list[Chunk]:
     """Pre-built chunks from the sample document."""
     texts = [
         "Retrieval-Augmented Generation (RAG) is a technique that enhances large language models.",
@@ -194,7 +192,7 @@ def sample_chunks(sample_document: Document) -> List[Chunk]:
 # Embedding fixtures                                                           #
 # --------------------------------------------------------------------------- #
 
-def _make_deterministic_embedding(text: str, dim: int = EMBEDDING_DIM) -> List[float]:
+def _make_deterministic_embedding(text: str, dim: int = EMBEDDING_DIM) -> list[float]:
     """Create a deterministic unit-norm embedding from text."""
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     seed = int.from_bytes(digest[:4], "little")
@@ -225,7 +223,7 @@ def chroma_collection():
 
 
 @pytest.fixture
-def populated_vector_store(sample_chunks: List[Chunk], chroma_collection) -> ChromaVectorStore:
+def populated_vector_store(sample_chunks: list[Chunk], chroma_collection) -> ChromaVectorStore:
     """
     A ChromaVectorStore pre-loaded with sample_chunks and deterministic embeddings.
 

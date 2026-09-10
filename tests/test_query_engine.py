@@ -14,11 +14,10 @@ What concept it teaches:
 
 from __future__ import annotations
 
+from src.domain import SearchResult
 from src.llm_handler import Usage
 from src.query_engine import QueryEngine
 from src.query_engine.prompt import ANSWER_SYSTEM_PROMPT, NO_DOCUMENTS_ANSWER
-from src.domain import SearchResult
-
 
 # --------------------------------------------------------------------------- #
 # Fakes at the two engine seams                                               #
@@ -53,14 +52,12 @@ class _FakeLLM:
     def stream_response(self, prompt, system_prompt=None):
         self.seen_system.append(system_prompt)
         self.seen_user.append(prompt)
-        for tok in self._answer.split():
-            yield tok
+        yield from self._answer.split()
         yield Usage(prompt_tokens=self._p, completion_tokens=self._c)
 
     def stream_messages(self, messages):
         self.seen_messages.append(messages)
-        for tok in self._answer.split():
-            yield tok
+        yield from self._answer.split()
         yield Usage(prompt_tokens=self._p, completion_tokens=self._c)
 
 

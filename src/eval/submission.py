@@ -29,7 +29,7 @@ Design Decision:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -111,7 +111,7 @@ def reserve_run_id(config_name: str, started_at: datetime | None = None) -> str:
         parameter that existed only to reconcile the duplicate.
     """
     return compute_run_id(
-        config_name, started_at or datetime.now(timezone.utc), current_git_sha()
+        config_name, started_at or datetime.now(UTC), current_git_sha()
     )
 
 

@@ -21,7 +21,7 @@ Design Decision:
 
 from __future__ import annotations
 
-from typing import Callable, Iterator
+from collections.abc import Callable, Iterator
 
 from .base import (
     GenerationResult,
@@ -39,10 +39,7 @@ def _is_constrained(model: str) -> bool:
     """
     lower = model.lower()
     return (
-        lower.startswith("gpt-5")
-        or lower.startswith("o1")
-        or lower.startswith("o3")
-        or lower.startswith("o4")
+        lower.startswith(("gpt-5", "o1", "o3", "o4"))
     )
 
 

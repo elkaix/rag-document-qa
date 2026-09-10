@@ -28,7 +28,6 @@ Where it fits in the RAG pipeline:
 from __future__ import annotations
 
 import logging
-from typing import List
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
@@ -114,10 +113,10 @@ def _to_detail(data: dict) -> ConversationDetail:
 
 @router.get(
     "/conversations",
-    response_model=List[ConversationSummary],
+    response_model=list[ConversationSummary],
     summary="List all conversations",
 )
-def list_conversations(backend: BackendDep) -> List[ConversationSummary]:
+def list_conversations(backend: BackendDep) -> list[ConversationSummary]:
     """Return all conversations, pinned first, then by most recently updated.
 
     WHY sync def: The backend performs synchronous SQLite queries. FastAPI
@@ -156,13 +155,13 @@ def create_conversation(
 
 @router.get(
     "/conversations/search",
-    response_model=List[ConversationSummary],
+    response_model=list[ConversationSummary],
     summary="Search conversations by title or message content",
 )
 def search_conversations(
     backend: BackendDep,
     q: str = Query(..., min_length=1, max_length=500, description="Search query string."),
-) -> List[ConversationSummary]:
+) -> list[ConversationSummary]:
     """Search conversations by title or message content using substring matching.
 
     TRADE-OFF: Uses SQL LIKE for simplicity. Production would use SQLite FTS5

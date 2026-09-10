@@ -28,8 +28,9 @@ Design Decision:
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator
+from typing import Any
 
 from sqlmodel import Session, select
 

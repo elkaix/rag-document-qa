@@ -7,7 +7,7 @@ collection, three LLM handlers, a retriever and a query engine.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlmodel import Session
@@ -169,7 +169,7 @@ class TestSlidingWindow:
         with session_factory() as session:
             session.add(Message(
                 conversation_id=conv_id, role=role, content=content,
-                created_at=datetime.now(timezone.utc) + timedelta(seconds=offset),
+                created_at=datetime.now(UTC) + timedelta(seconds=offset),
             ))
             session.commit()
 

@@ -31,15 +31,15 @@ from src.api.schemas.eval import (
     RunSummaryDTO,
 )
 from src.api.services.eval_runs import RunRegistry, progress_fraction
+from src.eval.compare import compare_runs as _compare_runs_impl
+from src.eval.schemas import CompareResult, EvalResult
+from src.eval.storage import list_runs, load_run
 from src.eval.submission import (
     ConfigNotFoundError,
     reserve_run_id,
     resolve_config,
     submit_run,
 )
-from src.eval.compare import compare_runs as _compare_runs_impl
-from src.eval.schemas import CompareResult, EvalResult
-from src.eval.storage import list_runs, load_run
 
 router = APIRouter(prefix="/api/eval", tags=["eval"])
 
@@ -207,11 +207,11 @@ def get_run(run_id: str) -> RunDetailDTO:
     """
     try:
         run_data = load_run(run_id)
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run '{run_id}' not found.",
-        )
+        ) from exc
 
     meta = run_data["metadata"]
     aggregated = run_data["aggregated"]
@@ -262,11 +262,11 @@ def get_run_results(
     """
     try:
         run_data = load_run(run_id)
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run '{run_id}' not found.",
-        )
+        ) from exc
 
     results: list[EvalResult] = run_data["results"]
     total = len(results)
@@ -307,11 +307,11 @@ def get_question_result(run_id: str, question_id: str) -> EvalResult:
     """
     try:
         run_data = load_run(run_id)
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run '{run_id}' not found.",
-        )
+        ) from exc
 
     results: list[EvalResult] = run_data["results"]
     for r in results:
@@ -367,11 +367,11 @@ def get_run_status(run_id: str, request: Request) -> RunStatusDTO:
             n_total=meta.n_questions,
             error_message=None,
         )
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run '{run_id}' not found.",
-        )
+        ) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -399,11 +399,11 @@ def compare_runs(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
-        )
+        ) from exc
     except ValueError as exc:
         # WHY 409 (Conflict): the comparison is a logical conflict — the two
         # runs are not comparable because they evaluated different question sets.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
-        )
+        ) from exc

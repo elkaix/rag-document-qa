@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.observability import TRACER_NAME, get_tracer, init_observability
+from src.observability import get_tracer, init_observability
 
 
 class TestInitObservability:

@@ -24,7 +24,6 @@ import argparse
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
 from src.config import load_env
 from src.eval.doubles import resolve_llm_overrides
@@ -43,7 +42,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
     if env_squad := os.getenv("EVAL_SQUAD_PATH"):
         from src.eval.datasets import squad_v2 as squad_ds
         squad_ds.DEFAULT_OUTPUT_PATH = Path(env_squad)
-    import src.eval.storage as _storage
 
     from src.eval.config import load_config
     from src.eval.runner import EvalRunner
@@ -143,7 +141,6 @@ def _cmd_show(args: argparse.Namespace) -> int:
 def _cmd_compare(args: argparse.Namespace) -> int:
     """Print delta table for two runs; optionally write compare HTML."""
     import src.eval.storage as _storage
-
     from src.eval.compare import compare_runs
 
     try:
@@ -183,6 +180,8 @@ def _cmd_compare(args: argparse.Namespace) -> int:
             if agg_names:
                 print("Metrics in run A: " + ", ".join(sorted(agg_names)))
         except Exception:
+            # This block only enriches an error message; if the run cannot be
+            # read the original error is still the useful one.
             pass
 
     if args.html:

@@ -1,0 +1,49 @@
+# Tooling configuration for the RAG Document Q&A project.
+#
+# WHY this file exists: CLAUDE.md names ruff, black, mypy and radon as the
+#      quality bar, but no configuration recorded what that bar actually was.
+#      The first run of ruff over this repo produced 231 findings, of which the
+#      large majority were real (dead imports, unsorted import blocks, and the
+#      pre-PEP-585 typing the project standard already forbids) and a handful
+#      were deliberate design the linter cannot know about. Writing the rules
+#      down makes the standard enforceable and stops the exceptions being
+#      re-argued every time someone runs the tool.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# WHY these five: they map onto what CLAUDE.md already asks for — PEP 8 style
+#      (E/W), real dead code and undefined names (F), grouped and sorted imports
+#      (I), modern PEP 585/604 typing (UP), and the bug patterns bugbear catches
+#      (B). Opinion-heavy families (TRY, RUF style rules, the security linter's
+#      test-suite noise) are left out deliberately: a linter nobody can get to
+#      zero is a linter everybody learns to ignore.
+select = ["E", "W", "F", "I", "B", "UP"]
+
+ignore = [
+    # WHY: the codebase uses descriptive messages at the raise site rather than
+    #      one exception class per message. B904 aside, that is a deliberate
+    #      style, and this project's exception guidance is about *layering*
+    #      (domain-translate, do not swallow), which no rule here checks.
+    "E501",  # line length is advisory here; see line-length below
+]
+
+[tool.ruff.lint.per-file-ignores]
+# WHY E402 here: several test modules bootstrap sys.path with the project root
+#      before importing src.*, because the package is not pip-installed. The
+#      imports are deliberately below that bootstrap.
+# WHY E731 here: a one-line lambda is the clearest way to express a stub.
+"tests/*" = ["E402", "E731"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+# WHY not strict: SQLModel's table classes and ChromaDB's client are untyped at
+#      the edges. The project rule that matters — no `Any`, no `type: ignore` to
+#      silence a design problem — is enforced in review, not by a flag.

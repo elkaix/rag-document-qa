@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
-import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -35,7 +33,7 @@ def tmp_eval_runs(tmp_path: Path, monkeypatch) -> Path:
 
 
 def _make_metadata(run_id: str = "test-run") -> RunMetadata:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return RunMetadata(
         run_id=run_id,
         config_name="baseline",
@@ -62,12 +60,12 @@ def _make_result(qid: str = "q1") -> EvalResult:
 
 class TestComputeRunId:
     def test_format(self, tmp_eval_runs):
-        ts = datetime(2026, 4, 26, 14, 30, 22, tzinfo=timezone.utc)
+        ts = datetime(2026, 4, 26, 14, 30, 22, tzinfo=UTC)
         rid = storage.compute_run_id("baseline", ts, "a3f9c1abcdef")
         assert rid == "2026-04-26_143022_baseline_a3f9c1a"
 
     def test_deterministic(self, tmp_eval_runs):
-        ts = datetime(2026, 4, 26, 14, 30, 22, tzinfo=timezone.utc)
+        ts = datetime(2026, 4, 26, 14, 30, 22, tzinfo=UTC)
         rid1 = storage.compute_run_id("x", ts, "abc1234567")
         rid2 = storage.compute_run_id("x", ts, "abc1234567")
         assert rid1 == rid2
@@ -112,13 +110,13 @@ class TestListRuns:
         # Create two runs with distinct timestamps.
         meta_old = _make_metadata("old-run")
         meta_old = meta_old.model_copy(update={
-            "started_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
-            "finished_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "started_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "finished_at": datetime(2026, 1, 1, tzinfo=UTC),
         })
         meta_new = _make_metadata("new-run")
         meta_new = meta_new.model_copy(update={
-            "started_at": datetime(2026, 4, 1, tzinfo=timezone.utc),
-            "finished_at": datetime(2026, 4, 1, tzinfo=timezone.utc),
+            "started_at": datetime(2026, 4, 1, tzinfo=UTC),
+            "finished_at": datetime(2026, 4, 1, tzinfo=UTC),
         })
         for m in (meta_old, meta_new):
             run_dir = tmp_eval_runs / m.run_id

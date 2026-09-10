@@ -27,9 +27,9 @@ import logging
 import re
 from typing import Protocol
 
+from src.domain import SearchResult
 from src.retrieval.base import Retriever
 from src.telemetry import pricing
-from src.domain import SearchResult
 
 logger = logging.getLogger(__name__)
 

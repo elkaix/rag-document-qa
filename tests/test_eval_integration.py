@@ -8,7 +8,6 @@ calls are made.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -57,6 +56,7 @@ def tmp_eval_runs(tmp_path, monkeypatch):
     runs.mkdir()
     monkeypatch.setenv("EVAL_RUNS_DIR", str(runs))
     import importlib
+
     import src.eval.storage
     importlib.reload(src.eval.storage)
     yield src.eval.storage

@@ -6,7 +6,7 @@ import pytest
 
 from src.eval.aggregator import aggregate
 from src.eval.config import EvalConfig
-from src.eval.schemas import AggregatedMetric, EvalResult
+from src.eval.schemas import EvalResult
 
 
 def _baseline_config() -> EvalConfig:

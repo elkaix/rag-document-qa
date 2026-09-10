@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -164,8 +163,8 @@ class TestCliCompare:
             "EVAL_SQUAD_PATH": str(synthetic_squad),
         }
         # Create two runs
-        r1 = _run_cli(["run", "--config", str(cli_config)], env_overrides=env)
-        r2 = _run_cli(["run", "--config", str(cli_config)], env_overrides=env)
+        _run_cli(["run", "--config", str(cli_config)], env_overrides=env)
+        _run_cli(["run", "--config", str(cli_config)], env_overrides=env)
         run_ids = sorted(p.name for p in tmp_eval_runs.iterdir() if p.is_dir())
         assert len(run_ids) == 2
 

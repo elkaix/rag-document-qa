@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from src.api.services.eval_runs import RunRegistry, RunStatus
+from src.api.services.eval_runs import RunRegistry
 
 
 class TestBasicLifecycle:
@@ -92,7 +91,7 @@ class TestEviction:
         reg.mark_completed("old")
         # Forge an older completed_at to simulate elapsed time.
         s = reg.get("old")
-        s.completed_at = datetime.now(timezone.utc) - timedelta(seconds=7200)
+        s.completed_at = datetime.now(UTC) - timedelta(seconds=7200)
 
         reg.register("new", 10)
         reg.mark_completed("new")

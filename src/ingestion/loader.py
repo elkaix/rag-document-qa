@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 from src.domain import Document
 from src.ingestion.parsers import SUPPORTED_EXTENSIONS, parser_for
@@ -69,8 +69,8 @@ class DocumentLoader:
         self,
         directory: str | Path,
         recursive: bool = True,
-        extensions: Optional[List[str]] = None,
-    ) -> List[Document]:
+        extensions: list[str] | None = None,
+    ) -> list[Document]:
         """Load every supported file in a directory.
 
         Args:
@@ -101,7 +101,7 @@ class DocumentLoader:
         ]
         logger.info("Found %d files in %s", len(files), dir_path)
 
-        documents: List[Document] = []
+        documents: list[Document] = []
         for file in files:
             try:
                 documents.append(self.load(file))

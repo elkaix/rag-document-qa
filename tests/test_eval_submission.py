@@ -8,6 +8,7 @@ joint between runner and registry directly.
 
 from __future__ import annotations
 
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -59,15 +60,15 @@ class TestResolveConfig:
 
 class TestReserveRunId:
     def test_is_stable_for_a_fixed_submission_time(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        when = datetime(2026, 9, 9, 12, 0, 0, tzinfo=timezone.utc)
+        when = datetime(2026, 9, 9, 12, 0, 0, tzinfo=UTC)
         assert reserve_run_id("baseline", when) == reserve_run_id("baseline", when)
 
     def test_embeds_the_config_name_and_a_sortable_timestamp(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        when = datetime(2026, 9, 9, 12, 0, 0, tzinfo=timezone.utc)
+        when = datetime(2026, 9, 9, 12, 0, 0, tzinfo=UTC)
         run_id = reserve_run_id("baseline", when)
         assert run_id.startswith("2026-09-09_120000_baseline_")
 

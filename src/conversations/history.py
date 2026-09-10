@@ -19,8 +19,9 @@ Design Decision:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlmodel import Session, select
 
@@ -97,7 +98,7 @@ class ConversationHistory:
 
             conv = session.get(Conversation, conversation_id)
             if conv:
-                conv.updated_at = datetime.now(timezone.utc)
+                conv.updated_at = datetime.now(UTC)
                 session.add(conv)
 
             session.commit()
@@ -162,7 +163,7 @@ class ConversationHistory:
                 return
 
             conv.title = _truncate_on_word_boundary(first_query.strip())
-            conv.updated_at = datetime.now(timezone.utc)
+            conv.updated_at = datetime.now(UTC)
             session.add(conv)
             session.commit()
 

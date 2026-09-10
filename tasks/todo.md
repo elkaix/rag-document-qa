@@ -42,15 +42,34 @@ Discipline: leaf-first, behaviour-preserving, tests green after each step.
 - [x] Route is HTTP translation; 478 → 409 lines
 - [x] Failure path + progress-total forwarding now tested without FastAPI
 
-## Tranche 6 — C2 backend split
-- [ ] Characterization tests for conversation + evaluation clusters
-- [ ] Extract ConversationStore, Evaluator
-- [ ] Adopt the DI seam in all route modules
+## Tranche 6 — C2 backend split  ✔ (ADR 0007)
+- [x] 33 characterization tests committed against the old code first
+- [x] `src/conversations/` + `src/evaluation/`; backend.py 1265 → 783
+- [x] `BackendDep` adopted by all six route modules
 
-## Tranche 7 — C5 parsing seam
-- [ ] Characterization tests for PDF/DOCX/HTML (deps confirmed installed)
-- [ ] Parsing seam + chunking split; test `_semantic_chunk`
+## Tranche 7 — C5 parsing seam  ✔ (ADR 0008)
+- [x] `src/ingestion/`: parsers registry, loader, chunking
+- [x] PDF/DOCX/HTML, `normalise_pdf_text`, ToC filter, min-length floor,
+      word overlap, semantic tier, vector-store guards — all covered
 
-## Out of scope
+## Tranche 8 — tooling  ✔
+- [x] `pyproject.toml` added: ruff/black/mypy config with reasons for each
+      deliberate exception. Ruff: 231 findings → 0.
+- [x] Ruff caught four spend-ceiling tests of mine written without `assert`.
+
+## Out of scope / deferred
+- **black**: would reformat 83 of 138 files. The repo was never
+  black-formatted; running it now would bury this work's diff. `pyproject.toml`
+  records line-length so a future `black .` is one deliberate commit.
+- **mypy**: ~19 remaining errors are the known SQLModel/SQLAlchemy typing gap
+  (`Model.field.desc()`, `.contains()`, `.in_()` — mypy sees the field's value
+  type, not the InstrumentedAttribute). Pre-existing pattern, unchanged by this
+  work. The two errors this work introduced (duplicated Protocols in
+  `composition.py`) are fixed.
 - Pushing to PR #21 (outward-facing; ask first)
 - CI workflow changes (shared infrastructure)
+
+## Review
+Nine commits, each with tests green. Two user-visible bugs fixed that were not
+in the original review: eval-run progress frozen at 0.0, and ingestion crashing
+on any document containing repeated text. Test count 320 → 508.

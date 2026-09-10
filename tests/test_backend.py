@@ -32,12 +32,9 @@ import pytest
 from sqlmodel import Session, select
 
 from src.backend import RAGBackend
-from src.vector_store import ChromaVectorStore
 from src.database import create_db_and_tables, get_engine
-from src.models.conversation import Conversation
-from src.models.document import DocumentRecord
 from src.models.message import Message, MessageSource
-
+from src.vector_store import ChromaVectorStore
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                     #
@@ -252,7 +249,7 @@ class TestConversationCRUD:
     def test_delete_conversation_cascades(self, backend: RAGBackend):
         """Deleting a conversation removes its messages and sources."""
         conv = backend.create_conversation()
-        msg_id = backend._save_message(
+        backend._save_message(
             conv["id"], "assistant", "Answer",
             sources=[{
                 "doc_id": "d1",

@@ -8,13 +8,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import List
 
 import pytest
 
-from src.ingestion import DocumentLoader, TextChunker
 from src.domain import Chunk, Document
-
+from src.ingestion import DocumentLoader, TextChunker
 
 # --------------------------------------------------------------------------- #
 # DocumentLoader tests                                                         #

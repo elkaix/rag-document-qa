@@ -7,14 +7,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from datetime import datetime, timezone
 
 from sqlmodel import Session, SQLModel, select
 
 from src.database import get_engine
+from src.models.conversation import Conversation
 from src.models.evaluation import MessageEvaluation
 from src.models.message import Message
-from src.models.conversation import Conversation
 
 
 def _setup_db():
@@ -71,9 +70,9 @@ import json
 from unittest.mock import MagicMock
 
 from src.evaluation import (
-    evaluate_faithfulness,
     evaluate_answer_relevancy,
     evaluate_context_precision,
+    evaluate_faithfulness,
 )
 
 

@@ -20,12 +20,10 @@ from __future__ import annotations
 
 import uuid
 
-import pytest
 import chromadb
+import pytest
 
-from src.domain import SearchResult
 from src.vector_store import ChromaVectorStore
-
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                     #

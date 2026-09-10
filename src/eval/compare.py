@@ -19,7 +19,6 @@ Design decisions:
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from typing import Any
 
 from src.eval.schemas import (
@@ -30,7 +29,6 @@ from src.eval.schemas import (
     RunMetadata,
 )
 from src.eval.statistics import paired_permutation_test
-from src.eval.storage import load_run
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +213,7 @@ def compare_runs(id_a: str, id_b: str) -> CompareResult:
         )
         for ds in headline_datasets:
             a_vals, b_vals, qids = _paired_values(scores_a, scores_b, headline, ds)
-            for qid, a_score, b_score in zip(qids, a_vals, b_vals):
+            for qid, a_score, b_score in zip(qids, a_vals, b_vals, strict=False):
                 raw_delta = b_score - a_score
                 per_question_rows.append({
                     "question_id": qid,
