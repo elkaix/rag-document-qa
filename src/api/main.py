@@ -32,7 +32,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.backend import RAGBackend
-from src.config import CHROMA_COLLECTION, CHROMA_PATH, SQLITE_URL
+from src.config import CHROMA_COLLECTION, CHROMA_PATH, SQLITE_URL, load_env
 from src.database import create_db_and_tables, get_engine
 from src.api.routes import (
     conversations_router,
@@ -44,6 +44,12 @@ from src.api.routes import (
 from src.api.routes.eval import router as eval_router
 from src.api.services.eval_runs import RunRegistry
 from src.observability import init_observability
+
+# WHY here and not inside a library: this module is the application entry point,
+#      so it is the one place allowed to pull .env into the process. It runs
+#      before ALLOWED_ORIGINS is read below and before the lifespan builds any
+#      provider client. Importing a library must never arm real credentials.
+load_env()
 
 
 @asynccontextmanager

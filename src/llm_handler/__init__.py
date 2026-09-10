@@ -23,17 +23,11 @@ Design Decision:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Iterator
 
-# Load .env from the project root (two levels up from this package).
-try:
-    from dotenv import load_dotenv
-
-    load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
-except ImportError:
-    pass
-
+# WHY no load_dotenv() here: importing this package must not read files or arm
+#      real provider credentials. Entry points call src.config.load_env()
+#      instead. See the BEFORE/AFTER note in src/config.py.
 from .adapters.base import (
     GenerationResult,
     ProviderAdapter,

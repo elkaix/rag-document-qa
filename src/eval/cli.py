@@ -26,6 +26,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from src.config import load_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -262,6 +264,10 @@ def _cmd_archive(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 
 def main(argv: list[str] | None = None) -> int:
+    # WHY here: the CLI is an entry point, so it is allowed to pull .env into the
+    #      process. Library modules must not — see src/config.py load_env().
+    load_env()
+
     parser = argparse.ArgumentParser(prog="src.eval.cli")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

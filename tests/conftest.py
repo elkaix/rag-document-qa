@@ -41,14 +41,23 @@ from src.vector_store import ChromaVectorStore
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _stub_openai_in_ci():
-    """Replace openai.OpenAI() with an in-process stub when CI_LLM_MOCK is truthy.
+def _stub_openai_provider():
+    """Replace openai.OpenAI() with an in-process stub for the whole test session.
 
     The stub mimics the chat.completions.create() shape used by LLMHandler,
     returning a canned response with a content attribute and an id. No network
     call is made.
+
+    BEFORE: stubbing was opt-in via CI_LLM_MOCK=1, so a developer machine with a
+            .env made real, billable provider calls and the suite failed without
+            a funded key.
+    AFTER:  stubbing is the default; set RAG_QA_LIVE_LLM=1 to deliberately test
+            against a real provider.
+    WHY:    a test suite must not depend on ambient credentials, and must never
+            spend money by default. The matching root-cause fix removed the
+            import-time load_dotenv() from src/llm_handler (see src/config.py).
     """
-    if os.getenv("CI_LLM_MOCK", "").lower() not in ("1", "true", "yes"):
+    if os.getenv("RAG_QA_LIVE_LLM", "").lower() in ("1", "true", "yes"):
         yield
         return
 
