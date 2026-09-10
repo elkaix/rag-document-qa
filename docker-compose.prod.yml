@@ -21,6 +21,16 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - GLM_API_KEY=${GLM_API_KEY:-}
+      # WHY these two are passed through: ADR 0004's central claim is that an
+      #     eval-validated retrieval chain is promoted "by configuration, not a
+      #     code change", and ADR 0009 made both settings env-read to honour it.
+      #     This file is the deployed surface, so leaving them out kept the
+      #     claim false in the one place it had to be true — a prod operator
+      #     could only switch strategy by editing tracked source. The defaults
+      #     reproduce current behaviour exactly: "dense" is the shipped
+      #     strategy, and an empty rewriter model reads back as None.
+      - RETRIEVER_STRATEGY=${RETRIEVER_STRATEGY:-dense}
+      - QUERY_REWRITER_MODEL=${QUERY_REWRITER_MODEL:-}
       # SECURITY: unset, src/config.py's allowed_origins() falls back to "*",
       #           which is the right default for local dev against a Vite
       #           server on another port and the wrong one for a deployed API.
