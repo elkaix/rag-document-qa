@@ -8,56 +8,17 @@ fixed-size, recursive, and semantic chunking strategies.
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
 import logging
-import os
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+from src.domain import Chunk, Document
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".html", ".htm", ".csv", ".json"}
-
-
-def _hash_text(text: str) -> str:
-    """Return a full SHA-256 hex digest of text.
-
-    BUG FIX: Previously truncated to 16 hex chars (64 bits), which is too
-    short for a content-addressed document id — collision risk grows with
-    corpus size, and the DocumentRecord docstring explicitly promises a
-    full SHA-256. Chunk ids derive from this too; a longer id is harmless.
-    """
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-@dataclass
-class Document:
-    """Represents a loaded document."""
-
-    content: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    doc_id: str = field(default="")
-
-    def __post_init__(self) -> None:
-        if not self.doc_id:
-            self.doc_id = _hash_text(self.content)
-
-
-@dataclass
-class Chunk:
-    """Represents a chunk of a document."""
-
-    content: str
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    chunk_id: str = field(default="")
-    doc_id: str = field(default="")
-
-    def __post_init__(self) -> None:
-        if not self.chunk_id:
-            self.chunk_id = _hash_text(self.content + self.doc_id)
 
 
 class DocumentLoader:

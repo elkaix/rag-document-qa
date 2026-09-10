@@ -22,7 +22,7 @@ import pytest
 import numpy as np
 import chromadb
 
-from src.document_loader import Chunk, Document
+from src.domain import Chunk, Document
 from src.vector_store import ChromaVectorStore
 
 
@@ -215,15 +215,13 @@ def chroma_collection():
     a fresh in-memory collection that vanishes when the fixture goes out of scope.
     PATTERN: cosine distance matches how the production vector store is configured.
     """
-    client = chromadb.EphemeralClient()
-    return client.get_or_create_collection(
-        name="test_docs",
-        metadata={"hnsw:space": "cosine"},
-        # WHY None: we supply our own deterministic embeddings via upsert(),
-        # so ChromaDB must not auto-embed — passing embedding_function=None
-        # disables the default all-MiniLM-L6-v2 auto-embedder.
-        embedding_function=None,
-    )
+    # WHY .open: the cosine setting lives with the store, so a fixture cannot
+    # drift from production's configuration. WHY embedding_function=None: we
+    # supply deterministic embeddings via upsert(), so ChromaDB must not
+    # auto-embed with all-MiniLM-L6-v2.
+    return ChromaVectorStore.open(
+        chromadb.EphemeralClient(), "test_docs", embedding_function=None
+    ).collection
 
 
 @pytest.fixture

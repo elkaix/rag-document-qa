@@ -31,28 +31,12 @@ from typing import Any
 
 import chromadb
 
+from src.domain import SearchResult
+
+# Sentinel: "argument not supplied", distinct from an explicit None.
+_UNSET: Any = object()
+
 logger = logging.getLogger(__name__)
-
-
-# --------------------------------------------------------------------------- #
-# Data model                                                                   #
-# --------------------------------------------------------------------------- #
-
-@dataclass
-class SearchResult:
-    """
-    A single result returned from a ChromaDB similarity search.
-
-    WHY a dataclass rather than a TypedDict: dataclasses give us attribute access
-    (result.score), type checking, and a clean repr — all useful for debugging
-    and for the response models in the FastAPI layer.
-    """
-
-    content: str          # The raw chunk text shown to the LLM as context
-    metadata: dict[str, Any]  # Source info: filename, page, chunk_index, etc.
-    score: float          # Cosine similarity 0..1 (1 = identical, 0 = orthogonal)
-    doc_id: str           # Which document this chunk came from
-    chunk_id: str         # Unique ID for this specific chunk
 
 
 # --------------------------------------------------------------------------- #
@@ -73,34 +57,72 @@ class ChromaVectorStore:
 
     Example (production):
         client = chromadb.PersistentClient(path="./chroma_db")
-        collection = client.get_or_create_collection(
-            name="documents",
-            metadata={"hnsw:space": "cosine"},
-        )
-        store = ChromaVectorStore(collection=collection)
+        store = ChromaVectorStore.open(client, "documents")
 
     Example (testing):
         client = chromadb.EphemeralClient()
-        collection = client.get_or_create_collection(
-            name="test_docs",
-            metadata={"hnsw:space": "cosine"},
-            embedding_function=None,
-        )
-        store = ChromaVectorStore(collection=collection)
+        store = ChromaVectorStore.open(client, "test_docs", embedding_function=None)
     """
+
+    # WHY a module constant: the cosine setting was spelled out at nine
+    #      construction sites. The score conversion below is only correct in
+    #      cosine space, so a site that forgot it produced silently wrong
+    #      similarity scores rather than an error.
+    SPACE_METADATA: dict[str, str] = {"hnsw:space": "cosine"}
+
+    @classmethod
+    def open(
+        cls,
+        client: chromadb.ClientAPI,
+        name: str,
+        embedding_function: Any = _UNSET,
+    ) -> "ChromaVectorStore":
+        """Get or create a cosine-space collection and wrap it.
+
+        This is the supported way to build a store: it owns the one invariant
+        the score conversion depends on, so callers cannot forget it.
+
+        Args:
+            client: Any ChromaDB client — persistent in production, ephemeral
+                in tests.
+            name: Collection name.
+            embedding_function: Passed through to ChromaDB when supplied.
+                Omit it to accept ChromaDB's built-in embedder; pass ``None``
+                to supply raw embeddings yourself.
+
+        Returns:
+            A store over a collection guaranteed to use cosine distance.
+        """
+        kwargs: dict[str, Any] = {"name": name, "metadata": dict(cls.SPACE_METADATA)}
+        if embedding_function is not _UNSET:
+            kwargs["embedding_function"] = embedding_function
+        return cls(collection=client.get_or_create_collection(**kwargs))
 
     def __init__(self, collection: chromadb.Collection) -> None:
         """
+        Prefer :meth:`open`, which creates the collection with the required
+        cosine space. Use this constructor directly only when a collection
+        already exists and is known to be cosine.
+
         Args:
-            collection: A pre-configured ChromaDB Collection instance.
-                        Must use cosine space (metadata={"hnsw:space": "cosine"})
-                        for scores to be meaningful in the 0..1 range.
+            collection: A ChromaDB Collection configured for cosine space.
         """
         self._collection = collection
         logger.debug(
             "ChromaVectorStore initialised with collection '%s'",
             collection.name,
         )
+
+    @property
+    def collection(self) -> chromadb.Collection:
+        """The wrapped ChromaDB collection.
+
+        Exposed for the two callers that legitimately need the collection object
+        itself — wiring a facade and naming a collection for teardown — so they
+        do not have to touch the private attribute. Reading *data* through this
+        is a seam breach; use the query and lookup methods instead.
+        """
+        return self._collection
 
     # ---------------------------------------------------------------------- #
     # Write operations                                                        #

@@ -19,7 +19,8 @@ from typing import Sequence
 
 from rank_bm25 import BM25Okapi
 
-from src.vector_store import ChromaVectorStore, SearchResult
+from src.domain import SearchResult
+from src.vector_store import ChromaVectorStore
 
 
 def reciprocal_rank_fusion(

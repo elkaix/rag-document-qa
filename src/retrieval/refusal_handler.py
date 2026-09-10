@@ -12,7 +12,7 @@ threshold, return a fixed no-answer text instead of calling the LLM.
 
 from __future__ import annotations
 
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 
 class RefusalHandler:

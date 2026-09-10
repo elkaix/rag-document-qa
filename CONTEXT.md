@@ -31,6 +31,13 @@ behaviour behind a small interface), **seam** (a boundary you can substitute at)
   telemetry assembly and the eval harness use one source of truth; the eval
   package imports from here, never the reverse. See
   [ADR 0003](docs/adr/0003-telemetry-ownership.md).
+- **domain** (`src/domain.py`) — the leaf module holding the value objects that
+  cross module seams: `Document`, `Chunk`, `SearchResult`, and `content_hash`.
+  It imports nothing from this package, so naming a type at a seam never drags
+  an implementation along. `SearchResult` used to live in `src/vector_store.py`
+  (which does `import chromadb`), so the whole `retrieval` and `query_engine`
+  packages imported the storage vendor merely to name what a Retriever returns.
+  See [ADR 0005](docs/adr/0005-domain-value-types.md).
 - **Retriever** — the seam (Protocol) every retrieval strategy hides behind:
   `retrieve(query, top_k) -> list[SearchResult]`. Implementations either conform
   directly (`DenseRetriever`, `BM25HybridRetriever`) or *compose* an inner

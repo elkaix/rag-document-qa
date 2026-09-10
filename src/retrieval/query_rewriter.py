@@ -29,7 +29,7 @@ from typing import Protocol
 
 from src.retrieval.base import Retriever
 from src.telemetry import pricing
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 logger = logging.getLogger(__name__)
 

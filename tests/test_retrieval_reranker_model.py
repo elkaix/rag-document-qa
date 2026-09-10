@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 
 def _sr(chunk_id: str, content: str, score: float, metadata: dict | None = None) -> SearchResult:

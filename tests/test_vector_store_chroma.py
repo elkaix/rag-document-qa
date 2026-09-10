@@ -23,7 +23,8 @@ import uuid
 import pytest
 import chromadb
 
-from src.vector_store import ChromaVectorStore, SearchResult
+from src.domain import SearchResult
+from src.vector_store import ChromaVectorStore
 
 
 # --------------------------------------------------------------------------- #
@@ -48,15 +49,13 @@ def chroma_collection():
          complete isolation between test runs in the same pytest session.
     """
     # PATTERN: EphemeralClient is the test-friendly equivalent of SQLite's ":memory:"
-    client = chromadb.EphemeralClient()
     # WHY uuid: prevents collection name collision when tests run in the same process
-    collection_name = f"test_docs_{uuid.uuid4().hex}"
-    collection = client.get_or_create_collection(
-        name=collection_name,
-        metadata={"hnsw:space": "cosine"},
+    # WHY .open: cosine space is the store's invariant, not the fixture's.
+    return ChromaVectorStore.open(
+        chromadb.EphemeralClient(),
+        f"test_docs_{uuid.uuid4().hex}",
         embedding_function=None,  # explicit embeddings only — no auto-embedding
-    )
-    return collection
+    ).collection
 
 
 @pytest.fixture
@@ -302,3 +301,37 @@ class TestAllChunkTexts:
 
         store = ChromaVectorStore(collection=chroma_collection)
         assert store.all_chunk_texts() == {}
+
+
+class TestCosineInvariantOwnership:
+    """The store owns the space setting its score conversion depends on.
+
+    BEFORE: `metadata={"hnsw:space": "cosine"}` was spelled out at nine
+            construction sites. score = max(0, 1 - distance) is only correct in
+            cosine space, so a site that omitted it produced silently wrong
+            similarity scores rather than an error.
+    """
+
+    def test_open_creates_a_cosine_collection(self):
+        import chromadb
+
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore.open(chromadb.EphemeralClient(), "cosine_check")
+        assert store.collection.metadata["hnsw:space"] == "cosine"
+
+    def test_open_passes_through_an_explicit_embedding_function(self):
+        import chromadb
+
+        from src.vector_store import ChromaVectorStore
+
+        store = ChromaVectorStore.open(
+            chromadb.EphemeralClient(), "no_autoembed", embedding_function=None
+        )
+        store.upsert(
+            ids=["a"],
+            documents=["hello"],
+            metadatas=[{"doc_id": "d"}],
+            embeddings=[[0.1] * 8],
+        )
+        assert store.get_stats()["total_chunks"] == 1

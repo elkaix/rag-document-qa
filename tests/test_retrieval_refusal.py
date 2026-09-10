@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 
 def _sr(score: float, chunk_id: str = "d1") -> SearchResult:

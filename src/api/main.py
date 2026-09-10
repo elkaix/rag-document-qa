@@ -32,6 +32,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.backend import RAGBackend
+from src.vector_store import ChromaVectorStore
 from src.config import CHROMA_COLLECTION, CHROMA_PATH, SQLITE_URL, load_env
 from src.database import create_db_and_tables, get_engine
 from src.api.routes import (
@@ -77,17 +78,14 @@ async def lifespan(app: FastAPI):
     # WHY PersistentClient: Unlike EphemeralClient (used in tests), this
     #     writes to CHROMA_PATH so vectors survive process restarts.
     chroma_client = chromadb.PersistentClient(path=CHROMA_PATH)
-    collection = chroma_client.get_or_create_collection(
-        name=CHROMA_COLLECTION,
-        # WHY cosine: Cosine similarity is the standard metric for text
-        #     embeddings. HNSW (Hierarchical Navigable Small World) is the
-        #     index algorithm — fast approximate nearest-neighbour search.
-        metadata={"hnsw:space": "cosine"},
-    )
+    # WHY ChromaVectorStore.open: the store's distance→similarity conversion is
+    #     only correct in cosine space, so the store itself owns that setting
+    #     rather than trusting each construction site to remember it.
+    vector_store = ChromaVectorStore.open(chroma_client, CHROMA_COLLECTION)
 
     # STEP 3: Wire everything into the backend facade
     app.state.engine = engine
-    app.state.backend = RAGBackend(engine=engine, collection=collection)
+    app.state.backend = RAGBackend(engine=engine, collection=vector_store.collection)
 
     # STEP 4: Create the eval run registry (in-memory, thread-safe).
     # WHY: The registry tracks in-flight eval runs across requests. It must

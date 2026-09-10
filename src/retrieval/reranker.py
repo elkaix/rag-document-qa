@@ -20,7 +20,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from src.retrieval.base import Retriever
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 
 class CrossEncoderReranker:

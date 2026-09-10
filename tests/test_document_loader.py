@@ -12,7 +12,8 @@ from typing import List
 
 import pytest
 
-from src.document_loader import Chunk, Document, DocumentLoader, TextChunker
+from src.document_loader import DocumentLoader, TextChunker
+from src.domain import Chunk, Document
 
 
 # --------------------------------------------------------------------------- #

@@ -10,7 +10,7 @@ import pytest
 from src.eval.config import EvalConfig
 from src.eval.runner import EvalRunner, _score_question
 from src.eval.schemas import EvalQuestion
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 
 class DummyLLM:

@@ -14,7 +14,7 @@ Design Decision:
 
 from __future__ import annotations
 
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 # The single answer system prompt for sync, streaming, and eval paths.
 ANSWER_SYSTEM_PROMPT = (

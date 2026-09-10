@@ -66,7 +66,8 @@ from .models.evaluation import MessageEvaluation
 from .models.message import Message, MessageSource
 from .query_engine import QueryEngine, StreamResult
 from .retrieval import build_retriever
-from .vector_store import ChromaVectorStore, SearchResult
+from .domain import SearchResult
+from .vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
 

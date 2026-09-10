@@ -17,7 +17,7 @@ from __future__ import annotations
 from src.llm_handler import Usage
 from src.query_engine import QueryEngine
 from src.query_engine.prompt import ANSWER_SYSTEM_PROMPT, NO_DOCUMENTS_ANSWER
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 
 # --------------------------------------------------------------------------- #

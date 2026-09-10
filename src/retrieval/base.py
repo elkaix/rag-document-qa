@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 
 @runtime_checkable

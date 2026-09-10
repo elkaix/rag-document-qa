@@ -45,7 +45,7 @@ from src.query_engine.streaming import (
     retrieval_summary,
 )
 from src.retrieval import RefusalHandler, Retriever
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 logger = logging.getLogger(__name__)
 

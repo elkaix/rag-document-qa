@@ -32,6 +32,7 @@ import pytest
 from sqlmodel import Session, select
 
 from src.backend import RAGBackend
+from src.vector_store import ChromaVectorStore
 from src.database import create_db_and_tables, get_engine
 from src.models.conversation import Conversation
 from src.models.document import DocumentRecord
@@ -70,11 +71,9 @@ def chroma_backend_collection():
     WHY unique name: ChromaDB's EphemeralClient shares an in-process store.
     A UUID suffix ensures complete isolation between test runs.
     """
-    client = chromadb.EphemeralClient()
-    return client.get_or_create_collection(
-        name=f"test_backend_{uuid.uuid4().hex}",
-        metadata={"hnsw:space": "cosine"},
-    )
+    return ChromaVectorStore.open(
+        chromadb.EphemeralClient(), f"test_backend_{uuid.uuid4().hex}"
+    ).collection
 
 
 @pytest.fixture

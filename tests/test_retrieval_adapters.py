@@ -24,7 +24,8 @@ import chromadb
 import pytest
 
 from src.retrieval import Retriever
-from src.vector_store import ChromaVectorStore, SearchResult
+from src.domain import SearchResult
+from src.vector_store import ChromaVectorStore
 
 
 def _sr(chunk_id: str, content: str, score: float) -> SearchResult:
@@ -50,10 +51,8 @@ class _FakeRetriever:
 # --------------------------------------------------------------------------- #
 
 def _chroma_store() -> ChromaVectorStore:
-    client = chromadb.EphemeralClient()
-    coll = client.get_or_create_collection(
-        name="test_dense", metadata={"hnsw:space": "cosine"}
-    )
+    store = ChromaVectorStore.open(chromadb.EphemeralClient(), "test_dense")
+    coll = store.collection
     coll.upsert(
         ids=["d1", "d2", "d3"],
         documents=[

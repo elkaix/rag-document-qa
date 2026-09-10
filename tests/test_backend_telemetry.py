@@ -26,6 +26,7 @@ import chromadb
 import pytest
 
 from src.backend import RAGBackend
+from src.vector_store import ChromaVectorStore
 from src.api.schemas.telemetry import StageTelemetry
 from src.database import create_db_and_tables, get_engine
 
@@ -49,11 +50,9 @@ def chroma_backend_collection():
     WHY unique name: EphemeralClient shares an in-process store.
     A UUID suffix ensures complete isolation between test runs.
     """
-    client = chromadb.EphemeralClient()
-    return client.get_or_create_collection(
-        name=f"test_backend_telemetry_{uuid.uuid4().hex}",
-        metadata={"hnsw:space": "cosine"},
-    )
+    return ChromaVectorStore.open(
+        chromadb.EphemeralClient(), f"test_backend_telemetry_{uuid.uuid4().hex}"
+    ).collection
 
 
 @pytest.fixture

@@ -35,12 +35,11 @@ def test_synonyms_closer_than_unrelated(embedder):
 def test_chroma_collection_uses_embedder(embedder):
     """End-to-end: a Chroma collection created with BgeEmbedder retrieves the right doc."""
     import chromadb
-    client = chromadb.EphemeralClient()
-    coll = client.get_or_create_collection(
-        name="test_bge_e2e",
-        embedding_function=embedder,
-        metadata={"hnsw:space": "cosine"},
-    )
+    from src.vector_store import ChromaVectorStore
+
+    coll = ChromaVectorStore.open(
+        chromadb.EphemeralClient(), "test_bge_e2e", embedding_function=embedder
+    ).collection
     coll.upsert(
         ids=["d1", "d2", "d3"],
         documents=[

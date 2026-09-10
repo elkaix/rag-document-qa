@@ -49,7 +49,8 @@ from src.retrieval import (
     RerankingRetriever,
     Retriever,
 )
-from src.vector_store import ChromaVectorStore, SearchResult
+from src.domain import SearchResult
+from src.vector_store import ChromaVectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -354,15 +355,12 @@ def build_pipeline(
     # NOTE: First call auto-downloads all-MiniLM-L6-v2 ONNX (~80MB) if not cached.
     collection_name = f"eval_{config.name}_{dataset_name}_{uuid.uuid4().hex[:6]}"
     client = chromadb.EphemeralClient()
-    collection = client.get_or_create_collection(
-        name=collection_name,
-        embedding_function=embedding_function,
-        # WHY cosine: ChromaVectorStore converts distance→similarity via
-        # score = max(0, 1 - distance). This only makes sense in cosine space
-        # where distance ∈ [0, 2] and identical vectors have distance 0.
-        metadata={"hnsw:space": "cosine"},
+    # WHY .open: the cosine setting the score conversion depends on belongs to
+    # the store, not to each caller. See ChromaVectorStore.SPACE_METADATA.
+    vector_store = ChromaVectorStore.open(
+        client, collection_name, embedding_function=embedding_function
     )
-    vector_store = ChromaVectorStore(collection=collection)
+    collection = vector_store.collection
 
     # ---- LLM handlers ----------------------------------------------------------
     llm = llm_override if llm_override is not None else LLMHandler(config.pipeline.generator.model)

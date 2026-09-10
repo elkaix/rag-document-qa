@@ -16,7 +16,8 @@ Design Decision:
 
 from __future__ import annotations
 
-from src.vector_store import ChromaVectorStore, SearchResult
+from src.domain import SearchResult
+from src.vector_store import ChromaVectorStore
 
 
 class DenseRetriever:

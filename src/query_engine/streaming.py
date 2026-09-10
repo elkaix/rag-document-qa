@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from src.api.schemas.telemetry import StageTelemetry
 from src.query_engine.prompt import ANSWER_SYSTEM_PROMPT, build_answer_user_prompt
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.vector_store import SearchResult
+from src.domain import SearchResult
 
 
 def _sr(chunk_id: str, content: str, score: float) -> SearchResult:
@@ -24,10 +24,9 @@ def test_hybrid_retrieve_returns_top_k():
     from src.retrieval.hybrid import BM25HybridRetriever
     from src.vector_store import ChromaVectorStore
 
-    client = chromadb.EphemeralClient()
-    coll = client.get_or_create_collection(
-        name="test_hybrid", metadata={"hnsw:space": "cosine"},
-    )
+    coll = ChromaVectorStore.open(
+        chromadb.EphemeralClient(), "test_hybrid"
+    ).collection
     coll.upsert(
         ids=["d1", "d2", "d3", "d4"],
         documents=[
