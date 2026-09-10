@@ -54,11 +54,7 @@ from .config import (
     TOP_K_RESULTS,
 )
 from .document_loader import DocumentLoader, TextChunker
-from .evaluation import (
-    evaluate_answer_relevancy,
-    evaluate_context_precision,
-    evaluate_faithfulness,
-)
+from .evaluation import MessageEvaluator
 from .llm_handler import LLMHandler
 from .models.conversation import Conversation
 from .models.document import DocumentRecord
@@ -169,6 +165,13 @@ class RAGBackend:
         #      model (gpt-4.1-mini by default) is cheap enough for real-time checks
         #      while strong enough to catch factual errors.
         self.eval_llm = LLMHandler(model=EVAL_MODEL, max_tokens=4096)
+
+        # PATTERN: The evaluation cluster is its own module. The facade keeps
+        #          the three public methods so routes are unaffected, but the
+        #          skip/dedup decisions and their tests now live in one place.
+        self.evaluator = MessageEvaluator(
+            session_factory=self._session, judge_llm=self.eval_llm
+        )
 
         # PATTERN: The QueryEngine owns retrieve->generate for both the sync and
         #          streaming paths. The Retriever is selected from config
@@ -888,240 +891,40 @@ class RAGBackend:
         answer: str,
         contexts: list[str],
     ) -> dict:
-        """Score a freshly-generated answer for faithfulness and persist the result.
-
-        Called immediately after stream_query completes (while context is still
-        available in memory) so the user gets a score without a second DB round-trip
-        to reload the sources.
-
-        WHY realtime vs. on-demand: The retrieval contexts are already in memory at
-        the end of stream_query. Scoring here avoids re-loading MessageSource rows
-        from SQLite just to rebuild the context list — cheaper and faster.
-
-        PATTERN: Fail-safe — any exception is caught and logged so a judge LLM
-        timeout or bad JSON response never crashes the caller (the streaming endpoint).
+        """Score a freshly-generated answer for faithfulness and persist it.
 
         Args:
-            message_id: UUID of the assistant Message row to attach the score to.
+            message_id: UUID of the assistant Message to attach the score to.
             answer: The full generated answer text.
-            contexts: List of retrieved excerpt strings (matching MessageSource.excerpt).
+            contexts: Retrieved excerpts the answer should be grounded in.
 
         Returns:
-            Dict with metric, score, and reasoning. Returns a zero-score sentinel
-            on failure so callers can always safely read ["score"].
+            Dict with metric, score and reasoning; a zero-score sentinel on
+            failure so callers can always read ``["score"]``.
         """
-        try:
-            score, reasoning, details = evaluate_faithfulness(
-                answer, contexts, self.eval_llm
-            )
-            eval_row = MessageEvaluation(
-                message_id=message_id,
-                metric="faithfulness",
-                score=score,
-                reasoning=reasoning,
-                details=details,
-                judge_model=self.eval_llm.model,
-            )
-            with self._session() as session:
-                session.add(eval_row)
-                session.commit()
-
-            logger.info(
-                "Faithfulness score for message %s: %.3f", message_id, score
-            )
-            return {"metric": "faithfulness", "score": score, "reasoning": reasoning}
-
-        except Exception as exc:
-            # PATTERN: Evaluation is a non-critical path. Log the failure but
-            #          never propagate it — the answer was already delivered.
-            logger.error(
-                "evaluate_faithfulness_realtime failed for message %s: %s",
-                message_id, exc,
-            )
-            return {"metric": "faithfulness", "score": 0.0, "reasoning": str(exc)}
+        return self.evaluator.score_realtime(message_id, answer, contexts)
 
     def evaluate_message(self, message_id: str) -> list[dict]:
-        """Run all three evaluation metrics for a persisted assistant message.
-
-        Loads the message and its sources from SQLite, finds the preceding user
-        question, then scores faithfulness (unless already scored), answer
-        relevancy, and context precision.
-
-        WHY skip existing faithfulness: evaluate_faithfulness_realtime may have
-        already run immediately after generation (while contexts were in memory).
-        Re-running it would duplicate the row and skew aggregations. The other
-        two metrics are always fresh because they are not run in the realtime path.
+        """Run every not-yet-recorded evaluation metric for a persisted message.
 
         Args:
             message_id: UUID of the assistant Message to evaluate.
 
         Returns:
-            List of dicts, each with metric, score, and reasoning.
-            Returns [] if the message is not found.
+            One dict per metric; empty when the message is not found.
         """
-        with self._session() as session:
-            msg = session.get(Message, message_id)
-            if msg is None:
-                logger.warning("evaluate_message: message %s not found", message_id)
-                return []
-
-            sources = session.exec(
-                select(MessageSource).where(MessageSource.message_id == message_id)
-            ).all()
-            contexts = [s.excerpt for s in sources if s.excerpt]
-
-            # Find the preceding user message (the question for this answer).
-            # WHY created_at < this message: The user message immediately before
-            # this assistant message in the thread is the question that prompted
-            # the answer. Ordering desc + limit 1 picks the closest one.
-            user_msg = session.exec(
-                select(Message)
-                .where(
-                    Message.conversation_id == msg.conversation_id,
-                    Message.role == "user",
-                    Message.created_at < msg.created_at,
-                )
-                .order_by(Message.created_at.desc())
-            ).first()
-
-            question = user_msg.content if user_msg else ""
-            answer = msg.content
-
-            # Check whether faithfulness was already scored in the realtime path
-            existing_faith = session.exec(
-                select(MessageEvaluation).where(
-                    MessageEvaluation.message_id == message_id,
-                    MessageEvaluation.metric == "faithfulness",
-                )
-            ).first()
-
-        results: list[dict] = []
-
-        # ---- Faithfulness (skip if already scored) ----------------------------
-        # BUG FIX: Both branches now emit `details` so the frontend's claim
-        #          breakdown renders identically whether faithfulness was
-        #          scored in this call or cached from the realtime path.
-        if existing_faith is None and contexts:
-            score, reasoning, details = evaluate_faithfulness(
-                answer, contexts, self.eval_llm
-            )
-            eval_row = MessageEvaluation(
-                message_id=message_id,
-                metric="faithfulness",
-                score=score,
-                reasoning=reasoning,
-                details=details,
-                judge_model=self.eval_llm.model,
-            )
-            with self._session() as session:
-                session.add(eval_row)
-                session.commit()
-            results.append({
-                "metric": "faithfulness",
-                "score": score,
-                "reasoning": reasoning,
-                "details": details,
-            })
-        elif existing_faith is not None:
-            results.append({
-                "metric": "faithfulness",
-                "score": existing_faith.score,
-                "reasoning": existing_faith.reasoning,
-                "details": existing_faith.details,
-            })
-
-        # ---- Answer relevancy (skip if already scored) -------------------------
-        with self._session() as session:
-            existing_rel = session.exec(
-                select(MessageEvaluation).where(
-                    MessageEvaluation.message_id == message_id,
-                    MessageEvaluation.metric == "answer_relevancy",
-                )
-            ).first()
-        if existing_rel is None and question:
-            score, reasoning = evaluate_answer_relevancy(question, answer, self.eval_llm)
-            eval_row = MessageEvaluation(
-                message_id=message_id,
-                metric="answer_relevancy",
-                score=score,
-                reasoning=reasoning,
-                details=None,
-                judge_model=self.eval_llm.model,
-            )
-            with self._session() as session:
-                session.add(eval_row)
-                session.commit()
-            results.append({"metric": "answer_relevancy", "score": score, "reasoning": reasoning})
-        elif existing_rel is not None:
-            results.append({
-                "metric": "answer_relevancy",
-                "score": existing_rel.score,
-                "reasoning": existing_rel.reasoning,
-            })
-
-        # ---- Context precision (skip if already scored) -----------------------
-        with self._session() as session:
-            existing_prec = session.exec(
-                select(MessageEvaluation).where(
-                    MessageEvaluation.message_id == message_id,
-                    MessageEvaluation.metric == "context_precision",
-                )
-            ).first()
-        if existing_prec is None and question and contexts:
-            score, reasoning, details = evaluate_context_precision(
-                question, contexts, self.eval_llm
-            )
-            eval_row = MessageEvaluation(
-                message_id=message_id,
-                metric="context_precision",
-                score=score,
-                reasoning=reasoning,
-                details=details,
-                judge_model=self.eval_llm.model,
-            )
-            with self._session() as session:
-                session.add(eval_row)
-                session.commit()
-            results.append({"metric": "context_precision", "score": score, "reasoning": reasoning})
-        elif existing_prec is not None:
-            results.append({
-                "metric": "context_precision",
-                "score": existing_prec.score,
-                "reasoning": existing_prec.reasoning,
-            })
-
-        return results
+        return self.evaluator.score_message(message_id)
 
     def get_evaluation(self, message_id: str) -> list[dict]:
-        """Return all stored evaluation scores for a message.
-
-        PATTERN: Read-only query — this method never calls the judge LLM.
-        Use evaluate_message() to generate missing scores first.
+        """Return all stored evaluation scores for a message, calling no judge.
 
         Args:
             message_id: UUID of the assistant Message.
 
         Returns:
-            List of dicts with metric, score, reasoning, details, judge_model,
-            and evaluated_at. Returns [] if no evaluations exist yet.
+            One dict per stored metric; empty when nothing has been scored.
         """
-        with self._session() as session:
-            rows = session.exec(
-                select(MessageEvaluation).where(
-                    MessageEvaluation.message_id == message_id
-                )
-            ).all()
-            return [
-                {
-                    "metric": row.metric,
-                    "score": row.score,
-                    "reasoning": row.reasoning,
-                    "details": row.details,
-                    "judge_model": row.judge_model,
-                    "evaluated_at": row.evaluated_at.isoformat(),
-                }
-                for row in rows
-            ]
+        return self.evaluator.scores_for(message_id)
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #

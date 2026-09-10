@@ -19,6 +19,8 @@ import pytest
 from sqlmodel import Session, select
 
 from src.backend import RAGBackend
+from src.evaluation import MessageEvaluator
+from src.evaluation.message_evaluator import Judges
 from src.database import create_db_and_tables, get_engine
 from src.models.evaluation import MessageEvaluation
 from src.models.conversation import Conversation
@@ -66,8 +68,12 @@ def _seed_turn(backend: RAGBackend, *, with_sources: bool = True) -> str:
     return assistant_id
 
 
-def _stub_judges(monkeypatch, calls: list[str]) -> None:
-    """Replace the three judges so no provider call happens."""
+def _fake_judges(calls: list[str], **overrides) -> Judges:
+    """Judges that record what was called and never touch a provider.
+
+    Injected through the evaluator's constructor rather than monkeypatched onto
+    a module — substituting a judge is part of the interface now.
+    """
     def faithfulness(answer, contexts, llm):
         calls.append("faithfulness")
         return 1.0, "supported", '{"claims": []}'
@@ -80,14 +86,26 @@ def _stub_judges(monkeypatch, calls: list[str]) -> None:
         calls.append("context_precision")
         return 0.7, "useful", None
 
-    monkeypatch.setattr("src.backend.evaluate_faithfulness", faithfulness)
-    monkeypatch.setattr("src.backend.evaluate_answer_relevancy", relevancy)
-    monkeypatch.setattr("src.backend.evaluate_context_precision", precision)
+    return Judges(
+        faithfulness=overrides.get("faithfulness", faithfulness),
+        answer_relevancy=overrides.get("answer_relevancy", relevancy),
+        context_precision=overrides.get("context_precision", precision),
+    )
+
+
+def _with_judges(backend: RAGBackend, judges: Judges) -> RAGBackend:
+    """Point the facade's evaluator at substitute judges."""
+    backend.evaluator = MessageEvaluator(
+        session_factory=backend._session,
+        judge_llm=backend.eval_llm,
+        judges=judges,
+    )
+    return backend
 
 
 class TestRealtimeFaithfulness:
-    def test_persists_a_score_against_the_message(self, backend, monkeypatch):
-        _stub_judges(monkeypatch, [])
+    def test_persists_a_score_against_the_message(self, backend):
+        _with_judges(backend, _fake_judges([]))
         message_id = _seed_turn(backend)
 
         result = backend.evaluate_faithfulness_realtime(
@@ -98,12 +116,12 @@ class TestRealtimeFaithfulness:
         assert result["score"] == 1.0
         assert len(backend.get_evaluation(message_id)) == 1
 
-    def test_a_judge_failure_never_reaches_the_caller(self, backend, monkeypatch):
+    def test_a_judge_failure_never_reaches_the_caller(self, backend):
         """The streaming endpoint calls this; an exception would kill the stream."""
         def boom(*a, **kw):
             raise RuntimeError("judge timeout")
 
-        monkeypatch.setattr("src.backend.evaluate_faithfulness", boom)
+        _with_judges(backend, _fake_judges([], faithfulness=boom))
         message_id = _seed_turn(backend)
 
         result = backend.evaluate_faithfulness_realtime(message_id, "answer", ["ctx"])
@@ -118,9 +136,9 @@ class TestEvaluateMessage:
     def test_unknown_message_returns_empty(self, backend):
         assert backend.evaluate_message("does-not-exist") == []
 
-    def test_scores_all_three_metrics(self, backend, monkeypatch):
+    def test_scores_all_three_metrics(self, backend):
         calls: list[str] = []
-        _stub_judges(monkeypatch, calls)
+        _with_judges(backend, _fake_judges(calls))
         message_id = _seed_turn(backend)
 
         results = backend.evaluate_message(message_id)
@@ -131,11 +149,11 @@ class TestEvaluateMessage:
         assert sorted(calls) == ["answer_relevancy", "context_precision", "faithfulness"]
 
     def test_skips_faithfulness_when_realtime_already_scored_it(
-        self, backend, monkeypatch
+        self, backend
     ):
         """Re-running would duplicate the row and skew aggregations."""
         calls: list[str] = []
-        _stub_judges(monkeypatch, calls)
+        _with_judges(backend, _fake_judges(calls))
         message_id = _seed_turn(backend)
 
         backend.evaluate_faithfulness_realtime(message_id, "answer", ["ctx"])
@@ -154,27 +172,24 @@ class TestEvaluateMessage:
         assert len(rows) == 1, "faithfulness must not be scored twice"
 
     def test_faithfulness_is_skipped_when_there_are_no_contexts(
-        self, backend, monkeypatch
+        self, backend
     ):
         calls: list[str] = []
-        _stub_judges(monkeypatch, calls)
+        _with_judges(backend, _fake_judges(calls))
         message_id = _seed_turn(backend, with_sources=False)
 
         backend.evaluate_message(message_id)
 
         assert "faithfulness" not in calls
 
-    def test_uses_the_preceding_user_message_as_the_question(
-        self, backend, monkeypatch
-    ):
+    def test_uses_the_preceding_user_message_as_the_question(self, backend):
         seen: dict[str, str] = {}
 
         def relevancy(question, answer, llm):
             seen["question"] = question
             return 0.8, ""
 
-        _stub_judges(monkeypatch, [])
-        monkeypatch.setattr("src.backend.evaluate_answer_relevancy", relevancy)
+        _with_judges(backend, _fake_judges([], answer_relevancy=relevancy))
         message_id = _seed_turn(backend)
 
         backend.evaluate_message(message_id)
@@ -183,8 +198,8 @@ class TestEvaluateMessage:
 
 
 class TestGetEvaluation:
-    def test_returns_every_persisted_metric(self, backend, monkeypatch):
-        _stub_judges(monkeypatch, [])
+    def test_returns_every_persisted_metric(self, backend):
+        _with_judges(backend, _fake_judges([]))
         message_id = _seed_turn(backend)
         backend.evaluate_message(message_id)
 
@@ -196,3 +211,27 @@ class TestGetEvaluation:
 
     def test_unknown_message_returns_empty(self, backend):
         assert backend.get_evaluation("nope") == []
+
+
+class TestJudgeInjection:
+    """Substituting a judge is part of the interface, not a module patch."""
+
+    def test_default_judges_are_the_real_ones(self):
+        from src.evaluation import judges as judge_module
+
+        defaults = Judges()
+        assert defaults.faithfulness is judge_module.evaluate_faithfulness
+        assert defaults.answer_relevancy is judge_module.evaluate_answer_relevancy
+        assert defaults.context_precision is judge_module.evaluate_context_precision
+
+    def test_a_single_judge_can_be_replaced(self, backend):
+        calls: list[str] = []
+
+        def only_this(question, answer, llm):
+            calls.append("replaced")
+            return 0.1, "stub"
+
+        _with_judges(backend, _fake_judges([], answer_relevancy=only_this))
+        backend.evaluate_message(_seed_turn(backend))
+
+        assert calls == ["replaced"]
